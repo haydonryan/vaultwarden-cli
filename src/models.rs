@@ -8,40 +8,44 @@ pub struct TokenResponse {
     pub token_type: String,
     pub refresh_token: Option<String>,
     pub scope: Option<String>,
-    #[serde(rename = "Key")]
+    #[serde(alias = "Key", alias = "key")]
     pub key: Option<String>,
-    #[serde(rename = "PrivateKey")]
+    #[serde(alias = "PrivateKey", alias = "privateKey")]
     pub private_key: Option<String>,
+    #[serde(alias = "Kdf", alias = "kdf")]
+    pub kdf: Option<u8>,
+    #[serde(alias = "KdfIterations", alias = "kdfIterations")]
+    pub kdf_iterations: Option<u32>,
 }
 
 // Sync Response - contains all vault data
 #[derive(Debug, Clone, Deserialize)]
 pub struct SyncResponse {
-    #[serde(rename = "Ciphers")]
+    #[serde(alias = "Ciphers", alias = "ciphers")]
     pub ciphers: Vec<Cipher>,
-    #[serde(rename = "Folders")]
+    #[serde(alias = "Folders", alias = "folders")]
     pub folders: Vec<Folder>,
-    #[serde(rename = "Profile")]
+    #[serde(alias = "Profile", alias = "profile")]
     pub profile: Profile,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Profile {
-    #[serde(rename = "Id")]
+    #[serde(alias = "Id", alias = "id")]
     pub id: String,
-    #[serde(rename = "Email")]
+    #[serde(alias = "Email", alias = "email")]
     pub email: String,
-    #[serde(rename = "Name")]
+    #[serde(alias = "Name", alias = "name")]
     pub name: Option<String>,
-    #[serde(rename = "Key")]
+    #[serde(alias = "Key", alias = "key")]
     pub key: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Folder {
-    #[serde(rename = "Id")]
+    #[serde(alias = "Id", alias = "id")]
     pub id: String,
-    #[serde(rename = "Name")]
+    #[serde(alias = "Name", alias = "name")]
     pub name: String,
 }
 
@@ -80,25 +84,49 @@ impl CipherType {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Cipher {
-    #[serde(rename = "Id")]
+    #[serde(alias = "Id", alias = "id")]
     pub id: String,
-    #[serde(rename = "Type")]
+    #[serde(alias = "Type", alias = "type")]
     pub r#type: u8,
-    #[serde(rename = "Name")]
-    pub name: String,
-    #[serde(rename = "Notes")]
+    #[serde(alias = "Name", alias = "name")]
+    pub name: Option<String>,
+    #[serde(alias = "Notes", alias = "notes")]
     pub notes: Option<String>,
-    #[serde(rename = "FolderId")]
+    #[serde(alias = "FolderId", alias = "folderId")]
     pub folder_id: Option<String>,
-    #[serde(rename = "Login")]
+    #[serde(alias = "Login", alias = "login")]
     pub login: Option<LoginData>,
-    #[serde(rename = "Card")]
+    #[serde(alias = "Card", alias = "card")]
     pub card: Option<CardData>,
-    #[serde(rename = "Identity")]
+    #[serde(alias = "Identity", alias = "identity")]
     pub identity: Option<IdentityData>,
-    #[serde(rename = "SecureNote")]
+    #[serde(alias = "SecureNote", alias = "secureNote")]
     pub secure_note: Option<SecureNoteData>,
-    #[serde(rename = "Fields")]
+    #[serde(alias = "Fields", alias = "fields")]
+    pub fields: Option<Vec<FieldData>>,
+    // Handle nested data structure (Vaultwarden format)
+    #[serde(alias = "Data", alias = "data")]
+    pub data: Option<CipherData>,
+}
+
+// Nested cipher data (Vaultwarden returns data in this nested format)
+#[derive(Debug, Clone, Deserialize)]
+pub struct CipherData {
+    #[serde(alias = "Name", alias = "name")]
+    pub name: Option<String>,
+    #[serde(alias = "Notes", alias = "notes")]
+    pub notes: Option<String>,
+    #[serde(alias = "Username", alias = "username")]
+    pub username: Option<String>,
+    #[serde(alias = "Password", alias = "password")]
+    pub password: Option<String>,
+    #[serde(alias = "Totp", alias = "totp")]
+    pub totp: Option<String>,
+    #[serde(alias = "Uri", alias = "uri")]
+    pub uri: Option<String>,
+    #[serde(alias = "Uris", alias = "uris")]
+    pub uris: Option<Vec<UriData>>,
+    #[serde(alias = "Fields", alias = "fields")]
     pub fields: Option<Vec<FieldData>>,
 }
 
@@ -113,107 +141,122 @@ impl Cipher {
         }
     }
 
-    pub fn matches_search(&self, search: &str) -> bool {
-        let search_lower = search.to_lowercase();
+    // Get the name from either direct field or nested data
+    pub fn get_name(&self) -> Option<&str> {
+        self.name.as_deref()
+            .or_else(|| self.data.as_ref().and_then(|d| d.name.as_deref()))
+    }
 
-        // Check name
-        if self.name.to_lowercase().contains(&search_lower) {
-            return true;
-        }
+    // Get username from login or nested data
+    pub fn get_username(&self) -> Option<&str> {
+        self.login.as_ref().and_then(|l| l.username.as_deref())
+            .or_else(|| self.data.as_ref().and_then(|d| d.username.as_deref()))
+    }
 
-        // Check login URIs
-        if let Some(login) = &self.login {
-            if let Some(uris) = &login.uris {
-                for uri in uris {
-                    if let Some(u) = &uri.uri {
-                        if u.to_lowercase().contains(&search_lower) {
-                            return true;
-                        }
-                    }
-                }
-            }
-            if let Some(username) = &login.username {
-                if username.to_lowercase().contains(&search_lower) {
-                    return true;
-                }
-            }
-        }
+    // Get password from login or nested data
+    pub fn get_password(&self) -> Option<&str> {
+        self.login.as_ref().and_then(|l| l.password.as_deref())
+            .or_else(|| self.data.as_ref().and_then(|d| d.password.as_deref()))
+    }
 
-        false
+    // Get URI from login or nested data
+    pub fn get_uri(&self) -> Option<&str> {
+        self.login.as_ref()
+            .and_then(|l| l.uris.as_ref())
+            .and_then(|uris| uris.first())
+            .and_then(|u| u.uri.as_deref())
+            .or_else(|| self.data.as_ref().and_then(|d| {
+                d.uri.as_deref()
+                    .or_else(|| d.uris.as_ref()
+                        .and_then(|uris| uris.first())
+                        .and_then(|u| u.uri.as_deref()))
+            }))
+    }
+
+    // Get notes
+    pub fn get_notes(&self) -> Option<&str> {
+        self.notes.as_deref()
+            .or_else(|| self.data.as_ref().and_then(|d| d.notes.as_deref()))
+    }
+
+    // Get fields
+    pub fn get_fields(&self) -> Option<&Vec<FieldData>> {
+        self.fields.as_ref()
+            .or_else(|| self.data.as_ref().and_then(|d| d.fields.as_ref()))
     }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct LoginData {
-    #[serde(rename = "Username")]
+    #[serde(alias = "Username", alias = "username")]
     pub username: Option<String>,
-    #[serde(rename = "Password")]
+    #[serde(alias = "Password", alias = "password")]
     pub password: Option<String>,
-    #[serde(rename = "Totp")]
+    #[serde(alias = "Totp", alias = "totp")]
     pub totp: Option<String>,
-    #[serde(rename = "Uris")]
+    #[serde(alias = "Uris", alias = "uris")]
     pub uris: Option<Vec<UriData>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct UriData {
-    #[serde(rename = "Uri")]
+    #[serde(alias = "Uri", alias = "uri")]
     pub uri: Option<String>,
-    #[serde(rename = "Match")]
+    #[serde(alias = "Match", alias = "match")]
     pub r#match: Option<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CardData {
-    #[serde(rename = "CardholderName")]
+    #[serde(alias = "CardholderName", alias = "cardholderName")]
     pub cardholder_name: Option<String>,
-    #[serde(rename = "Brand")]
+    #[serde(alias = "Brand", alias = "brand")]
     pub brand: Option<String>,
-    #[serde(rename = "Number")]
+    #[serde(alias = "Number", alias = "number")]
     pub number: Option<String>,
-    #[serde(rename = "ExpMonth")]
+    #[serde(alias = "ExpMonth", alias = "expMonth")]
     pub exp_month: Option<String>,
-    #[serde(rename = "ExpYear")]
+    #[serde(alias = "ExpYear", alias = "expYear")]
     pub exp_year: Option<String>,
-    #[serde(rename = "Code")]
+    #[serde(alias = "Code", alias = "code")]
     pub code: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct IdentityData {
-    #[serde(rename = "Title")]
+    #[serde(alias = "Title", alias = "title")]
     pub title: Option<String>,
-    #[serde(rename = "FirstName")]
+    #[serde(alias = "FirstName", alias = "firstName")]
     pub first_name: Option<String>,
-    #[serde(rename = "MiddleName")]
+    #[serde(alias = "MiddleName", alias = "middleName")]
     pub middle_name: Option<String>,
-    #[serde(rename = "LastName")]
+    #[serde(alias = "LastName", alias = "lastName")]
     pub last_name: Option<String>,
-    #[serde(rename = "Email")]
+    #[serde(alias = "Email", alias = "email")]
     pub email: Option<String>,
-    #[serde(rename = "Phone")]
+    #[serde(alias = "Phone", alias = "phone")]
     pub phone: Option<String>,
-    #[serde(rename = "Company")]
+    #[serde(alias = "Company", alias = "company")]
     pub company: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SecureNoteData {
-    #[serde(rename = "Type")]
+    #[serde(alias = "Type", alias = "type")]
     pub r#type: Option<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct FieldData {
-    #[serde(rename = "Name")]
+    #[serde(alias = "Name", alias = "name")]
     pub name: Option<String>,
-    #[serde(rename = "Value")]
+    #[serde(alias = "Value", alias = "value")]
     pub value: Option<String>,
-    #[serde(rename = "Type")]
+    #[serde(alias = "Type", alias = "type")]
     pub r#type: u8, // 0=Text, 1=Hidden, 2=Boolean, 3=Linked
 }
 
-// Simplified cipher output for display
+// Simplified cipher output for display (decrypted)
 #[derive(Debug, Clone, Serialize)]
 pub struct CipherOutput {
     pub id: String,
@@ -237,42 +280,4 @@ pub struct FieldOutput {
     pub name: String,
     pub value: String,
     pub hidden: bool,
-}
-
-impl From<&Cipher> for CipherOutput {
-    fn from(cipher: &Cipher) -> Self {
-        let (username, password, uri) = if let Some(login) = &cipher.login {
-            (
-                login.username.clone(),
-                login.password.clone(),
-                login.uris.as_ref().and_then(|u| u.first().and_then(|uri| uri.uri.clone())),
-            )
-        } else {
-            (None, None, None)
-        };
-
-        let fields = cipher.fields.as_ref().map(|fields| {
-            fields
-                .iter()
-                .filter_map(|f| {
-                    Some(FieldOutput {
-                        name: f.name.clone()?,
-                        value: f.value.clone().unwrap_or_default(),
-                        hidden: f.r#type == 1,
-                    })
-                })
-                .collect()
-        });
-
-        CipherOutput {
-            id: cipher.id.clone(),
-            cipher_type: cipher.cipher_type().map(|t| t.to_string()).unwrap_or_else(|| "unknown".to_string()),
-            name: cipher.name.clone(),
-            username,
-            password,
-            uri,
-            notes: cipher.notes.clone(),
-            fields,
-        }
-    }
 }

@@ -1,6 +1,7 @@
 mod api;
 mod commands;
 mod config;
+mod crypto;
 mod models;
 
 use clap::{Parser, Subcommand};
@@ -30,6 +31,16 @@ enum Commands {
         #[arg(long)]
         client_secret: Option<String>,
     },
+
+    /// Unlock the vault with master password
+    Unlock {
+        /// Master password (will prompt if not provided)
+        #[arg(short, long)]
+        password: Option<String>,
+    },
+
+    /// Lock the vault (clear decryption keys)
+    Lock,
 
     /// Logout from Vaultwarden server
     Logout,
@@ -66,6 +77,12 @@ async fn main() {
     let result = match cli.command {
         Commands::Login { server, client_id, client_secret } => {
             commands::login(server, client_id, client_secret).await
+        }
+        Commands::Unlock { password } => {
+            commands::unlock(password).await
+        }
+        Commands::Lock => {
+            commands::lock().await
         }
         Commands::Logout => {
             commands::logout().await

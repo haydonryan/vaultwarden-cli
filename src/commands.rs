@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
+use std::io::{self, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::api::ApiClient;
 use crate::config::{self, Config};
-use crate::models::{Cipher, CipherOutput, CipherType};
+use crate::crypto::CryptoKeys;
+use crate::models::{Cipher, CipherOutput, CipherType, FieldOutput};
 
 pub async fn login(
     server: Option<String>,
@@ -18,10 +20,10 @@ pub async fn login(
         .context("Server URL is required. Use --server or set it previously.")?;
     let client_id = client_id
         .or_else(|| config.client_id.clone())
-        .context("Client ID is required. Use --client_id.")?;
+        .context("Client ID is required. Use --client-id.")?;
     let client_secret = client_secret
         .or_else(|| config::get_client_secret(&client_id).ok())
-        .context("Client secret is required. Use --client_secret.")?;
+        .context("Client secret is required. Use --client-secret.")?;
 
     let api = ApiClient::new(&server)?;
 
@@ -45,15 +47,70 @@ pub async fn login(
     // Save configuration
     config.server = Some(server);
     config.client_id = Some(client_id.clone());
-    config.access_token = Some(token_response.access_token);
+    config.access_token = Some(token_response.access_token.clone());
     config.refresh_token = token_response.refresh_token;
     config.token_expiry = Some(expiry);
+    config.encrypted_key = token_response.key;
+    config.kdf_iterations = token_response.kdf_iterations;
     config.save()?;
 
     // Store client secret securely
     config::store_client_secret(&client_id, &client_secret)?;
 
+    // Fetch profile to get email for key derivation
+    let sync_response = api.sync(&token_response.access_token).await?;
+    config.email = Some(sync_response.profile.email);
+    config.save()?;
+
     println!("Login successful!");
+    println!("Run 'vaultwarden-cli unlock' to unlock the vault with your master password.");
+    Ok(())
+}
+
+pub async fn unlock(password: Option<String>) -> Result<()> {
+    let mut config = Config::load()?;
+
+    if !config.is_logged_in() {
+        anyhow::bail!("Not logged in. Please run 'vaultwarden-cli login' first.");
+    }
+
+    let email = config.email.as_ref()
+        .context("Email not found. Please login again.")?;
+    let encrypted_key = config.encrypted_key.as_ref()
+        .context("Encrypted key not found. Please login again.")?;
+    let iterations = config.kdf_iterations.unwrap_or(600000);
+
+    // Get password - either from argument or prompt
+    let password = match password {
+        Some(p) => p,
+        None => {
+            print!("Master password: ");
+            io::stdout().flush()?;
+            rpassword::read_password()?
+        }
+    };
+
+    println!("Deriving key...");
+
+    // Derive master key from password and email
+    let master_key = CryptoKeys::derive_master_key(&password, email, iterations);
+
+    // Decrypt the symmetric key
+    let crypto_keys = CryptoKeys::decrypt_symmetric_key(&master_key, encrypted_key)
+        .context("Failed to decrypt vault key. Check your master password.")?;
+
+    // Save the keys
+    config.crypto_keys = Some(crypto_keys);
+    config.save_keys()?;
+
+    println!("Vault unlocked successfully!");
+    Ok(())
+}
+
+pub async fn lock() -> Result<()> {
+    let config = Config::load()?;
+    config.delete_saved_keys()?;
+    println!("Vault locked.");
     Ok(())
 }
 
@@ -90,6 +147,9 @@ pub async fn status() -> Result<()> {
     if let Some(client_id) = &config.client_id {
         println!("Client ID: {}", client_id);
     }
+    if let Some(email) = &config.email {
+        println!("Email: {}", email);
+    }
 
     // Check token expiry
     if let Some(expiry) = config.token_expiry {
@@ -105,6 +165,12 @@ pub async fn status() -> Result<()> {
         } else {
             println!("Token: Expired (will refresh on next request)");
         }
+    }
+
+    if config.is_unlocked() {
+        println!("Vault: Unlocked");
+    } else {
+        println!("Vault: Locked");
     }
 
     Ok(())
@@ -147,12 +213,73 @@ async fn ensure_valid_token(config: &mut Config) -> Result<String> {
     Ok(access_token)
 }
 
+fn ensure_unlocked(config: &Config) -> Result<&CryptoKeys> {
+    config.crypto_keys.as_ref()
+        .context("Vault is locked. Please run 'vaultwarden-cli unlock' first.")
+}
+
+fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
+    // Get encrypted name
+    let name = cipher.get_name()
+        .context("Cipher has no name")?;
+    let decrypted_name = keys.decrypt_to_string(name)?;
+
+    // Decrypt other fields if present
+    let decrypted_username = cipher.get_username()
+        .map(|u| keys.decrypt_to_string(u))
+        .transpose()?;
+
+    let decrypted_password = cipher.get_password()
+        .map(|p| keys.decrypt_to_string(p))
+        .transpose()?;
+
+    let decrypted_uri = cipher.get_uri()
+        .map(|u| keys.decrypt_to_string(u))
+        .transpose()?;
+
+    let decrypted_notes = cipher.get_notes()
+        .map(|n| keys.decrypt_to_string(n))
+        .transpose()?;
+
+    let decrypted_fields = cipher.get_fields()
+        .map(|fields| {
+            fields.iter()
+                .filter_map(|f| {
+                    let name = f.name.as_ref()
+                        .and_then(|n| keys.decrypt_to_string(n).ok())?;
+                    let value = f.value.as_ref()
+                        .and_then(|v| keys.decrypt_to_string(v).ok())
+                        .unwrap_or_default();
+                    Some(FieldOutput {
+                        name,
+                        value,
+                        hidden: f.r#type == 1,
+                    })
+                })
+                .collect()
+        });
+
+    Ok(CipherOutput {
+        id: cipher.id.clone(),
+        cipher_type: cipher.cipher_type()
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        name: decrypted_name,
+        username: decrypted_username,
+        password: decrypted_password,
+        uri: decrypted_uri,
+        notes: decrypted_notes,
+        fields: decrypted_fields,
+    })
+}
+
 pub async fn list(
     type_filter: Option<String>,
     search: Option<String>,
 ) -> Result<()> {
     let mut config = Config::load()?;
     let access_token = ensure_valid_token(&mut config).await?;
+    let keys = ensure_unlocked(&config)?;
     let api = ApiClient::from_config(&config)?;
 
     let sync_response = api.sync(&access_token).await?;
@@ -167,18 +294,35 @@ pub async fn list(
         }
     }
 
-    // Apply search filter
-    if let Some(search_term) = &search {
-        ciphers.retain(|c| c.matches_search(search_term));
+    // Decrypt and filter
+    let mut outputs: Vec<CipherOutput> = Vec::new();
+    for cipher in ciphers {
+        if let Ok(output) = decrypt_cipher(cipher, keys) {
+            // Apply search filter on decrypted data
+            if let Some(search_term) = &search {
+                let search_lower = search_term.to_lowercase();
+                let matches = output.name.to_lowercase().contains(&search_lower)
+                    || output.username.as_ref()
+                        .map(|u| u.to_lowercase().contains(&search_lower))
+                        .unwrap_or(false)
+                    || output.uri.as_ref()
+                        .map(|u| u.to_lowercase().contains(&search_lower))
+                        .unwrap_or(false);
+
+                if !matches {
+                    continue;
+                }
+            }
+            outputs.push(output);
+        }
     }
 
-    if ciphers.is_empty() {
+    if outputs.is_empty() {
         println!("No items found.");
         return Ok(());
     }
 
     // Output as JSON array
-    let outputs: Vec<CipherOutput> = ciphers.iter().map(|c| CipherOutput::from(*c)).collect();
     println!("{}", serde_json::to_string_pretty(&outputs)?);
 
     Ok(())
@@ -187,20 +331,38 @@ pub async fn list(
 pub async fn get(item: &str, format: &str) -> Result<()> {
     let mut config = Config::load()?;
     let access_token = ensure_valid_token(&mut config).await?;
+    let keys = ensure_unlocked(&config)?;
     let api = ApiClient::from_config(&config)?;
 
     let sync_response = api.sync(&access_token).await?;
 
-    // Find the cipher by ID or name
+    // Find the cipher by ID first
     let cipher = sync_response.ciphers.iter()
-        .find(|c| c.id == item || c.name.to_lowercase() == item.to_lowercase())
-        .or_else(|| {
-            // Also search by URI
-            sync_response.ciphers.iter().find(|c| c.matches_search(item))
-        })
-        .context(format!("Item '{}' not found", item))?;
+        .find(|c| c.id == item);
 
-    let output = CipherOutput::from(cipher);
+    // If not found by ID, decrypt all and search by name/uri
+    let output = if let Some(cipher) = cipher {
+        decrypt_cipher(cipher, keys)?
+    } else {
+        // Search through decrypted ciphers
+        let item_lower = item.to_lowercase();
+        let mut found: Option<CipherOutput> = None;
+
+        for cipher in &sync_response.ciphers {
+            if let Ok(output) = decrypt_cipher(cipher, keys) {
+                if output.name.to_lowercase() == item_lower
+                    || output.uri.as_ref()
+                        .map(|u| u.to_lowercase().contains(&item_lower))
+                        .unwrap_or(false)
+                {
+                    found = Some(output);
+                    break;
+                }
+            }
+        }
+
+        found.context(format!("Item '{}' not found", item))?
+    };
 
     match format {
         "json" => {
@@ -218,7 +380,7 @@ pub async fn get(item: &str, format: &str) -> Result<()> {
             if let Some(fields) = &output.fields {
                 for field in fields {
                     let field_name = sanitize_env_name(&field.name);
-                    println!("export {}_{} =\"{}\"", name_upper, field_name, escape_value(&field.value));
+                    println!("export {}_{}=\"{}\"", name_upper, field_name, escape_value(&field.value));
                 }
             }
         }
