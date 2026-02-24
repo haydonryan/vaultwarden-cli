@@ -448,6 +448,9 @@ pub async fn get(item: &str, format: &str) -> Result<()> {
         "env" => {
             // Output as environment variable exports
             let name_upper = sanitize_env_name(&output.name);
+            if let Some(uri) = &output.uri {
+                println!("export {}_URI=\"{}\"", name_upper, escape_value(uri));
+            }
             if let Some(username) = &output.username {
                 println!("export {}_USERNAME=\"{}\"", name_upper, escape_value(username));
             }
@@ -519,6 +522,9 @@ pub async fn get_by_uri(uri: &str, format: &str) -> Result<()> {
         }
         "env" => {
             let name_upper = sanitize_env_name(&output.name);
+            if let Some(uri) = &output.uri {
+                println!("export {}_URI=\"{}\"", name_upper, escape_value(uri));
+            }
             if let Some(username) = &output.username {
                 println!("export {}_USERNAME=\"{}\"", name_upper, escape_value(username));
             }

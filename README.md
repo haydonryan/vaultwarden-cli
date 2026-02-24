@@ -65,6 +65,7 @@ vaultwarden-cli get "My Login"
 # Get item as environment variable exports
 vaultwarden-cli get "My Login" --format env
 # Output:
+# export MY_LOGIN_URI="https://example.com"
 # export MY_LOGIN_USERNAME="user@example.com"
 # export MY_LOGIN_PASSWORD="secret123"
 
@@ -118,7 +119,7 @@ vaultwarden-cli logout
 | Format | Description |
 |--------|-------------|
 | `json` | Full item details as JSON (default) |
-| `env` | Shell export commands for USERNAME and PASSWORD |
+| `env` | Shell export commands for URI, USERNAME, PASSWORD, and custom fields |
 | `value` | Just the password, no newline |
 | `username` | Just the username, no newline |
 
