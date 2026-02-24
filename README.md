@@ -6,6 +6,8 @@ A pure Rust command-line client for [Vaultwarden](https://github.com/dani-garcia
 
 This project is intentionally built in pure Rust rather than Node.js. Command-line tools should be fast, self-contained, and have minimal dependencies. Node.js CLI tools require a runtime, have slow startup times, and bring along thousands of transitive dependencies. Rust compiles to a single static binary that starts instantly and has zero runtime dependencies.
 
+Additionally, this uses the system certificate store for TLS verification, not a bundled certificate store like Node.js. This means it respects your system's CA certificates and corporate proxy configurations out of the box.
+
 ## Features
 
 - OAuth2 client credentials authentication
@@ -136,6 +138,14 @@ Requirements:
 ```bash
 cargo build --release
 ```
+
+## Tested On
+
+- Arch Linux
+
+## Disclaimer
+
+This project was written with the assistance of AI (Claude). While it has been tested and works, please review the code and use at your own risk. Contributions and bug reports are welcome.
 
 ## License
 
