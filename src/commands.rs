@@ -59,10 +59,22 @@ pub async fn login(
 
     // Fetch profile to get email for key derivation
     let sync_response = api.sync(&token_response.access_token).await?;
-    config.email = Some(sync_response.profile.email);
+    config.email = Some(sync_response.profile.email.clone());
+    config.encrypted_private_key = sync_response.profile.private_key.clone();
+
+    // Store organization keys
+    for org in &sync_response.profile.organizations {
+        if let Some(key) = &org.key {
+            config.org_keys.insert(org.id.clone(), key.clone());
+        }
+    }
     config.save()?;
 
     println!("Login successful!");
+    let org_count = config.org_keys.len();
+    if org_count > 0 {
+        println!("Found {} organization(s).", org_count);
+    }
     println!("Run 'vaultwarden-cli unlock' to unlock the vault with your master password.");
     Ok(())
 }
@@ -99,11 +111,41 @@ pub async fn unlock(password: Option<String>) -> Result<()> {
     let crypto_keys = CryptoKeys::decrypt_symmetric_key(&master_key, encrypted_key)
         .context("Failed to decrypt vault key. Check your master password.")?;
 
+    // Decrypt organization keys if present
+    if let Some(encrypted_private_key) = &config.encrypted_private_key {
+        println!("Decrypting organization keys...");
+
+        // Decrypt RSA private key
+        match crypto_keys.decrypt_private_key(encrypted_private_key) {
+            Ok(private_key) => {
+                // Decrypt each organization's key
+                for (org_id, encrypted_org_key) in &config.org_keys {
+                    match CryptoKeys::decrypt_org_key(encrypted_org_key, &private_key) {
+                        Ok(org_keys) => {
+                            config.org_crypto_keys.insert(org_id.clone(), org_keys);
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Failed to decrypt org {} key: {}", org_id, e);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to decrypt private key: {}", e);
+            }
+        }
+    }
+
     // Save the keys
     config.crypto_keys = Some(crypto_keys);
     config.save_keys()?;
 
-    println!("Vault unlocked successfully!");
+    let org_count = config.org_crypto_keys.len();
+    if org_count > 0 {
+        println!("Vault unlocked successfully! ({} organization keys decrypted)", org_count);
+    } else {
+        println!("Vault unlocked successfully!");
+    }
     Ok(())
 }
 
@@ -213,9 +255,26 @@ async fn ensure_valid_token(config: &mut Config) -> Result<String> {
     Ok(access_token)
 }
 
-fn ensure_unlocked(config: &Config) -> Result<&CryptoKeys> {
-    config.crypto_keys.as_ref()
-        .context("Vault is locked. Please run 'vaultwarden-cli unlock' first.")
+fn ensure_unlocked(config: &Config) -> Result<()> {
+    if config.crypto_keys.is_none() {
+        anyhow::bail!("Vault is locked. Please run 'vaultwarden-cli unlock' first.");
+    }
+    Ok(())
+}
+
+fn get_cipher_keys<'a>(config: &'a Config, cipher: &Cipher) -> Result<&'a CryptoKeys> {
+    match config.get_keys_for_cipher(cipher.organization_id.as_deref()) {
+        Some(keys) => Ok(keys),
+        None => {
+            if cipher.organization_id.is_some() {
+                anyhow::bail!(
+                    "Organization key not available for org {}. Try re-logging in.",
+                    cipher.organization_id.as_ref().unwrap()
+                );
+            }
+            anyhow::bail!("No decryption keys available");
+        }
+    }
 }
 
 fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
@@ -279,7 +338,7 @@ pub async fn list(
 ) -> Result<()> {
     let mut config = Config::load()?;
     let access_token = ensure_valid_token(&mut config).await?;
-    let keys = ensure_unlocked(&config)?;
+    ensure_unlocked(&config)?;
     let api = ApiClient::from_config(&config)?;
 
     let sync_response = api.sync(&access_token).await?;
@@ -297,23 +356,36 @@ pub async fn list(
     // Decrypt and filter
     let mut outputs: Vec<CipherOutput> = Vec::new();
     for cipher in ciphers {
-        if let Ok(output) = decrypt_cipher(cipher, keys) {
-            // Apply search filter on decrypted data
-            if let Some(search_term) = &search {
-                let search_lower = search_term.to_lowercase();
-                let matches = output.name.to_lowercase().contains(&search_lower)
-                    || output.username.as_ref()
-                        .map(|u| u.to_lowercase().contains(&search_lower))
-                        .unwrap_or(false)
-                    || output.uri.as_ref()
-                        .map(|u| u.to_lowercase().contains(&search_lower))
-                        .unwrap_or(false);
-
-                if !matches {
-                    continue;
-                }
+        let keys = match get_cipher_keys(&config, cipher) {
+            Ok(k) => k,
+            Err(e) => {
+                eprintln!("Warning: No keys for cipher {}: {}", cipher.id, e);
+                continue;
             }
-            outputs.push(output);
+        };
+
+        match decrypt_cipher(cipher, keys) {
+            Ok(output) => {
+                // Apply search filter on decrypted data
+                if let Some(search_term) = &search {
+                    let search_lower = search_term.to_lowercase();
+                    let matches = output.name.to_lowercase().contains(&search_lower)
+                        || output.username.as_ref()
+                            .map(|u| u.to_lowercase().contains(&search_lower))
+                            .unwrap_or(false)
+                        || output.uri.as_ref()
+                            .map(|u| u.to_lowercase().contains(&search_lower))
+                            .unwrap_or(false);
+
+                    if !matches {
+                        continue;
+                    }
+                }
+                outputs.push(output);
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to decrypt cipher {}: {}", cipher.id, e);
+            }
         }
     }
 
@@ -331,7 +403,7 @@ pub async fn list(
 pub async fn get(item: &str, format: &str) -> Result<()> {
     let mut config = Config::load()?;
     let access_token = ensure_valid_token(&mut config).await?;
-    let keys = ensure_unlocked(&config)?;
+    ensure_unlocked(&config)?;
     let api = ApiClient::from_config(&config)?;
 
     let sync_response = api.sync(&access_token).await?;
@@ -342,6 +414,7 @@ pub async fn get(item: &str, format: &str) -> Result<()> {
 
     // If not found by ID, decrypt all and search by name/uri
     let output = if let Some(cipher) = cipher {
+        let keys = get_cipher_keys(&config, cipher)?;
         decrypt_cipher(cipher, keys)?
     } else {
         // Search through decrypted ciphers
@@ -349,6 +422,10 @@ pub async fn get(item: &str, format: &str) -> Result<()> {
         let mut found: Option<CipherOutput> = None;
 
         for cipher in &sync_response.ciphers {
+            let keys = match get_cipher_keys(&config, cipher) {
+                Ok(k) => k,
+                Err(_) => continue,
+            };
             if let Ok(output) = decrypt_cipher(cipher, keys) {
                 if output.name.to_lowercase() == item_lower
                     || output.uri.as_ref()

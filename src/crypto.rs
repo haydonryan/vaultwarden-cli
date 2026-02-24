@@ -4,11 +4,11 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use pbkdf2::pbkdf2_hmac;
+use rsa::{Oaep, RsaPrivateKey, pkcs8::DecodePrivateKey};
+use sha1::Sha1;
 use sha2::Sha256;
 
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
-
-const KDF_ITERATIONS: u32 = 600000; // Default Bitwarden iterations
 
 #[derive(Clone, Debug)]
 pub struct CryptoKeys {
@@ -30,9 +30,13 @@ impl CryptoKeys {
         master_key
     }
 
-    /// Stretch the master key using HKDF to get encryption and MAC keys
+    /// Stretch the master key using HKDF-Expand to get encryption and MAC keys
+    /// Note: Bitwarden uses HKDF-Expand directly with the master key as PRK,
+    /// skipping the HKDF-Extract step
     pub fn stretch_master_key(master_key: &[u8]) -> Result<Self> {
-        let hk = Hkdf::<Sha256>::new(None, master_key);
+        // Use the master key directly as PRK (skip extract step)
+        let hk = Hkdf::<Sha256>::from_prk(master_key)
+            .map_err(|e| anyhow::anyhow!("HKDF PRK init failed: {}", e))?;
 
         let mut enc_key = vec![0u8; 32];
         hk.expand(b"enc", &mut enc_key)
@@ -54,6 +58,58 @@ impl CryptoKeys {
             enc_key: key[0..32].to_vec(),
             mac_key: key[32..64].to_vec(),
         })
+    }
+
+    /// Decrypt an RSA-OAEP encrypted value (type 4 or 6)
+    /// Type 4 = RSA-OAEP with SHA-1
+    /// Type 6 = RSA-OAEP with SHA-256
+    pub fn decrypt_rsa(encrypted: &str, private_key: &RsaPrivateKey) -> Result<Vec<u8>> {
+        let (enc_type, data) = encrypted
+            .split_once('.')
+            .context("Invalid encrypted string format")?;
+
+        let enc_type: u8 = enc_type.parse().context("Invalid encryption type")?;
+
+        let ciphertext = BASE64.decode(data).context("Failed to decode RSA ciphertext")?;
+
+        match enc_type {
+            4 => {
+                // RSA-OAEP with SHA-1
+                let padding = Oaep::new::<Sha1>();
+                private_key
+                    .decrypt(padding, &ciphertext)
+                    .map_err(|e| anyhow::anyhow!("RSA-OAEP SHA1 decryption failed: {}", e))
+            }
+            6 => {
+                // RSA-OAEP with SHA-256
+                let padding = Oaep::new::<Sha256>();
+                private_key
+                    .decrypt(padding, &ciphertext)
+                    .map_err(|e| anyhow::anyhow!("RSA-OAEP SHA256 decryption failed: {}", e))
+            }
+            _ => {
+                anyhow::bail!("Unsupported RSA encryption type: {}", enc_type);
+            }
+        }
+    }
+
+    /// Decrypt the user's RSA private key using their symmetric key
+    pub fn decrypt_private_key(
+        &self,
+        encrypted_private_key: &str,
+    ) -> Result<RsaPrivateKey> {
+        let decrypted_der = self.decrypt(encrypted_private_key)?;
+        RsaPrivateKey::from_pkcs8_der(&decrypted_der)
+            .map_err(|e| anyhow::anyhow!("Failed to parse RSA private key: {}", e))
+    }
+
+    /// Decrypt an organization key using RSA
+    pub fn decrypt_org_key(
+        encrypted_org_key: &str,
+        private_key: &RsaPrivateKey,
+    ) -> Result<Self> {
+        let decrypted = Self::decrypt_rsa(encrypted_org_key, private_key)?;
+        Self::from_symmetric_key(&decrypted)
     }
 
     /// Decrypt the user's encrypted symmetric key using the stretched master key

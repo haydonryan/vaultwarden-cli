@@ -30,6 +30,16 @@ pub struct SyncResponse {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct Organization {
+    #[serde(alias = "Id", alias = "id")]
+    pub id: String,
+    #[serde(alias = "Name", alias = "name")]
+    pub name: Option<String>,
+    #[serde(alias = "Key", alias = "key")]
+    pub key: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Profile {
     #[serde(alias = "Id", alias = "id")]
     pub id: String,
@@ -39,6 +49,10 @@ pub struct Profile {
     pub name: Option<String>,
     #[serde(alias = "Key", alias = "key")]
     pub key: Option<String>,
+    #[serde(alias = "PrivateKey", alias = "privateKey")]
+    pub private_key: Option<String>,
+    #[serde(alias = "Organizations", alias = "organizations", default)]
+    pub organizations: Vec<Organization>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -88,6 +102,8 @@ pub struct Cipher {
     pub id: String,
     #[serde(alias = "Type", alias = "type")]
     pub r#type: u8,
+    #[serde(alias = "OrganizationId", alias = "organizationId")]
+    pub organization_id: Option<String>,
     #[serde(alias = "Name", alias = "name")]
     pub name: Option<String>,
     #[serde(alias = "Notes", alias = "notes")]
