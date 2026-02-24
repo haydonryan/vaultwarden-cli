@@ -70,9 +70,13 @@ vaultwarden-cli get "My Login" --format env
 
 # Get just the password (useful for piping)
 vaultwarden-cli get "My Login" --format value
+vaultwarden-cli get "My Login" --password   # shorthand
+vaultwarden-cli get "My Login" -p           # short flag
 
 # Get just the username
 vaultwarden-cli get "My Login" --format username
+vaultwarden-cli get "My Login" --username   # shorthand
+vaultwarden-cli get "My Login" -u           # short flag
 ```
 
 ### Using in Scripts
