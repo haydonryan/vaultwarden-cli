@@ -1,0 +1,17 @@
+[package]
+name = "vaultwarden-cli"
+version = "0.1.0"
+edition = "2021"
+description = "CLI client for Vaultwarden - retrieve secrets for batch files and environment variables"
+authors = ["Vaultwarden CLI Contributors"]
+
+[dependencies]
+clap = { version = "4.4", features = ["derive"] }
+tokio = { version = "1.35", features = ["full"] }
+reqwest = { version = "0.11", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+thiserror = "1.0"
+directories = "5.0"
+keyring = "2.1"
