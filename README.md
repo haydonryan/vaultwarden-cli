@@ -77,6 +77,11 @@ vaultwarden-cli get "My Login" -p           # short flag
 vaultwarden-cli get "My Login" --format username
 vaultwarden-cli get "My Login" --username   # shorthand
 vaultwarden-cli get "My Login" -u           # short flag
+
+# Get item by URI instead of name
+vaultwarden-cli get-uri github.com
+vaultwarden-cli get-uri github.com -p       # just password
+vaultwarden-cli get-uri github.com -u       # just username
 ```
 
 ### Using in Scripts

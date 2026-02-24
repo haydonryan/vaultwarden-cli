@@ -74,6 +74,25 @@ enum Commands {
         password: bool,
     },
 
+    /// Get a specific item by URI
+    #[command(name = "get-uri")]
+    GetUri {
+        /// URI to search for (e.g., github.com)
+        uri: String,
+
+        /// Output format (json, env, value, username)
+        #[arg(short, long, default_value = "json")]
+        format: String,
+
+        /// Output only the username (shorthand for --format username)
+        #[arg(short, long)]
+        username: bool,
+
+        /// Output only the password (shorthand for --format value)
+        #[arg(short, long)]
+        password: bool,
+    },
+
     /// Show current session status
     Status,
 }
@@ -108,6 +127,17 @@ async fn main() {
                 &format
             };
             commands::get(&item, effective_format).await
+        }
+        Commands::GetUri { uri, format, username, password } => {
+            // --username and --password flags override --format
+            let effective_format = if username {
+                "username"
+            } else if password {
+                "value"
+            } else {
+                &format
+            };
+            commands::get_by_uri(&uri, effective_format).await
         }
         Commands::Status => {
             commands::status().await

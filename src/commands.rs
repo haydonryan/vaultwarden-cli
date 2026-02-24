@@ -484,6 +484,76 @@ pub async fn get(item: &str, format: &str) -> Result<()> {
     Ok(())
 }
 
+pub async fn get_by_uri(uri: &str, format: &str) -> Result<()> {
+    let mut config = Config::load()?;
+    let access_token = ensure_valid_token(&mut config).await?;
+    ensure_unlocked(&config)?;
+    let api = ApiClient::from_config(&config)?;
+
+    let sync_response = api.sync(&access_token).await?;
+
+    // Search through decrypted ciphers by URI
+    let uri_lower = uri.to_lowercase();
+    let mut found: Option<CipherOutput> = None;
+
+    for cipher in &sync_response.ciphers {
+        let keys = match get_cipher_keys(&config, cipher) {
+            Ok(k) => k,
+            Err(_) => continue,
+        };
+        if let Ok(output) = decrypt_cipher(cipher, keys) {
+            if let Some(item_uri) = &output.uri {
+                if item_uri.to_lowercase().contains(&uri_lower) {
+                    found = Some(output);
+                    break;
+                }
+            }
+        }
+    }
+
+    let output = found.context(format!("No item found with URI containing '{}'", uri))?;
+
+    match format {
+        "json" => {
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
+        "env" => {
+            let name_upper = sanitize_env_name(&output.name);
+            if let Some(username) = &output.username {
+                println!("export {}_USERNAME=\"{}\"", name_upper, escape_value(username));
+            }
+            if let Some(password) = &output.password {
+                println!("export {}_PASSWORD=\"{}\"", name_upper, escape_value(password));
+            }
+            if let Some(fields) = &output.fields {
+                for field in fields {
+                    let field_name = sanitize_env_name(&field.name);
+                    println!("export {}_{}=\"{}\"", name_upper, field_name, escape_value(&field.value));
+                }
+            }
+        }
+        "value" | "password" => {
+            if let Some(password) = &output.password {
+                print!("{}", password);
+            } else {
+                anyhow::bail!("Item has no password");
+            }
+        }
+        "username" => {
+            if let Some(username) = &output.username {
+                print!("{}", username);
+            } else {
+                anyhow::bail!("Item has no username");
+            }
+        }
+        _ => {
+            anyhow::bail!("Unknown format: {}. Use: json, env, value, username", format);
+        }
+    }
+
+    Ok(())
+}
+
 fn sanitize_env_name(name: &str) -> String {
     name.to_uppercase()
         .chars()
