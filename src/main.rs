@@ -93,6 +93,35 @@ enum Commands {
         password: bool,
     },
 
+    /// Run a command with secrets injected as environment variables
+    Run {
+        /// Item name or ID to inject
+        item: String,
+
+        /// Print list of injected environment variables without values
+        #[arg(short, long)]
+        info: bool,
+
+        /// Command to run (use -- to separate from vaultwarden-cli args)
+        #[arg(trailing_var_arg = true)]
+        command: Vec<String>,
+    },
+
+    /// Run a command with secrets from URI match injected as environment variables
+    #[command(name = "run-uri")]
+    RunUri {
+        /// URI to search for
+        uri: String,
+
+        /// Print list of injected environment variables without values
+        #[arg(short, long)]
+        info: bool,
+
+        /// Command to run (use -- to separate from vaultwarden-cli args)
+        #[arg(trailing_var_arg = true)]
+        command: Vec<String>,
+    },
+
     /// Show current session status
     Status,
 }
@@ -138,6 +167,12 @@ async fn main() {
                 &format
             };
             commands::get_by_uri(&uri, effective_format).await
+        }
+        Commands::Run { item, info, command } => {
+            commands::run_with_secrets(&item, false, info, &command).await
+        }
+        Commands::RunUri { uri, info, command } => {
+            commands::run_with_secrets(&uri, true, info, &command).await
         }
         Commands::Status => {
             commands::status().await

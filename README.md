@@ -17,6 +17,7 @@ Additionally, this uses the system certificate store for TLS verification, not a
 - Persistent sessions with secure credential storage
 - Multiple output formats: JSON, environment exports, raw values
 - Search and filter vault items
+- Run commands with secrets injected as environment variables
 
 ## Installation
 
@@ -100,6 +101,26 @@ vaultwarden-cli get "Database" --format value | psql -U admin -W
 DB_PASS=$(vaultwarden-cli get "Database" --format value)
 mysql -u root -p"$DB_PASS" -e "SELECT 1"
 ```
+
+### Running Commands with Secrets
+
+Run commands with secrets injected as environment variables. The secrets are only available to the spawned process and do not persist in your shell.
+
+```bash
+# Run a command with secrets from an item injected as env vars
+vaultwarden-cli run "My Login" -- printenv MY_LOGIN_USERNAME MY_LOGIN_PASSWORD
+
+# Run with URI matching instead of name
+vaultwarden-cli run-uri github.com -- git push
+
+# Preview which environment variables would be injected (without values)
+vaultwarden-cli run "My Login" --info
+vaultwarden-cli run-uri github.com --info
+```
+
+Environment variables are named `{ITEM_NAME}_{FIELD}` where:
+- `{ITEM_NAME}` is the item name converted to uppercase with non-alphanumeric chars replaced by underscores
+- `{FIELD}` is one of: `URI`, `USERNAME`, `PASSWORD`, or custom field names
 
 ### Session Management
 

@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use std::io::{self, Write};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::api::ApiClient;
@@ -573,4 +574,122 @@ fn escape_value(value: &str) -> String {
         .replace('"', "\\\"")
         .replace('$', "\\$")
         .replace('`', "\\`")
+}
+
+pub async fn run_with_secrets(
+    item_or_uri: &str,
+    search_by_uri: bool,
+    info_only: bool,
+    command: &[String],
+) -> Result<()> {
+    let mut config = Config::load()?;
+    let access_token = ensure_valid_token(&mut config).await?;
+    ensure_unlocked(&config)?;
+    let api = ApiClient::from_config(&config)?;
+
+    let sync_response = api.sync(&access_token).await?;
+
+    // Find the item
+    let output = if search_by_uri {
+        // Search by URI
+        let uri_lower = item_or_uri.to_lowercase();
+        let mut found: Option<CipherOutput> = None;
+
+        for cipher in &sync_response.ciphers {
+            let keys = match get_cipher_keys(&config, cipher) {
+                Ok(k) => k,
+                Err(_) => continue,
+            };
+            if let Ok(output) = decrypt_cipher(cipher, keys) {
+                if let Some(item_uri) = &output.uri {
+                    if item_uri.to_lowercase().contains(&uri_lower) {
+                        found = Some(output);
+                        break;
+                    }
+                }
+            }
+        }
+        found.context(format!("No item found with URI containing '{}'", item_or_uri))?
+    } else {
+        // Search by ID first, then by name
+        let cipher = sync_response.ciphers.iter().find(|c| c.id == item_or_uri);
+
+        if let Some(cipher) = cipher {
+            let keys = get_cipher_keys(&config, cipher)?;
+            decrypt_cipher(cipher, keys)?
+        } else {
+            let item_lower = item_or_uri.to_lowercase();
+            let mut found: Option<CipherOutput> = None;
+
+            for cipher in &sync_response.ciphers {
+                let keys = match get_cipher_keys(&config, cipher) {
+                    Ok(k) => k,
+                    Err(_) => continue,
+                };
+                if let Ok(output) = decrypt_cipher(cipher, keys) {
+                    if output.name.to_lowercase() == item_lower {
+                        found = Some(output);
+                        break;
+                    }
+                }
+            }
+            found.context(format!("Item '{}' not found", item_or_uri))?
+        }
+    };
+
+    // Build environment variable names
+    let name_upper = sanitize_env_name(&output.name);
+    let mut env_vars: Vec<(String, String)> = Vec::new();
+
+    if let Some(uri) = &output.uri {
+        env_vars.push((format!("{}_URI", name_upper), uri.clone()));
+    }
+    if let Some(username) = &output.username {
+        env_vars.push((format!("{}_USERNAME", name_upper), username.clone()));
+    }
+    if let Some(password) = &output.password {
+        env_vars.push((format!("{}_PASSWORD", name_upper), password.clone()));
+    }
+    if let Some(fields) = &output.fields {
+        for field in fields {
+            let field_name = sanitize_env_name(&field.name);
+            env_vars.push((format!("{}_{}", name_upper, field_name), field.value.clone()));
+        }
+    }
+
+    // If --info flag, just print variable names
+    if info_only {
+        println!("Environment variables that would be injected:");
+        for (name, _) in &env_vars {
+            println!("  {}", name);
+        }
+        return Ok(());
+    }
+
+    // Require a command if not info_only
+    if command.is_empty() {
+        anyhow::bail!("No command specified. Use -- followed by the command to run.");
+    }
+
+    // Spawn the command with injected environment variables
+    let mut cmd = Command::new(&command[0]);
+    if command.len() > 1 {
+        cmd.args(&command[1..]);
+    }
+
+    // Inject secrets into environment
+    for (name, value) in &env_vars {
+        cmd.env(name, value);
+    }
+
+    // Run the command and wait for it to complete
+    let status = cmd.status()
+        .with_context(|| format!("Failed to execute command: {}", command[0]))?;
+
+    // Exit with the same code as the child process
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+
+    Ok(())
 }
