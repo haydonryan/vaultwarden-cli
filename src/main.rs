@@ -1,3 +1,8 @@
+mod api;
+mod commands;
+mod config;
+mod models;
+
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -45,7 +50,7 @@ enum Commands {
         /// Item ID or name to retrieve
         item: String,
 
-        /// Output format (json, env, value)
+        /// Output format (json, env, value, username)
         #[arg(short, long, default_value = "json")]
         format: String,
     },
@@ -54,41 +59,30 @@ enum Commands {
     Status,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
 
-    match &cli.command {
+    let result = match cli.command {
         Commands::Login { server, client_id, client_secret } => {
-            println!("Login command");
-            if let Some(s) = server {
-                println!("  Server: {}", s);
-            }
-            if let Some(id) = client_id {
-                println!("  Client ID: {}", id);
-            }
-            if client_secret.is_some() {
-                println!("  Client secret: [provided]");
-            }
+            commands::login(server, client_id, client_secret).await
         }
         Commands::Logout => {
-            println!("Logout command");
+            commands::logout().await
         }
         Commands::List { r#type, search } => {
-            println!("List command");
-            if let Some(t) = r#type {
-                println!("  Type: {}", t);
-            }
-            if let Some(s) = search {
-                println!("  Search: {}", s);
-            }
+            commands::list(r#type, search).await
         }
         Commands::Get { item, format } => {
-            println!("Get command");
-            println!("  Item: {}", item);
-            println!("  Format: {}", format);
+            commands::get(&item, &format).await
         }
         Commands::Status => {
-            println!("Status command");
+            commands::status().await
         }
+    };
+
+    if let Err(e) = result {
+        eprintln!("Error: {:#}", e);
+        std::process::exit(1);
     }
 }
