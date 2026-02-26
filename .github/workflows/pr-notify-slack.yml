@@ -10,9 +10,12 @@ jobs:
   run:
     name: Sent Notification of PR
     runs-on: ubuntu-latest
-    if: ${{ secrets.SLACK_BOT_TOKEN != '' && secrets.SLACK_CHANNEL_ID != '' }}
+    env:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
     steps:
       - name: Post blocks to a Slack channel
+        if: ${{ env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL_ID != '' }}
         uses: slackapi/slack-github-action@v2.1.1
         with:
           method: chat.postMessage
