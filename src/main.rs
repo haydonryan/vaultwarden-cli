@@ -19,11 +19,11 @@ enum Commands {
         server: Option<String>,
 
         /// Client ID for API authentication
-        #[arg(long)]
+        #[arg(long, env = "VAULTWARDEN_CLIENT_ID")]
         client_id: Option<String>,
 
         /// Client secret for API authentication
-        #[arg(long)]
+        #[arg(long, env = "VAULTWARDEN_CLIENT_SECRET")]
         client_secret: Option<String>,
     },
 

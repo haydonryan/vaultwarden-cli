@@ -55,9 +55,6 @@ pub async fn login(
     config.kdf_iterations = token_response.kdf_iterations;
     config.save()?;
 
-    // Store client secret securely
-    config::store_client_secret(&client_id, &client_secret)?;
-
     // Fetch profile to get email for key derivation
     let sync_response = api.sync(&token_response.access_token).await?;
     config.email = Some(sync_response.profile.email.clone());
@@ -70,6 +67,18 @@ pub async fn login(
         }
     }
     config.save()?;
+
+    // Best-effort secure storage: some environments (headless/minimal Linux) don't provide
+    // an activatable secret service over D-Bus.
+    if let Err(err) = config::store_client_secret(&client_id, &client_secret) {
+        eprintln!(
+            "Warning: Could not store client secret in system keyring: {}",
+            err
+        );
+        eprintln!(
+            "You can keep using this session. If you need to login again later, pass --client-secret."
+        );
+    }
 
     println!("Login successful!");
     let org_count = config.org_keys.len();

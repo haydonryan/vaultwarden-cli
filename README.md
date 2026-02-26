@@ -44,6 +44,11 @@ vaultwarden-cli login \
   --client-id "user.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" \
   --client-secret "your-client-secret"
 
+# Or use environment variables for client credentials
+export VAULTWARDEN_CLIENT_ID="user.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+export VAULTWARDEN_CLIENT_SECRET="your-client-secret"
+vaultwarden-cli login --server https://your-vaultwarden-server.com
+
 # Unlock the vault with your master password
 vaultwarden-cli unlock
 ```
@@ -152,6 +157,34 @@ Configuration is stored in:
 - Windows: `%APPDATA%\vaultwarden\vaultwarden-cli\`
 
 Client secrets are stored securely using the system keyring (libsecret on Linux, Keychain on macOS, Credential Manager on Windows).
+
+### Linux: D-Bus Secret Service (keyring)
+
+On Linux, secure client-secret storage requires:
+- A user D-Bus session
+- A Secret Service provider (for example `gnome-keyring`)
+
+If you see an error like `org.freedesktop.DBus.Error.ServiceUnknown` for `org.freedesktop.secrets`, install keyring support:
+
+```bash
+# Arch Linux
+sudo pacman -S dbus libsecret gnome-keyring
+
+# Ubuntu/Debian
+sudo apt update
+sudo apt install -y dbus-user-session libsecret-1-0 gnome-keyring
+
+# RHEL/CentOS/Fedora
+sudo dnf install -y dbus-daemon libsecret gnome-keyring
+```
+
+Verify the service is available in your user session:
+
+```bash
+busctl --user list | grep org.freedesktop.secrets
+```
+
+If you run in a headless/minimal environment without Secret Service, `vaultwarden-cli` still works, but you may need to pass `--client-secret` on login.
 
 ## Security
 
