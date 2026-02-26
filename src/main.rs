@@ -1,10 +1,5 @@
-mod api;
-mod commands;
-mod config;
-mod crypto;
-mod models;
-
 use clap::{Parser, Subcommand};
+use vaultwarden_cli::commands;
 
 #[derive(Parser)]
 #[command(name = "vaultwarden-cli")]

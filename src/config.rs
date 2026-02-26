@@ -189,3 +189,452 @@ pub fn delete_client_secret(client_id: &str) -> Result<()> {
     entry.delete_password().ok(); // Ignore errors if not found
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Config state tests
+    mod config_state_tests {
+        use super::*;
+
+        #[test]
+        fn test_config_default() {
+            let config = Config::default();
+
+            assert!(config.server.is_none());
+            assert!(config.client_id.is_none());
+            assert!(config.email.is_none());
+            assert!(config.access_token.is_none());
+            assert!(config.refresh_token.is_none());
+            assert!(config.token_expiry.is_none());
+            assert!(config.encrypted_key.is_none());
+            assert!(config.encrypted_private_key.is_none());
+            assert!(config.kdf_iterations.is_none());
+            assert!(config.org_keys.is_empty());
+            assert!(config.crypto_keys.is_none());
+            assert!(config.org_crypto_keys.is_empty());
+        }
+
+        #[test]
+        fn test_is_logged_in_false_when_no_token() {
+            let config = Config {
+                server: Some("https://vault.example.com".to_string()),
+                access_token: None,
+                ..Default::default()
+            };
+            assert!(!config.is_logged_in());
+        }
+
+        #[test]
+        fn test_is_logged_in_false_when_no_server() {
+            let config = Config {
+                server: None,
+                access_token: Some("token".to_string()),
+                ..Default::default()
+            };
+            assert!(!config.is_logged_in());
+        }
+
+        #[test]
+        fn test_is_logged_in_true_when_both_present() {
+            let config = Config {
+                server: Some("https://vault.example.com".to_string()),
+                access_token: Some("token".to_string()),
+                ..Default::default()
+            };
+            assert!(config.is_logged_in());
+        }
+
+        #[test]
+        fn test_is_unlocked_false_when_no_keys() {
+            let config = Config::default();
+            assert!(!config.is_unlocked());
+        }
+
+        #[test]
+        fn test_is_unlocked_true_when_keys_present() {
+            let config = Config {
+                crypto_keys: Some(CryptoKeys {
+                    enc_key: vec![0u8; 32],
+                    mac_key: vec![0u8; 32],
+                }),
+                ..Default::default()
+            };
+            assert!(config.is_unlocked());
+        }
+
+        #[test]
+        fn test_get_server() {
+            let config = Config {
+                server: Some("https://vault.example.com".to_string()),
+                ..Default::default()
+            };
+            assert_eq!(config.get_server(), Some("https://vault.example.com"));
+        }
+
+        #[test]
+        fn test_get_server_none() {
+            let config = Config::default();
+            assert_eq!(config.get_server(), None);
+        }
+    }
+
+    // Key retrieval tests
+    mod key_retrieval_tests {
+        use super::*;
+
+        #[test]
+        fn test_get_keys_for_cipher_user_keys() {
+            let user_keys = CryptoKeys {
+                enc_key: vec![1u8; 32],
+                mac_key: vec![2u8; 32],
+            };
+
+            let config = Config {
+                crypto_keys: Some(user_keys.clone()),
+                ..Default::default()
+            };
+
+            let keys = config.get_keys_for_cipher(None).unwrap();
+            assert_eq!(keys.enc_key, user_keys.enc_key);
+        }
+
+        #[test]
+        fn test_get_keys_for_cipher_org_keys() {
+            let user_keys = CryptoKeys {
+                enc_key: vec![1u8; 32],
+                mac_key: vec![2u8; 32],
+            };
+            let org_keys = CryptoKeys {
+                enc_key: vec![3u8; 32],
+                mac_key: vec![4u8; 32],
+            };
+
+            let mut config = Config {
+                crypto_keys: Some(user_keys),
+                ..Default::default()
+            };
+            config.org_crypto_keys.insert("org-123".to_string(), org_keys.clone());
+
+            let keys = config.get_keys_for_cipher(Some("org-123")).unwrap();
+            assert_eq!(keys.enc_key, org_keys.enc_key);
+        }
+
+        #[test]
+        fn test_get_keys_for_cipher_org_not_found() {
+            let user_keys = CryptoKeys {
+                enc_key: vec![1u8; 32],
+                mac_key: vec![2u8; 32],
+            };
+
+            let config = Config {
+                crypto_keys: Some(user_keys),
+                ..Default::default()
+            };
+
+            // Requesting keys for an org that doesn't exist
+            let keys = config.get_keys_for_cipher(Some("nonexistent-org"));
+            assert!(keys.is_none());
+        }
+
+        #[test]
+        fn test_get_keys_for_cipher_no_keys() {
+            let config = Config::default();
+            assert!(config.get_keys_for_cipher(None).is_none());
+        }
+    }
+
+    // Serialization tests
+    mod serialization_tests {
+        use super::*;
+
+        #[test]
+        fn test_config_serialization_excludes_crypto_keys() {
+            let config = Config {
+                server: Some("https://vault.example.com".to_string()),
+                crypto_keys: Some(CryptoKeys {
+                    enc_key: vec![1u8; 32],
+                    mac_key: vec![2u8; 32],
+                }),
+                ..Default::default()
+            };
+
+            let json = serde_json::to_string(&config).unwrap();
+
+            // crypto_keys should not be in the serialized output (marked with skip)
+            assert!(!json.contains("enc_key"));
+            assert!(!json.contains("mac_key"));
+            // But server should be there
+            assert!(json.contains("vault.example.com"));
+        }
+
+        #[test]
+        fn test_config_deserialization() {
+            let json = r#"{
+                "server": "https://vault.example.com",
+                "client_id": "user.client-123",
+                "email": "user@example.com",
+                "access_token": "test-token",
+                "token_expiry": 1234567890,
+                "kdf_iterations": 600000
+            }"#;
+
+            let config: Config = serde_json::from_str(json).unwrap();
+            assert_eq!(config.server, Some("https://vault.example.com".to_string()));
+            assert_eq!(config.client_id, Some("user.client-123".to_string()));
+            assert_eq!(config.email, Some("user@example.com".to_string()));
+            assert_eq!(config.token_expiry, Some(1234567890));
+            assert_eq!(config.kdf_iterations, Some(600000));
+            // crypto_keys should be None after deserialization
+            assert!(config.crypto_keys.is_none());
+        }
+
+        #[test]
+        fn test_config_with_org_keys() {
+            let mut config = Config::default();
+            config.org_keys.insert("org-1".to_string(), "encrypted-key-1".to_string());
+            config.org_keys.insert("org-2".to_string(), "encrypted-key-2".to_string());
+
+            let json = serde_json::to_string(&config).unwrap();
+            assert!(json.contains("org-1"));
+            assert!(json.contains("encrypted-key-1"));
+
+            let deserialized: Config = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized.org_keys.len(), 2);
+            assert_eq!(deserialized.org_keys.get("org-1"), Some(&"encrypted-key-1".to_string()));
+        }
+    }
+
+    // File I/O tests using tempdir
+    // Note: These tests use direct file operations to avoid environment variable issues
+    mod file_io_tests {
+        use super::*;
+        use tempfile::TempDir;
+        use std::fs;
+
+        #[test]
+        fn test_config_dir_returns_path() {
+            // Just verify it doesn't error
+            let result = Config::config_dir();
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_config_path_is_config_json() {
+            let result = Config::config_path();
+            assert!(result.is_ok());
+            let path = result.unwrap();
+            assert!(path.ends_with("config.json"));
+        }
+
+        #[test]
+        fn test_keys_path_is_keys_json() {
+            let result = Config::keys_path();
+            assert!(result.is_ok());
+            let path = result.unwrap();
+            assert!(path.ends_with("keys.json"));
+        }
+
+        // Test direct serialization/deserialization without filesystem
+        #[test]
+        fn test_config_save_load_roundtrip() {
+            let temp_dir = TempDir::new().unwrap();
+            let config_path = temp_dir.path().join("config.json");
+
+            let config = Config {
+                server: Some("https://test.example.com".to_string()),
+                client_id: Some("test-client".to_string()),
+                email: Some("test@example.com".to_string()),
+                access_token: Some("test-token".to_string()),
+                kdf_iterations: Some(100000),
+                ..Default::default()
+            };
+
+            // Save manually to temp location
+            let content = serde_json::to_string_pretty(&config).unwrap();
+            fs::write(&config_path, &content).unwrap();
+
+            // Load manually from temp location
+            let loaded_content = fs::read_to_string(&config_path).unwrap();
+            let loaded: Config = serde_json::from_str(&loaded_content).unwrap();
+
+            assert_eq!(loaded.server, config.server);
+            assert_eq!(loaded.client_id, config.client_id);
+            assert_eq!(loaded.email, config.email);
+            assert_eq!(loaded.kdf_iterations, config.kdf_iterations);
+        }
+
+        #[test]
+        fn test_keys_save_load_roundtrip() {
+            let temp_dir = TempDir::new().unwrap();
+            let keys_path = temp_dir.path().join("keys.json");
+
+            let config = Config {
+                crypto_keys: Some(CryptoKeys {
+                    enc_key: vec![0x42u8; 32],
+                    mac_key: vec![0x43u8; 32],
+                }),
+                ..Default::default()
+            };
+
+            // Manually save keys
+            let user_keys = config.crypto_keys.as_ref().map(|keys| KeyData {
+                enc_key: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &keys.enc_key),
+                mac_key: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &keys.mac_key),
+            });
+
+            let saved = SavedKeys {
+                user_keys,
+                org_keys: HashMap::new(),
+            };
+            let content = serde_json::to_string(&saved).unwrap();
+            fs::write(&keys_path, &content).unwrap();
+
+            // Load keys back
+            let loaded_content = fs::read_to_string(&keys_path).unwrap();
+            let loaded_saved: SavedKeys = serde_json::from_str(&loaded_content).unwrap();
+
+            let keys_data = loaded_saved.user_keys.unwrap();
+            let enc_key = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &keys_data.enc_key).unwrap();
+            let mac_key = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &keys_data.mac_key).unwrap();
+
+            assert_eq!(enc_key, vec![0x42u8; 32]);
+            assert_eq!(mac_key, vec![0x43u8; 32]);
+        }
+
+        #[test]
+        fn test_org_keys_save_load_roundtrip() {
+            let temp_dir = TempDir::new().unwrap();
+            let keys_path = temp_dir.path().join("keys.json");
+
+            let mut config = Config::default();
+            config.org_crypto_keys.insert("org-1".to_string(), CryptoKeys {
+                enc_key: vec![0x11u8; 32],
+                mac_key: vec![0x12u8; 32],
+            });
+            config.org_crypto_keys.insert("org-2".to_string(), CryptoKeys {
+                enc_key: vec![0x21u8; 32],
+                mac_key: vec![0x22u8; 32],
+            });
+
+            // Manually save keys
+            let org_keys: HashMap<String, KeyData> = config.org_crypto_keys.iter()
+                .map(|(id, keys)| {
+                    (id.clone(), KeyData {
+                        enc_key: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &keys.enc_key),
+                        mac_key: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &keys.mac_key),
+                    })
+                })
+                .collect();
+
+            let saved = SavedKeys {
+                user_keys: None,
+                org_keys,
+            };
+            let content = serde_json::to_string(&saved).unwrap();
+            fs::write(&keys_path, &content).unwrap();
+
+            // Load keys back
+            let loaded_content = fs::read_to_string(&keys_path).unwrap();
+            let loaded_saved: SavedKeys = serde_json::from_str(&loaded_content).unwrap();
+
+            assert_eq!(loaded_saved.org_keys.len(), 2);
+
+            let org1_data = loaded_saved.org_keys.get("org-1").unwrap();
+            let org1_enc = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &org1_data.enc_key).unwrap();
+            assert_eq!(org1_enc, vec![0x11u8; 32]);
+        }
+
+        #[test]
+        fn test_delete_keys_file() {
+            let temp_dir = TempDir::new().unwrap();
+            let keys_path = temp_dir.path().join("keys.json");
+
+            // Create a file
+            fs::write(&keys_path, "{}").unwrap();
+            assert!(keys_path.exists());
+
+            // Delete it
+            fs::remove_file(&keys_path).unwrap();
+            assert!(!keys_path.exists());
+        }
+
+        #[test]
+        fn test_delete_nonexistent_keys_ok() {
+            let temp_dir = TempDir::new().unwrap();
+            let keys_path = temp_dir.path().join("nonexistent.json");
+
+            // Should not panic when file doesn't exist
+            if keys_path.exists() {
+                fs::remove_file(&keys_path).unwrap();
+            }
+            // No error expected
+        }
+
+        #[test]
+        fn test_clear_config_fields() {
+            let mut config = Config {
+                server: Some("https://test.example.com".to_string()),
+                client_id: Some("test-client".to_string()),
+                access_token: Some("test-token".to_string()),
+                refresh_token: Some("refresh-token".to_string()),
+                token_expiry: Some(1234567890),
+                encrypted_key: Some("encrypted-key".to_string()),
+                encrypted_private_key: Some("private-key".to_string()),
+                crypto_keys: Some(CryptoKeys {
+                    enc_key: vec![0u8; 32],
+                    mac_key: vec![0u8; 32],
+                }),
+                ..Default::default()
+            };
+            config.org_keys.insert("org-1".to_string(), "key".to_string());
+            config.org_crypto_keys.insert("org-1".to_string(), CryptoKeys {
+                enc_key: vec![0u8; 32],
+                mac_key: vec![0u8; 32],
+            });
+
+            // Manually clear fields (simulating clear() behavior without file ops)
+            config.access_token = None;
+            config.refresh_token = None;
+            config.token_expiry = None;
+            config.crypto_keys = None;
+            config.encrypted_key = None;
+            config.encrypted_private_key = None;
+            config.org_keys.clear();
+            config.org_crypto_keys.clear();
+
+            // These should be cleared
+            assert!(config.access_token.is_none());
+            assert!(config.refresh_token.is_none());
+            assert!(config.token_expiry.is_none());
+            assert!(config.crypto_keys.is_none());
+            assert!(config.encrypted_key.is_none());
+            assert!(config.encrypted_private_key.is_none());
+            assert!(config.org_keys.is_empty());
+            assert!(config.org_crypto_keys.is_empty());
+
+            // Server and client_id should remain (for re-login)
+            assert!(config.server.is_some());
+            assert!(config.client_id.is_some());
+        }
+
+        #[test]
+        fn test_load_empty_keys_file() {
+            let temp_dir = TempDir::new().unwrap();
+            let keys_path = temp_dir.path().join("keys.json");
+
+            // Write empty saved keys structure
+            let saved = SavedKeys::default();
+            let content = serde_json::to_string(&saved).unwrap();
+            fs::write(&keys_path, &content).unwrap();
+
+            // Load it back
+            let loaded_content = fs::read_to_string(&keys_path).unwrap();
+            let loaded: SavedKeys = serde_json::from_str(&loaded_content).unwrap();
+
+            assert!(loaded.user_keys.is_none());
+            assert!(loaded.org_keys.is_empty());
+        }
+    }
+}

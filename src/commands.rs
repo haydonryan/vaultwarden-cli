@@ -693,3 +693,309 @@ pub async fn run_with_secrets(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Tests for sanitize_env_name
+    mod sanitize_env_name_tests {
+        use super::*;
+
+        #[test]
+        fn test_simple_name() {
+            assert_eq!(sanitize_env_name("myapp"), "MYAPP");
+        }
+
+        #[test]
+        fn test_lowercase_to_uppercase() {
+            assert_eq!(sanitize_env_name("my_app"), "MY_APP");
+        }
+
+        #[test]
+        fn test_spaces_to_underscores() {
+            assert_eq!(sanitize_env_name("My App Name"), "MY_APP_NAME");
+        }
+
+        #[test]
+        fn test_special_characters_to_underscores() {
+            assert_eq!(sanitize_env_name("my-app.config"), "MY_APP_CONFIG");
+            assert_eq!(sanitize_env_name("app@domain.com"), "APP_DOMAIN_COM");
+        }
+
+        #[test]
+        fn test_numbers_preserved() {
+            assert_eq!(sanitize_env_name("app123"), "APP123");
+            assert_eq!(sanitize_env_name("123app"), "123APP");
+        }
+
+        #[test]
+        fn test_mixed_input() {
+            assert_eq!(sanitize_env_name("My App-v2.0!"), "MY_APP_V2_0_");
+        }
+
+        #[test]
+        fn test_already_valid_env_name() {
+            assert_eq!(sanitize_env_name("MY_APP_NAME"), "MY_APP_NAME");
+        }
+
+        #[test]
+        fn test_empty_string() {
+            assert_eq!(sanitize_env_name(""), "");
+        }
+
+        #[test]
+        fn test_unicode_characters() {
+            // Note: is_alphanumeric() considers unicode letters as alphanumeric
+            // So 'é' and CJK characters are preserved (uppercased where possible)
+            let result = sanitize_env_name("café");
+            assert!(result.starts_with("CAF"));
+            // CJK characters don't have uppercase, so they stay as-is
+            let result = sanitize_env_name("日本語");
+            assert_eq!(result.chars().count(), 3); // 3 characters (not bytes)
+        }
+
+        #[test]
+        fn test_consecutive_special_chars() {
+            assert_eq!(sanitize_env_name("my--app"), "MY__APP");
+            assert_eq!(sanitize_env_name("app...name"), "APP___NAME");
+        }
+    }
+
+    // Tests for escape_value
+    mod escape_value_tests {
+        use super::*;
+
+        #[test]
+        fn test_no_escaping_needed() {
+            assert_eq!(escape_value("simple"), "simple");
+            assert_eq!(escape_value("hello world"), "hello world");
+        }
+
+        #[test]
+        fn test_escape_backslash() {
+            assert_eq!(escape_value("path\\to\\file"), "path\\\\to\\\\file");
+        }
+
+        #[test]
+        fn test_escape_double_quote() {
+            assert_eq!(escape_value("say \"hello\""), "say \\\"hello\\\"");
+        }
+
+        #[test]
+        fn test_escape_dollar_sign() {
+            assert_eq!(escape_value("$HOME"), "\\$HOME");
+            assert_eq!(escape_value("cost: $100"), "cost: \\$100");
+        }
+
+        #[test]
+        fn test_escape_backtick() {
+            assert_eq!(escape_value("`command`"), "\\`command\\`");
+        }
+
+        #[test]
+        fn test_multiple_escapes() {
+            assert_eq!(
+                escape_value("echo \"$HOME\" `pwd`"),
+                "echo \\\"\\$HOME\\\" \\`pwd\\`"
+            );
+        }
+
+        #[test]
+        fn test_empty_string() {
+            assert_eq!(escape_value(""), "");
+        }
+
+        #[test]
+        fn test_complex_password() {
+            // A realistic complex password with special characters
+            assert_eq!(
+                escape_value("P@ss\"word$123`!"),
+                "P@ss\\\"word\\$123\\`!"
+            );
+        }
+
+        #[test]
+        fn test_shell_injection_attempt() {
+            // Ensure potential shell injection is safely escaped
+            assert_eq!(
+                escape_value("$(rm -rf /)"),
+                "\\$(rm -rf /)"
+            );
+            assert_eq!(
+                escape_value("`rm -rf /`"),
+                "\\`rm -rf /\\`"
+            );
+        }
+    }
+
+    // Tests for decrypt_cipher helper
+    mod decrypt_cipher_tests {
+        use super::*;
+        use crate::models::Cipher;
+
+        fn create_test_cipher(id: &str, cipher_type: u8) -> Cipher {
+            Cipher {
+                id: id.to_string(),
+                r#type: cipher_type,
+                organization_id: None,
+                name: None,
+                notes: None,
+                folder_id: None,
+                login: None,
+                card: None,
+                identity: None,
+                secure_note: None,
+                fields: None,
+                data: None,
+            }
+        }
+
+        #[test]
+        fn test_decrypt_cipher_no_name_fails() {
+            let cipher = create_test_cipher("test-123", 1);
+            let keys = CryptoKeys {
+                enc_key: vec![0u8; 32],
+                mac_key: vec![0u8; 32],
+            };
+
+            let result = decrypt_cipher(&cipher, &keys);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("no name"));
+        }
+
+        #[test]
+        fn test_cipher_type_to_string() {
+            // Test that cipher types are converted correctly
+            let mut cipher = create_test_cipher("test", 1);
+            assert_eq!(cipher.cipher_type().unwrap().to_string(), "login");
+
+            cipher.r#type = 2;
+            assert_eq!(cipher.cipher_type().unwrap().to_string(), "note");
+
+            cipher.r#type = 3;
+            assert_eq!(cipher.cipher_type().unwrap().to_string(), "card");
+
+            cipher.r#type = 4;
+            assert_eq!(cipher.cipher_type().unwrap().to_string(), "identity");
+        }
+    }
+
+    // Tests for ensure_unlocked helper
+    mod ensure_unlocked_tests {
+        use super::*;
+
+        #[test]
+        fn test_ensure_unlocked_with_keys() {
+            let config = Config {
+                crypto_keys: Some(CryptoKeys {
+                    enc_key: vec![0u8; 32],
+                    mac_key: vec![0u8; 32],
+                }),
+                ..Default::default()
+            };
+
+            let result = ensure_unlocked(&config);
+            assert!(result.is_ok());
+        }
+
+        #[test]
+        fn test_ensure_unlocked_without_keys() {
+            let config = Config::default();
+
+            let result = ensure_unlocked(&config);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("locked"));
+        }
+    }
+
+    // Tests for get_cipher_keys helper
+    mod get_cipher_keys_tests {
+        use super::*;
+        use crate::models::Cipher;
+
+        fn create_minimal_cipher(org_id: Option<&str>) -> Cipher {
+            Cipher {
+                id: "test".to_string(),
+                r#type: 1,
+                organization_id: org_id.map(|s| s.to_string()),
+                name: None,
+                notes: None,
+                folder_id: None,
+                login: None,
+                card: None,
+                identity: None,
+                secure_note: None,
+                fields: None,
+                data: None,
+            }
+        }
+
+        #[test]
+        fn test_get_cipher_keys_user_cipher() {
+            let user_keys = CryptoKeys {
+                enc_key: vec![1u8; 32],
+                mac_key: vec![2u8; 32],
+            };
+
+            let config = Config {
+                crypto_keys: Some(user_keys.clone()),
+                ..Default::default()
+            };
+
+            let cipher = create_minimal_cipher(None);
+            let keys = get_cipher_keys(&config, &cipher).unwrap();
+            assert_eq!(keys.enc_key, user_keys.enc_key);
+        }
+
+        #[test]
+        fn test_get_cipher_keys_org_cipher() {
+            let user_keys = CryptoKeys {
+                enc_key: vec![1u8; 32],
+                mac_key: vec![2u8; 32],
+            };
+            let org_keys = CryptoKeys {
+                enc_key: vec![3u8; 32],
+                mac_key: vec![4u8; 32],
+            };
+
+            let mut config = Config {
+                crypto_keys: Some(user_keys),
+                ..Default::default()
+            };
+            config.org_crypto_keys.insert("org-123".to_string(), org_keys.clone());
+
+            let cipher = create_minimal_cipher(Some("org-123"));
+            let keys = get_cipher_keys(&config, &cipher).unwrap();
+            assert_eq!(keys.enc_key, org_keys.enc_key);
+        }
+
+        #[test]
+        fn test_get_cipher_keys_missing_org_keys() {
+            let user_keys = CryptoKeys {
+                enc_key: vec![1u8; 32],
+                mac_key: vec![2u8; 32],
+            };
+
+            let config = Config {
+                crypto_keys: Some(user_keys),
+                ..Default::default()
+            };
+
+            let cipher = create_minimal_cipher(Some("nonexistent-org"));
+            let result = get_cipher_keys(&config, &cipher);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Organization key not available"));
+        }
+
+        #[test]
+        fn test_get_cipher_keys_no_keys_at_all() {
+            let config = Config::default();
+
+            let cipher = create_minimal_cipher(None);
+            let result = get_cipher_keys(&config, &cipher);
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("No decryption keys"));
+        }
+    }
+}
