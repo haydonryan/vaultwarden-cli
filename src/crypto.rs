@@ -446,7 +446,7 @@ mod tests {
     fn test_decrypt_rsa_invalid_format() {
         // Generate a test RSA key
         use rsa::RsaPrivateKey;
-        let mut rng = rand::thread_rng();
+        let mut rng = rsa::rand_core::OsRng;
         let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
 
         // Missing dot separator
@@ -461,7 +461,7 @@ mod tests {
     #[test]
     fn test_decrypt_rsa_invalid_type() {
         use rsa::RsaPrivateKey;
-        let mut rng = rand::thread_rng();
+        let mut rng = rsa::rand_core::OsRng;
         let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
 
         // Type "abc" is not a valid number
@@ -476,7 +476,7 @@ mod tests {
     #[test]
     fn test_decrypt_rsa_unsupported_type() {
         use rsa::RsaPrivateKey;
-        let mut rng = rand::thread_rng();
+        let mut rng = rsa::rand_core::OsRng;
         let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
 
         // Type 5 is not supported (only 4 and 6)
@@ -491,7 +491,7 @@ mod tests {
     #[test]
     fn test_decrypt_rsa_invalid_base64() {
         use rsa::RsaPrivateKey;
-        let mut rng = rand::thread_rng();
+        let mut rng = rsa::rand_core::OsRng;
         let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
 
         let result = CryptoKeys::decrypt_rsa("4.!!!notbase64!!!", &private_key);
