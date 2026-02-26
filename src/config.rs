@@ -49,7 +49,8 @@ impl Config {
         if path.exists() {
             let content = fs::read_to_string(&path)
                 .with_context(|| format!("Failed to read config from {:?}", path))?;
-            let mut config: Config = serde_json::from_str(&content).context("Failed to parse config")?;
+            let mut config: Config =
+                serde_json::from_str(&content).context("Failed to parse config")?;
 
             // Try to load saved keys
             config.load_saved_keys().ok();
@@ -76,20 +77,40 @@ impl Config {
         let path = Self::keys_path()?;
 
         let user_keys = self.crypto_keys.as_ref().map(|keys| KeyData {
-            enc_key: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &keys.enc_key),
-            mac_key: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &keys.mac_key),
+            enc_key: base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                &keys.enc_key,
+            ),
+            mac_key: base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                &keys.mac_key,
+            ),
         });
 
-        let org_keys: HashMap<String, KeyData> = self.org_crypto_keys.iter()
+        let org_keys: HashMap<String, KeyData> = self
+            .org_crypto_keys
+            .iter()
             .map(|(id, keys)| {
-                (id.clone(), KeyData {
-                    enc_key: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &keys.enc_key),
-                    mac_key: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &keys.mac_key),
-                })
+                (
+                    id.clone(),
+                    KeyData {
+                        enc_key: base64::Engine::encode(
+                            &base64::engine::general_purpose::STANDARD,
+                            &keys.enc_key,
+                        ),
+                        mac_key: base64::Engine::encode(
+                            &base64::engine::general_purpose::STANDARD,
+                            &keys.mac_key,
+                        ),
+                    },
+                )
             })
             .collect();
 
-        let saved = SavedKeys { user_keys, org_keys };
+        let saved = SavedKeys {
+            user_keys,
+            org_keys,
+        };
         let content = serde_json::to_string(&saved)?;
         fs::write(&path, content)?;
 
@@ -103,15 +124,28 @@ impl Config {
             let saved: SavedKeys = serde_json::from_str(&content)?;
 
             if let Some(keys_data) = saved.user_keys {
-                let enc_key = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &keys_data.enc_key)?;
-                let mac_key = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &keys_data.mac_key)?;
+                let enc_key = base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &keys_data.enc_key,
+                )?;
+                let mac_key = base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &keys_data.mac_key,
+                )?;
                 self.crypto_keys = Some(CryptoKeys { enc_key, mac_key });
             }
 
             for (id, keys_data) in saved.org_keys {
-                let enc_key = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &keys_data.enc_key)?;
-                let mac_key = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &keys_data.mac_key)?;
-                self.org_crypto_keys.insert(id, CryptoKeys { enc_key, mac_key });
+                let enc_key = base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &keys_data.enc_key,
+                )?;
+                let mac_key = base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &keys_data.mac_key,
+                )?;
+                self.org_crypto_keys
+                    .insert(id, CryptoKeys { enc_key, mac_key });
             }
         }
         Ok(())
@@ -315,7 +349,9 @@ mod tests {
                 crypto_keys: Some(user_keys),
                 ..Default::default()
             };
-            config.org_crypto_keys.insert("org-123".to_string(), org_keys.clone());
+            config
+                .org_crypto_keys
+                .insert("org-123".to_string(), org_keys.clone());
 
             let keys = config.get_keys_for_cipher(Some("org-123")).unwrap();
             assert_eq!(keys.enc_key, org_keys.enc_key);
@@ -393,8 +429,12 @@ mod tests {
         #[test]
         fn test_config_with_org_keys() {
             let mut config = Config::default();
-            config.org_keys.insert("org-1".to_string(), "encrypted-key-1".to_string());
-            config.org_keys.insert("org-2".to_string(), "encrypted-key-2".to_string());
+            config
+                .org_keys
+                .insert("org-1".to_string(), "encrypted-key-1".to_string());
+            config
+                .org_keys
+                .insert("org-2".to_string(), "encrypted-key-2".to_string());
 
             let json = serde_json::to_string(&config).unwrap();
             assert!(json.contains("org-1"));
@@ -402,7 +442,10 @@ mod tests {
 
             let deserialized: Config = serde_json::from_str(&json).unwrap();
             assert_eq!(deserialized.org_keys.len(), 2);
-            assert_eq!(deserialized.org_keys.get("org-1"), Some(&"encrypted-key-1".to_string()));
+            assert_eq!(
+                deserialized.org_keys.get("org-1"),
+                Some(&"encrypted-key-1".to_string())
+            );
         }
     }
 
@@ -410,8 +453,8 @@ mod tests {
     // Note: These tests use direct file operations to avoid environment variable issues
     mod file_io_tests {
         use super::*;
-        use tempfile::TempDir;
         use std::fs;
+        use tempfile::TempDir;
 
         #[test]
         fn test_config_dir_returns_path() {
@@ -480,8 +523,14 @@ mod tests {
 
             // Manually save keys
             let user_keys = config.crypto_keys.as_ref().map(|keys| KeyData {
-                enc_key: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &keys.enc_key),
-                mac_key: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &keys.mac_key),
+                enc_key: base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &keys.enc_key,
+                ),
+                mac_key: base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &keys.mac_key,
+                ),
             });
 
             let saved = SavedKeys {
@@ -496,8 +545,16 @@ mod tests {
             let loaded_saved: SavedKeys = serde_json::from_str(&loaded_content).unwrap();
 
             let keys_data = loaded_saved.user_keys.unwrap();
-            let enc_key = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &keys_data.enc_key).unwrap();
-            let mac_key = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &keys_data.mac_key).unwrap();
+            let enc_key = base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                &keys_data.enc_key,
+            )
+            .unwrap();
+            let mac_key = base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                &keys_data.mac_key,
+            )
+            .unwrap();
 
             assert_eq!(enc_key, vec![0x42u8; 32]);
             assert_eq!(mac_key, vec![0x43u8; 32]);
@@ -509,22 +566,39 @@ mod tests {
             let keys_path = temp_dir.path().join("keys.json");
 
             let mut config = Config::default();
-            config.org_crypto_keys.insert("org-1".to_string(), CryptoKeys {
-                enc_key: vec![0x11u8; 32],
-                mac_key: vec![0x12u8; 32],
-            });
-            config.org_crypto_keys.insert("org-2".to_string(), CryptoKeys {
-                enc_key: vec![0x21u8; 32],
-                mac_key: vec![0x22u8; 32],
-            });
+            config.org_crypto_keys.insert(
+                "org-1".to_string(),
+                CryptoKeys {
+                    enc_key: vec![0x11u8; 32],
+                    mac_key: vec![0x12u8; 32],
+                },
+            );
+            config.org_crypto_keys.insert(
+                "org-2".to_string(),
+                CryptoKeys {
+                    enc_key: vec![0x21u8; 32],
+                    mac_key: vec![0x22u8; 32],
+                },
+            );
 
             // Manually save keys
-            let org_keys: HashMap<String, KeyData> = config.org_crypto_keys.iter()
+            let org_keys: HashMap<String, KeyData> = config
+                .org_crypto_keys
+                .iter()
                 .map(|(id, keys)| {
-                    (id.clone(), KeyData {
-                        enc_key: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &keys.enc_key),
-                        mac_key: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &keys.mac_key),
-                    })
+                    (
+                        id.clone(),
+                        KeyData {
+                            enc_key: base64::Engine::encode(
+                                &base64::engine::general_purpose::STANDARD,
+                                &keys.enc_key,
+                            ),
+                            mac_key: base64::Engine::encode(
+                                &base64::engine::general_purpose::STANDARD,
+                                &keys.mac_key,
+                            ),
+                        },
+                    )
                 })
                 .collect();
 
@@ -542,7 +616,11 @@ mod tests {
             assert_eq!(loaded_saved.org_keys.len(), 2);
 
             let org1_data = loaded_saved.org_keys.get("org-1").unwrap();
-            let org1_enc = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &org1_data.enc_key).unwrap();
+            let org1_enc = base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                &org1_data.enc_key,
+            )
+            .unwrap();
             assert_eq!(org1_enc, vec![0x11u8; 32]);
         }
 
@@ -588,11 +666,16 @@ mod tests {
                 }),
                 ..Default::default()
             };
-            config.org_keys.insert("org-1".to_string(), "key".to_string());
-            config.org_crypto_keys.insert("org-1".to_string(), CryptoKeys {
-                enc_key: vec![0u8; 32],
-                mac_key: vec![0u8; 32],
-            });
+            config
+                .org_keys
+                .insert("org-1".to_string(), "key".to_string());
+            config.org_crypto_keys.insert(
+                "org-1".to_string(),
+                CryptoKeys {
+                    enc_key: vec![0u8; 32],
+                    mac_key: vec![0u8; 32],
+                },
+            );
 
             // Manually clear fields (simulating clear() behavior without file ops)
             config.access_token = None;

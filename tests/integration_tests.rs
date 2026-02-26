@@ -3,8 +3,8 @@
 //! These tests verify the interaction between modules and simulate
 //! realistic usage scenarios.
 
-use wiremock::{MockServer, Mock, ResponseTemplate};
-use wiremock::matchers::{method, path, body_string_contains};
+use wiremock::matchers::{body_string_contains, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Tests for the API client module
 mod api_tests {
@@ -95,13 +95,10 @@ mod api_tests {
 
         Mock::given(method("POST"))
             .and(path("/identity/connect/token"))
-            .respond_with(
-                ResponseTemplate::new(400)
-                    .set_body_json(serde_json::json!({
-                        "error": "invalid_grant",
-                        "error_description": "Invalid client credentials"
-                    }))
-            )
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": "invalid_grant",
+                "error_description": "Invalid client credentials"
+            })))
             .mount(&mock_server)
             .await;
 
@@ -278,7 +275,7 @@ mod crypto_integration_tests {
 
 /// Tests for model parsing with realistic API responses
 mod model_integration_tests {
-    use vaultwarden_cli::models::{SyncResponse, TokenResponse, CipherType};
+    use vaultwarden_cli::models::{CipherType, SyncResponse, TokenResponse};
 
     #[test]
     fn test_parse_realistic_token_response() {
@@ -358,7 +355,10 @@ mod model_integration_tests {
 
         // Check cipher types
         assert_eq!(response.ciphers[0].cipher_type(), Some(CipherType::Login));
-        assert_eq!(response.ciphers[1].cipher_type(), Some(CipherType::SecureNote));
+        assert_eq!(
+            response.ciphers[1].cipher_type(),
+            Some(CipherType::SecureNote)
+        );
     }
 
     #[test]
@@ -490,8 +490,8 @@ mod edge_case_tests {
 
 /// Performance-related tests
 mod performance_tests {
-    use vaultwarden_cli::crypto::CryptoKeys;
     use std::time::Instant;
+    use vaultwarden_cli::crypto::CryptoKeys;
 
     #[test]
     fn test_key_derivation_completes_in_reasonable_time() {

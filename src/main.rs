@@ -3,7 +3,9 @@ use vaultwarden_cli::commands;
 
 #[derive(Parser)]
 #[command(name = "vaultwarden-cli")]
-#[command(about = "CLI client for Vaultwarden - retrieve secrets for batch files and environment variables")]
+#[command(
+    about = "CLI client for Vaultwarden - retrieve secrets for batch files and environment variables"
+)]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -126,22 +128,21 @@ async fn main() {
     let cli = Cli::parse();
 
     let result = match cli.command {
-        Commands::Login { server, client_id, client_secret } => {
-            commands::login(server, client_id, client_secret).await
-        }
-        Commands::Unlock { password } => {
-            commands::unlock(password).await
-        }
-        Commands::Lock => {
-            commands::lock().await
-        }
-        Commands::Logout => {
-            commands::logout().await
-        }
-        Commands::List { r#type, search } => {
-            commands::list(r#type, search).await
-        }
-        Commands::Get { item, format, username, password } => {
+        Commands::Login {
+            server,
+            client_id,
+            client_secret,
+        } => commands::login(server, client_id, client_secret).await,
+        Commands::Unlock { password } => commands::unlock(password).await,
+        Commands::Lock => commands::lock().await,
+        Commands::Logout => commands::logout().await,
+        Commands::List { r#type, search } => commands::list(r#type, search).await,
+        Commands::Get {
+            item,
+            format,
+            username,
+            password,
+        } => {
             // --username and --password flags override --format
             let effective_format = if username {
                 "username"
@@ -152,7 +153,12 @@ async fn main() {
             };
             commands::get(&item, effective_format).await
         }
-        Commands::GetUri { uri, format, username, password } => {
+        Commands::GetUri {
+            uri,
+            format,
+            username,
+            password,
+        } => {
             // --username and --password flags override --format
             let effective_format = if username {
                 "username"
@@ -163,15 +169,15 @@ async fn main() {
             };
             commands::get_by_uri(&uri, effective_format).await
         }
-        Commands::Run { item, info, command } => {
-            commands::run_with_secrets(&item, false, info, &command).await
-        }
+        Commands::Run {
+            item,
+            info,
+            command,
+        } => commands::run_with_secrets(&item, false, info, &command).await,
         Commands::RunUri { uri, info, command } => {
             commands::run_with_secrets(&uri, true, info, &command).await
         }
-        Commands::Status => {
-            commands::status().await
-        }
+        Commands::Status => commands::status().await,
     };
 
     if let Err(e) = result {

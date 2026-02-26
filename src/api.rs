@@ -1,7 +1,7 @@
-use anyhow::{Context, Result};
-use reqwest::Client;
 use crate::config::Config;
 use crate::models::{SyncResponse, TokenResponse};
+use anyhow::{Context, Result};
+use reqwest::Client;
 
 pub struct ApiClient {
     client: Client,
@@ -40,7 +40,8 @@ impl ApiClient {
             ("deviceName", "Vaultwarden CLI"),
         ];
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .form(&params)
             .send()
@@ -68,7 +69,8 @@ impl ApiClient {
             ("refresh_token", refresh_token),
         ];
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .form(&params)
             .send()
@@ -91,7 +93,8 @@ impl ApiClient {
     pub async fn sync(&self, access_token: &str) -> Result<SyncResponse> {
         let url = format!("{}/api/sync", self.base_url);
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .bearer_auth(access_token)
             .send()
@@ -114,7 +117,8 @@ impl ApiClient {
     pub async fn check_server(&self) -> Result<bool> {
         let url = format!("{}/alive", self.base_url);
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .send()
             .await

@@ -4,7 +4,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use pbkdf2::pbkdf2_hmac;
-use rsa::{Oaep, RsaPrivateKey, pkcs8::DecodePrivateKey};
+use rsa::{pkcs8::DecodePrivateKey, Oaep, RsaPrivateKey};
 use sha1::Sha1;
 use sha2::Sha256;
 
@@ -70,7 +70,9 @@ impl CryptoKeys {
 
         let enc_type: u8 = enc_type.parse().context("Invalid encryption type")?;
 
-        let ciphertext = BASE64.decode(data).context("Failed to decode RSA ciphertext")?;
+        let ciphertext = BASE64
+            .decode(data)
+            .context("Failed to decode RSA ciphertext")?;
 
         match enc_type {
             4 => {
@@ -94,29 +96,20 @@ impl CryptoKeys {
     }
 
     /// Decrypt the user's RSA private key using their symmetric key
-    pub fn decrypt_private_key(
-        &self,
-        encrypted_private_key: &str,
-    ) -> Result<RsaPrivateKey> {
+    pub fn decrypt_private_key(&self, encrypted_private_key: &str) -> Result<RsaPrivateKey> {
         let decrypted_der = self.decrypt(encrypted_private_key)?;
         RsaPrivateKey::from_pkcs8_der(&decrypted_der)
             .map_err(|e| anyhow::anyhow!("Failed to parse RSA private key: {}", e))
     }
 
     /// Decrypt an organization key using RSA
-    pub fn decrypt_org_key(
-        encrypted_org_key: &str,
-        private_key: &RsaPrivateKey,
-    ) -> Result<Self> {
+    pub fn decrypt_org_key(encrypted_org_key: &str, private_key: &RsaPrivateKey) -> Result<Self> {
         let decrypted = Self::decrypt_rsa(encrypted_org_key, private_key)?;
         Self::from_symmetric_key(&decrypted)
     }
 
     /// Decrypt the user's encrypted symmetric key using the stretched master key
-    pub fn decrypt_symmetric_key(
-        master_key: &[u8],
-        encrypted_key: &str,
-    ) -> Result<Self> {
+    pub fn decrypt_symmetric_key(master_key: &[u8], encrypted_key: &str) -> Result<Self> {
         // Stretch the master key
         let stretched = Self::stretch_master_key(master_key)?;
 
@@ -135,9 +128,7 @@ impl CryptoKeys {
             .split_once('.')
             .context("Invalid encrypted string format")?;
 
-        let enc_type: u8 = enc_type
-            .parse()
-            .context("Invalid encryption type")?;
+        let enc_type: u8 = enc_type.parse().context("Invalid encryption type")?;
 
         // Type 2 = AES-256-CBC with HMAC-SHA256
         if enc_type != 2 {
@@ -150,7 +141,9 @@ impl CryptoKeys {
         }
 
         let iv = BASE64.decode(parts[0]).context("Failed to decode IV")?;
-        let ciphertext = BASE64.decode(parts[1]).context("Failed to decode ciphertext")?;
+        let ciphertext = BASE64
+            .decode(parts[1])
+            .context("Failed to decode ciphertext")?;
 
         // Verify MAC if present
         if parts.len() >= 3 {
@@ -328,7 +321,10 @@ mod tests {
 
         let result = keys.decrypt("invalid_no_dot");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid encrypted string format"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid encrypted string format"));
     }
 
     #[test]
@@ -341,7 +337,10 @@ mod tests {
         // Type 99 is not supported
         let result = keys.decrypt("99.abc|def|ghi");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Unsupported encryption type"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unsupported encryption type"));
     }
 
     #[test]
@@ -353,7 +352,10 @@ mod tests {
 
         let result = keys.decrypt("abc.iv|ciphertext|mac");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid encryption type"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid encryption type"));
     }
 
     #[test]
@@ -363,16 +365,14 @@ mod tests {
 
         // Create known keys
         let enc_key = [
-            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-            0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
-            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
-            0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b,
+            0x1c, 0x1d, 0x1e, 0x1f,
         ];
         let mac_key = [
-            0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
-            0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
-            0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
-            0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f,
+            0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d,
+            0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b,
+            0x3c, 0x3d, 0x3e, 0x3f,
         ];
 
         let keys = CryptoKeys {
@@ -407,7 +407,10 @@ mod tests {
 
         let result = keys.decrypt("2.!!!invalid!!|AAAA|AAAA");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to decode IV"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Failed to decode IV"));
     }
 
     #[test]
@@ -419,7 +422,10 @@ mod tests {
 
         let result = keys.decrypt("2.AAAAAAAAAAAAAAAAAAAAAA==|!!!invalid!!|AAAA");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to decode ciphertext"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Failed to decode ciphertext"));
     }
 
     #[test]
@@ -446,7 +452,10 @@ mod tests {
         // Missing dot separator
         let result = CryptoKeys::decrypt_rsa("nodot", &private_key);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid encrypted string format"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid encrypted string format"));
     }
 
     #[test]
@@ -458,7 +467,10 @@ mod tests {
         // Type "abc" is not a valid number
         let result = CryptoKeys::decrypt_rsa("abc.AAAA", &private_key);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid encryption type"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid encryption type"));
     }
 
     #[test]
@@ -470,7 +482,10 @@ mod tests {
         // Type 5 is not supported (only 4 and 6)
         let result = CryptoKeys::decrypt_rsa("5.AAAA", &private_key);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Unsupported RSA encryption type"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unsupported RSA encryption type"));
     }
 
     #[test]
@@ -481,7 +496,10 @@ mod tests {
 
         let result = CryptoKeys::decrypt_rsa("4.!!!notbase64!!!", &private_key);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to decode RSA ciphertext"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Failed to decode RSA ciphertext"));
     }
 
     #[test]
@@ -537,8 +555,8 @@ mod tests {
         fn encrypt_for_test(plaintext: &[u8], enc_key: &[u8], mac_key: &[u8]) -> String {
             // Generate random IV
             let iv: [u8; 16] = [
-                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-                0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+                0x0e, 0x0f,
             ];
 
             // Encrypt with AES-256-CBC

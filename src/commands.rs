@@ -96,9 +96,13 @@ pub async fn unlock(password: Option<String>) -> Result<()> {
         anyhow::bail!("Not logged in. Please run 'vaultwarden-cli login' first.");
     }
 
-    let email = config.email.as_ref()
+    let email = config
+        .email
+        .as_ref()
         .context("Email not found. Please login again.")?;
-    let encrypted_key = config.encrypted_key.as_ref()
+    let encrypted_key = config
+        .encrypted_key
+        .as_ref()
         .context("Encrypted key not found. Please login again.")?;
     let iterations = config.kdf_iterations.unwrap_or(600000);
 
@@ -152,7 +156,10 @@ pub async fn unlock(password: Option<String>) -> Result<()> {
 
     let org_count = config.org_crypto_keys.len();
     if org_count > 0 {
-        println!("Vault unlocked successfully! ({} organization keys decrypted)", org_count);
+        println!(
+            "Vault unlocked successfully! ({} organization keys decrypted)",
+            org_count
+        );
     } else {
         println!("Vault unlocked successfully!");
     }
@@ -229,7 +236,9 @@ pub async fn status() -> Result<()> {
 }
 
 async fn ensure_valid_token(config: &mut Config) -> Result<String> {
-    let access_token = config.access_token.clone()
+    let access_token = config
+        .access_token
+        .clone()
         .context("Not logged in. Please run 'vaultwarden-cli login' first.")?;
 
     // Check if token is expired
@@ -289,48 +298,56 @@ fn get_cipher_keys<'a>(config: &'a Config, cipher: &Cipher) -> Result<&'a Crypto
 
 fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
     // Get encrypted name
-    let name = cipher.get_name()
-        .context("Cipher has no name")?;
+    let name = cipher.get_name().context("Cipher has no name")?;
     let decrypted_name = keys.decrypt_to_string(name)?;
 
     // Decrypt other fields if present
-    let decrypted_username = cipher.get_username()
+    let decrypted_username = cipher
+        .get_username()
         .map(|u| keys.decrypt_to_string(u))
         .transpose()?;
 
-    let decrypted_password = cipher.get_password()
+    let decrypted_password = cipher
+        .get_password()
         .map(|p| keys.decrypt_to_string(p))
         .transpose()?;
 
-    let decrypted_uri = cipher.get_uri()
+    let decrypted_uri = cipher
+        .get_uri()
         .map(|u| keys.decrypt_to_string(u))
         .transpose()?;
 
-    let decrypted_notes = cipher.get_notes()
+    let decrypted_notes = cipher
+        .get_notes()
         .map(|n| keys.decrypt_to_string(n))
         .transpose()?;
 
-    let decrypted_fields = cipher.get_fields()
-        .map(|fields| {
-            fields.iter()
-                .filter_map(|f| {
-                    let name = f.name.as_ref()
-                        .and_then(|n| keys.decrypt_to_string(n).ok())?;
-                    let value = f.value.as_ref()
-                        .and_then(|v| keys.decrypt_to_string(v).ok())
-                        .unwrap_or_default();
-                    Some(FieldOutput {
-                        name,
-                        value,
-                        hidden: f.r#type == 1,
-                    })
+    let decrypted_fields = cipher.get_fields().map(|fields| {
+        fields
+            .iter()
+            .filter_map(|f| {
+                let name = f
+                    .name
+                    .as_ref()
+                    .and_then(|n| keys.decrypt_to_string(n).ok())?;
+                let value = f
+                    .value
+                    .as_ref()
+                    .and_then(|v| keys.decrypt_to_string(v).ok())
+                    .unwrap_or_default();
+                Some(FieldOutput {
+                    name,
+                    value,
+                    hidden: f.r#type == 1,
                 })
-                .collect()
-        });
+            })
+            .collect()
+    });
 
     Ok(CipherOutput {
         id: cipher.id.clone(),
-        cipher_type: cipher.cipher_type()
+        cipher_type: cipher
+            .cipher_type()
             .map(|t| t.to_string())
             .unwrap_or_else(|| "unknown".to_string()),
         name: decrypted_name,
@@ -342,10 +359,7 @@ fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
     })
 }
 
-pub async fn list(
-    type_filter: Option<String>,
-    search: Option<String>,
-) -> Result<()> {
+pub async fn list(type_filter: Option<String>, search: Option<String>) -> Result<()> {
     let mut config = Config::load()?;
     let access_token = ensure_valid_token(&mut config).await?;
     ensure_unlocked(&config)?;
@@ -359,7 +373,10 @@ pub async fn list(
         if let Some(cipher_type) = CipherType::from_str(type_str) {
             ciphers.retain(|c| c.cipher_type() == Some(cipher_type));
         } else {
-            anyhow::bail!("Invalid type filter: {}. Use: login, note, card, identity", type_str);
+            anyhow::bail!(
+                "Invalid type filter: {}. Use: login, note, card, identity",
+                type_str
+            );
         }
     }
 
@@ -380,10 +397,14 @@ pub async fn list(
                 if let Some(search_term) = &search {
                     let search_lower = search_term.to_lowercase();
                     let matches = output.name.to_lowercase().contains(&search_lower)
-                        || output.username.as_ref()
+                        || output
+                            .username
+                            .as_ref()
                             .map(|u| u.to_lowercase().contains(&search_lower))
                             .unwrap_or(false)
-                        || output.uri.as_ref()
+                        || output
+                            .uri
+                            .as_ref()
                             .map(|u| u.to_lowercase().contains(&search_lower))
                             .unwrap_or(false);
 
@@ -419,8 +440,7 @@ pub async fn get(item: &str, format: &str) -> Result<()> {
     let sync_response = api.sync(&access_token).await?;
 
     // Find the cipher by ID first
-    let cipher = sync_response.ciphers.iter()
-        .find(|c| c.id == item);
+    let cipher = sync_response.ciphers.iter().find(|c| c.id == item);
 
     // If not found by ID, decrypt all and search by name/uri
     let output = if let Some(cipher) = cipher {
@@ -438,7 +458,9 @@ pub async fn get(item: &str, format: &str) -> Result<()> {
             };
             if let Ok(output) = decrypt_cipher(cipher, keys) {
                 if output.name.to_lowercase() == item_lower
-                    || output.uri.as_ref()
+                    || output
+                        .uri
+                        .as_ref()
                         .map(|u| u.to_lowercase().contains(&item_lower))
                         .unwrap_or(false)
                 {
@@ -462,15 +484,28 @@ pub async fn get(item: &str, format: &str) -> Result<()> {
                 println!("export {}_URI=\"{}\"", name_upper, escape_value(uri));
             }
             if let Some(username) = &output.username {
-                println!("export {}_USERNAME=\"{}\"", name_upper, escape_value(username));
+                println!(
+                    "export {}_USERNAME=\"{}\"",
+                    name_upper,
+                    escape_value(username)
+                );
             }
             if let Some(password) = &output.password {
-                println!("export {}_PASSWORD=\"{}\"", name_upper, escape_value(password));
+                println!(
+                    "export {}_PASSWORD=\"{}\"",
+                    name_upper,
+                    escape_value(password)
+                );
             }
             if let Some(fields) = &output.fields {
                 for field in fields {
                     let field_name = sanitize_env_name(&field.name);
-                    println!("export {}_{}=\"{}\"", name_upper, field_name, escape_value(&field.value));
+                    println!(
+                        "export {}_{}=\"{}\"",
+                        name_upper,
+                        field_name,
+                        escape_value(&field.value)
+                    );
                 }
             }
         }
@@ -490,7 +525,10 @@ pub async fn get(item: &str, format: &str) -> Result<()> {
             }
         }
         _ => {
-            anyhow::bail!("Unknown format: {}. Use: json, env, value, username", format);
+            anyhow::bail!(
+                "Unknown format: {}. Use: json, env, value, username",
+                format
+            );
         }
     }
 
@@ -536,15 +574,28 @@ pub async fn get_by_uri(uri: &str, format: &str) -> Result<()> {
                 println!("export {}_URI=\"{}\"", name_upper, escape_value(uri));
             }
             if let Some(username) = &output.username {
-                println!("export {}_USERNAME=\"{}\"", name_upper, escape_value(username));
+                println!(
+                    "export {}_USERNAME=\"{}\"",
+                    name_upper,
+                    escape_value(username)
+                );
             }
             if let Some(password) = &output.password {
-                println!("export {}_PASSWORD=\"{}\"", name_upper, escape_value(password));
+                println!(
+                    "export {}_PASSWORD=\"{}\"",
+                    name_upper,
+                    escape_value(password)
+                );
             }
             if let Some(fields) = &output.fields {
                 for field in fields {
                     let field_name = sanitize_env_name(&field.name);
-                    println!("export {}_{}=\"{}\"", name_upper, field_name, escape_value(&field.value));
+                    println!(
+                        "export {}_{}=\"{}\"",
+                        name_upper,
+                        field_name,
+                        escape_value(&field.value)
+                    );
                 }
             }
         }
@@ -563,7 +614,10 @@ pub async fn get_by_uri(uri: &str, format: &str) -> Result<()> {
             }
         }
         _ => {
-            anyhow::bail!("Unknown format: {}. Use: json, env, value, username", format);
+            anyhow::bail!(
+                "Unknown format: {}. Use: json, env, value, username",
+                format
+            );
         }
     }
 
@@ -618,7 +672,10 @@ pub async fn run_with_secrets(
                 }
             }
         }
-        found.context(format!("No item found with URI containing '{}'", item_or_uri))?
+        found.context(format!(
+            "No item found with URI containing '{}'",
+            item_or_uri
+        ))?
     } else {
         // Search by ID first, then by name
         let cipher = sync_response.ciphers.iter().find(|c| c.id == item_or_uri);
@@ -662,7 +719,10 @@ pub async fn run_with_secrets(
     if let Some(fields) = &output.fields {
         for field in fields {
             let field_name = sanitize_env_name(&field.name);
-            env_vars.push((format!("{}_{}", name_upper, field_name), field.value.clone()));
+            env_vars.push((
+                format!("{}_{}", name_upper, field_name),
+                field.value.clone(),
+            ));
         }
     }
 
@@ -692,7 +752,8 @@ pub async fn run_with_secrets(
     }
 
     // Run the command and wait for it to complete
-    let status = cmd.status()
+    let status = cmd
+        .status()
         .with_context(|| format!("Failed to execute command: {}", command[0]))?;
 
     // Exit with the same code as the child process
@@ -818,23 +879,14 @@ mod tests {
         #[test]
         fn test_complex_password() {
             // A realistic complex password with special characters
-            assert_eq!(
-                escape_value("P@ss\"word$123`!"),
-                "P@ss\\\"word\\$123\\`!"
-            );
+            assert_eq!(escape_value("P@ss\"word$123`!"), "P@ss\\\"word\\$123\\`!");
         }
 
         #[test]
         fn test_shell_injection_attempt() {
             // Ensure potential shell injection is safely escaped
-            assert_eq!(
-                escape_value("$(rm -rf /)"),
-                "\\$(rm -rf /)"
-            );
-            assert_eq!(
-                escape_value("`rm -rf /`"),
-                "\\`rm -rf /\\`"
-            );
+            assert_eq!(escape_value("$(rm -rf /)"), "\\$(rm -rf /)");
+            assert_eq!(escape_value("`rm -rf /`"), "\\`rm -rf /\\`");
         }
     }
 
@@ -972,7 +1024,9 @@ mod tests {
                 crypto_keys: Some(user_keys),
                 ..Default::default()
             };
-            config.org_crypto_keys.insert("org-123".to_string(), org_keys.clone());
+            config
+                .org_crypto_keys
+                .insert("org-123".to_string(), org_keys.clone());
 
             let cipher = create_minimal_cipher(Some("org-123"));
             let keys = get_cipher_keys(&config, &cipher).unwrap();
@@ -994,7 +1048,10 @@ mod tests {
             let cipher = create_minimal_cipher(Some("nonexistent-org"));
             let result = get_cipher_keys(&config, &cipher);
             assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("Organization key not available"));
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Organization key not available"));
         }
 
         #[test]
@@ -1004,7 +1061,10 @@ mod tests {
             let cipher = create_minimal_cipher(None);
             let result = get_cipher_keys(&config, &cipher);
             assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("No decryption keys"));
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("No decryption keys"));
         }
     }
 }

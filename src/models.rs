@@ -159,45 +159,57 @@ impl Cipher {
 
     // Get the name from either direct field or nested data
     pub fn get_name(&self) -> Option<&str> {
-        self.name.as_deref()
+        self.name
+            .as_deref()
             .or_else(|| self.data.as_ref().and_then(|d| d.name.as_deref()))
     }
 
     // Get username from login or nested data
     pub fn get_username(&self) -> Option<&str> {
-        self.login.as_ref().and_then(|l| l.username.as_deref())
+        self.login
+            .as_ref()
+            .and_then(|l| l.username.as_deref())
             .or_else(|| self.data.as_ref().and_then(|d| d.username.as_deref()))
     }
 
     // Get password from login or nested data
     pub fn get_password(&self) -> Option<&str> {
-        self.login.as_ref().and_then(|l| l.password.as_deref())
+        self.login
+            .as_ref()
+            .and_then(|l| l.password.as_deref())
             .or_else(|| self.data.as_ref().and_then(|d| d.password.as_deref()))
     }
 
     // Get URI from login or nested data
     pub fn get_uri(&self) -> Option<&str> {
-        self.login.as_ref()
+        self.login
+            .as_ref()
             .and_then(|l| l.uris.as_ref())
             .and_then(|uris| uris.first())
             .and_then(|u| u.uri.as_deref())
-            .or_else(|| self.data.as_ref().and_then(|d| {
-                d.uri.as_deref()
-                    .or_else(|| d.uris.as_ref()
-                        .and_then(|uris| uris.first())
-                        .and_then(|u| u.uri.as_deref()))
-            }))
+            .or_else(|| {
+                self.data.as_ref().and_then(|d| {
+                    d.uri.as_deref().or_else(|| {
+                        d.uris
+                            .as_ref()
+                            .and_then(|uris| uris.first())
+                            .and_then(|u| u.uri.as_deref())
+                    })
+                })
+            })
     }
 
     // Get notes
     pub fn get_notes(&self) -> Option<&str> {
-        self.notes.as_deref()
+        self.notes
+            .as_deref()
             .or_else(|| self.data.as_ref().and_then(|d| d.notes.as_deref()))
     }
 
     // Get fields
     pub fn get_fields(&self) -> Option<&Vec<FieldData>> {
-        self.fields.as_ref()
+        self.fields
+            .as_ref()
             .or_else(|| self.data.as_ref().and_then(|d| d.fields.as_ref()))
     }
 }
@@ -326,8 +338,14 @@ mod tests {
         fn test_cipher_type_from_str_note() {
             assert_eq!(CipherType::from_str("note"), Some(CipherType::SecureNote));
             assert_eq!(CipherType::from_str("NOTE"), Some(CipherType::SecureNote));
-            assert_eq!(CipherType::from_str("securenote"), Some(CipherType::SecureNote));
-            assert_eq!(CipherType::from_str("SecureNote"), Some(CipherType::SecureNote));
+            assert_eq!(
+                CipherType::from_str("securenote"),
+                Some(CipherType::SecureNote)
+            );
+            assert_eq!(
+                CipherType::from_str("SecureNote"),
+                Some(CipherType::SecureNote)
+            );
             assert_eq!(CipherType::from_str("2"), Some(CipherType::SecureNote));
         }
 
@@ -800,13 +818,11 @@ mod tests {
                 password: None,
                 uri: None,
                 notes: None,
-                fields: Some(vec![
-                    FieldOutput {
-                        name: "api-key".to_string(),
-                        value: "secret-key".to_string(),
-                        hidden: true,
-                    },
-                ]),
+                fields: Some(vec![FieldOutput {
+                    name: "api-key".to_string(),
+                    value: "secret-key".to_string(),
+                    hidden: true,
+                }]),
             };
 
             let json = serde_json::to_string(&output).unwrap();
