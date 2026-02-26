@@ -1,0 +1,22 @@
+name: PR Notify
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+
+jobs:
+  run:
+    name: Sent Notification of PR
+    runs-on: ubuntu-latest
+    if: ${{ secrets.SLACK_BOT_TOKEN != '' && secrets.SLACK_CHANNEL_ID != '' }}
+    steps:
+      - name: Post blocks to a Slack channel
+        uses: slackapi/slack-github-action@v2.1.1
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ secrets.SLACK_CHANNEL_ID }}
+            text: "Incoming PR: ${{ github.event.pull_request.html_url}}"

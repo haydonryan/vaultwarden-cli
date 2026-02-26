@@ -3,48 +3,95 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
-  workflow_dispatch:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
 
 env:
+  RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
+  CLICOLOR: 1
   BINARY_NAME: vaultwarden-cli
 
 jobs:
-  checks:
-    name: Pre-release Checks
-    runs-on: ubuntu-latest
+  Test:
+    name: Test
+    strategy:
+      matrix:
+        #os: ["ubuntu-latest", "windows-latest", "macos-latest"]
+        os: ["ubuntu-latest", "macos-latest"]
+        rust: ["stable", "beta"]
+        include:
+          - os: ubuntu-latest
+            rust: "nightly"
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+          toolchain: ${{ matrix.rust }}
+      - name: Print Cargo Version
+        run: cargo -V
+      - name: Default features
+        run: cargo test --workspace
+      - name: All features
+        run: cargo test --workspace --all-features
+      - name: No-default features
+        run: cargo test --workspace --no-default-features
+  Lint:
+    name: Lint
+    strategy:
+      matrix:
+        #os: ["ubuntu-latest", "windows-latest", "macos-latest"]
+        include:
+          - os: ubuntu-latest
+            rust: "stable"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-checks-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-checks-cargo-
-
-      - name: Run clippy
+          toolchain: ${{ matrix.rust }}
+          components: clippy, rustfmt
+      - name: Print Cargo Version
+        run: cargo -V
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
-
+  Security:
+    name: Audit
+    strategy:
+      matrix:
+        #os: ["ubuntu-latest", "windows-latest", "macos-latest"]
+        include:
+          - os: ubuntu-latest
+            rust: "stable"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
       - name: Install cargo-audit
         run: cargo install cargo-audit
-
-      - name: Run security audit
+      - name: Print Cargo Version
+        run: cargo -V
+      - name: Security Check
         run: cargo audit
-
-  build:
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check bans sources advisories
+  Build:
     name: Build (${{ matrix.target }})
-    needs: checks
+    needs: [Test, Lint, Security]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -82,10 +129,10 @@ jobs:
             archive: zip
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
@@ -135,15 +182,15 @@ jobs:
           path: dist/${{ env.BINARY_NAME }}-${{ matrix.target }}.${{ matrix.archive }}
           retention-days: 7
 
-  sbom:
+  SBOM:
     name: Generate SBOM
-    needs: checks
+    needs: [Test, Lint, Security]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-sbom
         run: cargo install cargo-sbom
@@ -163,16 +210,16 @@ jobs:
             sbom.spdx.json
           retention-days: 7
 
-  release:
+  Release:
     name: Create Release
-    needs: [build, sbom]
+    needs: [Build, SBOM]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -198,6 +245,3 @@ jobs:
         with:
           files: |
             release/*
-          generate_release_notes: true
-          draft: false
-          prerelease: ${{ contains(github.ref, '-') }}
