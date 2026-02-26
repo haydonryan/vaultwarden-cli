@@ -577,9 +577,9 @@ mod tests {
             // Format as Bitwarden encrypted string
             format!(
                 "2.{}|{}|{}",
-                BASE64.encode(&iv),
+                BASE64.encode(iv),
                 BASE64.encode(ciphertext),
-                BASE64.encode(&mac)
+                BASE64.encode(mac)
             )
         }
 
