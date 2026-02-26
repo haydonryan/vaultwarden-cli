@@ -93,7 +93,16 @@ enum Commands {
     /// Run a command with secrets injected as environment variables
     Run {
         /// Item name or ID to inject
-        item: String,
+        #[arg(long)]
+        credential_name: Option<String>,
+
+        /// Filter by organization name or ID
+        #[arg(long)]
+        org: Option<String>,
+
+        /// Filter by folder name or ID
+        #[arg(long)]
+        folder: Option<String>,
 
         /// Print list of injected environment variables without values
         #[arg(short, long)]
@@ -170,12 +179,24 @@ async fn main() {
             commands::get_by_uri(&uri, effective_format).await
         }
         Commands::Run {
-            item,
+            credential_name,
+            org,
+            folder,
             info,
             command,
-        } => commands::run_with_secrets(&item, false, info, &command).await,
+        } => {
+            commands::run_with_secrets(
+                credential_name.as_deref(),
+                false,
+                org.as_deref(),
+                folder.as_deref(),
+                info,
+                &command,
+            )
+            .await
+        }
         Commands::RunUri { uri, info, command } => {
-            commands::run_with_secrets(&uri, true, info, &command).await
+            commands::run_with_secrets(Some(&uri), true, None, None, info, &command).await
         }
         Commands::Status => commands::status().await,
     };

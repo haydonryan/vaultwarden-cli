@@ -641,11 +641,19 @@ fn escape_value(value: &str) -> String {
 }
 
 pub async fn run_with_secrets(
-    item_or_uri: &str,
+    item_or_uri: Option<&str>,
     search_by_uri: bool,
+    org_filter: Option<&str>,
+    folder_filter: Option<&str>,
     info_only: bool,
     command: &[String],
 ) -> Result<()> {
+    if !search_by_uri && item_or_uri.is_none() && org_filter.is_none() && folder_filter.is_none() {
+        anyhow::bail!(
+            "At least one of --credential-name, --org, or --folder must be specified."
+        );
+    }
+
     let mut config = Config::load()?;
     let access_token = ensure_valid_token(&mut config).await?;
     ensure_unlocked(&config)?;
@@ -653,13 +661,79 @@ pub async fn run_with_secrets(
 
     let sync_response = api.sync(&access_token).await?;
 
+    // Resolve org_filter to an org ID (org names are plaintext in the profile)
+    let org_id_filter: Option<String> = if let Some(org) = org_filter {
+        let matched = sync_response.profile.organizations.iter().find(|o| {
+            o.id == org
+                || o.name
+                    .as_deref()
+                    .map(|n| n.eq_ignore_ascii_case(org))
+                    .unwrap_or(false)
+        });
+        Some(
+            matched
+                .with_context(|| format!("Organization '{}' not found", org))?
+                .id
+                .clone(),
+        )
+    } else {
+        None
+    };
+
+    // Resolve folder_filter to a folder ID (folder names are encrypted)
+    let folder_id_filter: Option<String> = if let Some(folder) = folder_filter {
+        // Try exact ID match first
+        if let Some(f) = sync_response.folders.iter().find(|f| f.id == folder) {
+            Some(f.id.clone())
+        } else {
+            // Try decrypted name match using the user's vault key
+            let user_keys = config
+                .crypto_keys
+                .as_ref()
+                .context("Vault locked")?;
+            let matched = sync_response.folders.iter().find(|f| {
+                user_keys
+                    .decrypt_to_string(&f.name)
+                    .ok()
+                    .map(|n| n.eq_ignore_ascii_case(folder))
+                    .unwrap_or(false)
+            });
+            Some(
+                matched
+                    .with_context(|| format!("Folder '{}' not found", folder))?
+                    .id
+                    .clone(),
+            )
+        }
+    } else {
+        None
+    };
+
+    // Check whether a cipher passes the org/folder filters
+    let matches_filters = |cipher: &Cipher| -> bool {
+        if let Some(ref oid) = org_id_filter {
+            if cipher.organization_id.as_deref() != Some(oid.as_str()) {
+                return false;
+            }
+        }
+        if let Some(ref fid) = folder_id_filter {
+            if cipher.folder_id.as_deref() != Some(fid.as_str()) {
+                return false;
+            }
+        }
+        true
+    };
+
     // Find the item
     let output = if search_by_uri {
-        // Search by URI
-        let uri_lower = item_or_uri.to_lowercase();
+        let uri = item_or_uri.expect("URI required for URI search");
+        let uri_lower = uri.to_lowercase();
         let mut found: Option<CipherOutput> = None;
 
         for cipher in &sync_response.ciphers {
+            if !matches_filters(cipher) {
+                continue;
+            }
             let keys = match get_cipher_keys(&config, cipher) {
                 Ok(k) => k,
                 Err(_) => continue,
@@ -673,22 +747,25 @@ pub async fn run_with_secrets(
                 }
             }
         }
-        found.context(format!(
-            "No item found with URI containing '{}'",
-            item_or_uri
-        ))?
-    } else {
+        found.context(format!("No item found with URI containing '{}'", uri))?
+    } else if let Some(name_or_id) = item_or_uri {
         // Search by ID first, then by name
-        let cipher = sync_response.ciphers.iter().find(|c| c.id == item_or_uri);
+        let cipher_by_id = sync_response
+            .ciphers
+            .iter()
+            .find(|c| c.id == name_or_id && matches_filters(c));
 
-        if let Some(cipher) = cipher {
+        if let Some(cipher) = cipher_by_id {
             let keys = get_cipher_keys(&config, cipher)?;
             decrypt_cipher(cipher, keys)?
         } else {
-            let item_lower = item_or_uri.to_lowercase();
+            let item_lower = name_or_id.to_lowercase();
             let mut found: Option<CipherOutput> = None;
 
             for cipher in &sync_response.ciphers {
+                if !matches_filters(cipher) {
+                    continue;
+                }
                 let keys = match get_cipher_keys(&config, cipher) {
                     Ok(k) => k,
                     Err(_) => continue,
@@ -700,8 +777,26 @@ pub async fn run_with_secrets(
                     }
                 }
             }
-            found.context(format!("Item '{}' not found", item_or_uri))?
+            found.context(format!("Item '{}' not found", name_or_id))?
         }
+    } else {
+        // No name specified — return the first item matching org/folder filters
+        let mut found: Option<CipherOutput> = None;
+
+        for cipher in &sync_response.ciphers {
+            if !matches_filters(cipher) {
+                continue;
+            }
+            let keys = match get_cipher_keys(&config, cipher) {
+                Ok(k) => k,
+                Err(_) => continue,
+            };
+            if let Ok(output) = decrypt_cipher(cipher, keys) {
+                found = Some(output);
+                break;
+            }
+        }
+        found.context("No item found matching the specified filters")?
     };
 
     // Build environment variable names
