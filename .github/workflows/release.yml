@@ -176,7 +176,7 @@ jobs:
           Compress-Archive -Path "dist/${{ env.BINARY_NAME }}.exe" -DestinationPath "dist/${{ env.BINARY_NAME }}-${{ matrix.target }}.${{ matrix.archive }}"
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ env.BINARY_NAME }}-${{ matrix.target }}
           path: dist/${{ env.BINARY_NAME }}-${{ matrix.target }}.${{ matrix.archive }}
@@ -202,7 +202,7 @@ jobs:
         run: cargo sbom --output-format spdx_json_2_3 > sbom.spdx.json
 
       - name: Upload SBOM artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: sbom
           path: |
