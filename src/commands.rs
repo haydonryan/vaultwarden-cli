@@ -649,9 +649,7 @@ pub async fn run_with_secrets(
     command: &[String],
 ) -> Result<()> {
     if !search_by_uri && item_or_uri.is_none() && org_filter.is_none() && folder_filter.is_none() {
-        anyhow::bail!(
-            "At least one of --credential-name, --org, or --folder must be specified."
-        );
+        anyhow::bail!("At least one of --credential-name, --org, or --folder must be specified.");
     }
 
     let mut config = Config::load()?;
@@ -687,10 +685,7 @@ pub async fn run_with_secrets(
             Some(f.id.clone())
         } else {
             // Try decrypted name match using the user's vault key
-            let user_keys = config
-                .crypto_keys
-                .as_ref()
-                .context("Vault locked")?;
+            let user_keys = config.crypto_keys.as_ref().context("Vault locked")?;
             let matched = sync_response.folders.iter().find(|f| {
                 user_keys
                     .decrypt_to_string(&f.name)
