@@ -1,0 +1,7 @@
+[advisories]
+ignore = [
+    # Marvin Attack: potential key recovery through timing sidechannels in rsa crate.
+    # No patch available. rsa is an indirect dependency; local/non-network use is acceptable.
+    # https://rustsec.org/advisories/RUSTSEC-2023-0071
+    "RUSTSEC-2023-0071",
+]
