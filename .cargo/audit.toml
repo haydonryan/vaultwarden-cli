@@ -1,0 +1,12 @@
+# Cargo audit configuration
+# https://docs.rs/cargo-audit/
+
+[advisories]
+# Advisory IDs to ignore (document why each is acceptable)
+ignore = [
+    # RUSTSEC-2023-0071: RSA Marvin Attack (timing sidechannel)
+    # Accepted risk: This CLI tool is not exposed to network-based timing attacks.
+    # The RSA operations are used for local credential encryption/decryption only.
+    # Will upgrade once a fixed version is available.
+    "RUSTSEC-2023-0071",
+]

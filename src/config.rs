@@ -220,7 +220,7 @@ pub fn get_client_secret(client_id: &str) -> Result<String> {
 
 pub fn delete_client_secret(client_id: &str) -> Result<()> {
     let entry = keyring::Entry::new("vaultwarden-cli", client_id)?;
-    entry.delete_password().ok(); // Ignore errors if not found
+    entry.delete_credential().ok(); // Ignore errors if not found
     Ok(())
 }
 
