@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::io::{self, Write};
 use std::process::Command;
+use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::api::ApiClient;
@@ -285,10 +286,10 @@ fn get_cipher_keys<'a>(config: &'a Config, cipher: &Cipher) -> Result<&'a Crypto
     match config.get_keys_for_cipher(cipher.organization_id.as_deref()) {
         Some(keys) => Ok(keys),
         None => {
-            if cipher.organization_id.is_some() {
+            if let Some(org_id) = &cipher.organization_id {
                 anyhow::bail!(
                     "Organization key not available for org {}. Try re-logging in.",
-                    cipher.organization_id.as_ref().unwrap()
+                    org_id
                 );
             }
             anyhow::bail!("No decryption keys available");
@@ -370,7 +371,7 @@ pub async fn list(type_filter: Option<String>, search: Option<String>) -> Result
 
     // Apply type filter
     if let Some(type_str) = &type_filter {
-        if let Some(cipher_type) = CipherType::from_str(type_str) {
+        if let Ok(cipher_type) = CipherType::from_str(type_str) {
             ciphers.retain(|c| c.cipher_type() == Some(cipher_type));
         } else {
             anyhow::bail!(

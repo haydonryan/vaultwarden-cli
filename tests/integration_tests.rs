@@ -417,6 +417,7 @@ mod model_integration_tests {
 
 /// Tests for edge cases and error handling
 mod edge_case_tests {
+    use std::str::FromStr;
     use vaultwarden_cli::crypto::CryptoKeys;
     use vaultwarden_cli::models::{Cipher, CipherType};
 
@@ -478,13 +479,13 @@ mod edge_case_tests {
     #[test]
     fn test_cipher_type_from_str_edge_cases() {
         // Numbers as strings
-        assert_eq!(CipherType::from_str("1"), Some(CipherType::Login));
-        assert_eq!(CipherType::from_str("2"), Some(CipherType::SecureNote));
+        assert_eq!(CipherType::from_str("1"), Ok(CipherType::Login));
+        assert_eq!(CipherType::from_str("2"), Ok(CipherType::SecureNote));
 
         // Invalid inputs
-        assert_eq!(CipherType::from_str(""), None);
-        assert_eq!(CipherType::from_str("   "), None);
-        assert_eq!(CipherType::from_str("unknown"), None);
+        assert!(CipherType::from_str("").is_err());
+        assert!(CipherType::from_str("   ").is_err());
+        assert!(CipherType::from_str("unknown").is_err());
     }
 }
 

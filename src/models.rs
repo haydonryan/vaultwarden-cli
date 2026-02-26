@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 // OAuth2 Token Response
 #[derive(Debug, Clone, Deserialize)]
@@ -84,14 +85,27 @@ impl std::fmt::Display for CipherType {
     }
 }
 
-impl CipherType {
-    pub fn from_str(s: &str) -> Option<Self> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseCipherTypeError;
+
+impl std::fmt::Display for ParseCipherTypeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid cipher type")
+    }
+}
+
+impl std::error::Error for ParseCipherTypeError {}
+
+impl FromStr for CipherType {
+    type Err = ParseCipherTypeError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "login" | "1" => Some(CipherType::Login),
-            "note" | "securenote" | "2" => Some(CipherType::SecureNote),
-            "card" | "3" => Some(CipherType::Card),
-            "identity" | "4" => Some(CipherType::Identity),
-            _ => None,
+            "login" | "1" => Ok(CipherType::Login),
+            "note" | "securenote" | "2" => Ok(CipherType::SecureNote),
+            "card" | "3" => Ok(CipherType::Card),
+            "identity" | "4" => Ok(CipherType::Identity),
+            _ => Err(ParseCipherTypeError),
         }
     }
 }
@@ -328,50 +342,50 @@ mod tests {
 
         #[test]
         fn test_cipher_type_from_str_login() {
-            assert_eq!(CipherType::from_str("login"), Some(CipherType::Login));
-            assert_eq!(CipherType::from_str("LOGIN"), Some(CipherType::Login));
-            assert_eq!(CipherType::from_str("Login"), Some(CipherType::Login));
-            assert_eq!(CipherType::from_str("1"), Some(CipherType::Login));
+            assert_eq!(CipherType::from_str("login"), Ok(CipherType::Login));
+            assert_eq!(CipherType::from_str("LOGIN"), Ok(CipherType::Login));
+            assert_eq!(CipherType::from_str("Login"), Ok(CipherType::Login));
+            assert_eq!(CipherType::from_str("1"), Ok(CipherType::Login));
         }
 
         #[test]
         fn test_cipher_type_from_str_note() {
-            assert_eq!(CipherType::from_str("note"), Some(CipherType::SecureNote));
-            assert_eq!(CipherType::from_str("NOTE"), Some(CipherType::SecureNote));
+            assert_eq!(CipherType::from_str("note"), Ok(CipherType::SecureNote));
+            assert_eq!(CipherType::from_str("NOTE"), Ok(CipherType::SecureNote));
             assert_eq!(
                 CipherType::from_str("securenote"),
-                Some(CipherType::SecureNote)
+                Ok(CipherType::SecureNote)
             );
             assert_eq!(
                 CipherType::from_str("SecureNote"),
-                Some(CipherType::SecureNote)
+                Ok(CipherType::SecureNote)
             );
-            assert_eq!(CipherType::from_str("2"), Some(CipherType::SecureNote));
+            assert_eq!(CipherType::from_str("2"), Ok(CipherType::SecureNote));
         }
 
         #[test]
         fn test_cipher_type_from_str_card() {
-            assert_eq!(CipherType::from_str("card"), Some(CipherType::Card));
-            assert_eq!(CipherType::from_str("CARD"), Some(CipherType::Card));
-            assert_eq!(CipherType::from_str("Card"), Some(CipherType::Card));
-            assert_eq!(CipherType::from_str("3"), Some(CipherType::Card));
+            assert_eq!(CipherType::from_str("card"), Ok(CipherType::Card));
+            assert_eq!(CipherType::from_str("CARD"), Ok(CipherType::Card));
+            assert_eq!(CipherType::from_str("Card"), Ok(CipherType::Card));
+            assert_eq!(CipherType::from_str("3"), Ok(CipherType::Card));
         }
 
         #[test]
         fn test_cipher_type_from_str_identity() {
-            assert_eq!(CipherType::from_str("identity"), Some(CipherType::Identity));
-            assert_eq!(CipherType::from_str("IDENTITY"), Some(CipherType::Identity));
-            assert_eq!(CipherType::from_str("Identity"), Some(CipherType::Identity));
-            assert_eq!(CipherType::from_str("4"), Some(CipherType::Identity));
+            assert_eq!(CipherType::from_str("identity"), Ok(CipherType::Identity));
+            assert_eq!(CipherType::from_str("IDENTITY"), Ok(CipherType::Identity));
+            assert_eq!(CipherType::from_str("Identity"), Ok(CipherType::Identity));
+            assert_eq!(CipherType::from_str("4"), Ok(CipherType::Identity));
         }
 
         #[test]
         fn test_cipher_type_from_str_invalid() {
-            assert_eq!(CipherType::from_str("invalid"), None);
-            assert_eq!(CipherType::from_str(""), None);
-            assert_eq!(CipherType::from_str("0"), None);
-            assert_eq!(CipherType::from_str("5"), None);
-            assert_eq!(CipherType::from_str("password"), None);
+            assert!(CipherType::from_str("invalid").is_err());
+            assert!(CipherType::from_str("").is_err());
+            assert!(CipherType::from_str("0").is_err());
+            assert!(CipherType::from_str("5").is_err());
+            assert!(CipherType::from_str("password").is_err());
         }
 
         #[test]
