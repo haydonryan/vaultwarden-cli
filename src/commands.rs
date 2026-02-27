@@ -471,66 +471,7 @@ pub async fn get(item: &str, format: &str) -> Result<()> {
         found.context(format!("Item '{}' not found", item))?
     };
 
-    match format {
-        "json" => {
-            println!("{}", serde_json::to_string_pretty(&output)?);
-        }
-        "env" => {
-            // Output as environment variable exports
-            let name_upper = sanitize_env_name(&output.name);
-            if let Some(uri) = &output.uri {
-                println!("export {}_URI=\"{}\"", name_upper, escape_value(uri));
-            }
-            if let Some(username) = &output.username {
-                println!(
-                    "export {}_USERNAME=\"{}\"",
-                    name_upper,
-                    escape_value(username)
-                );
-            }
-            if let Some(password) = &output.password {
-                println!(
-                    "export {}_PASSWORD=\"{}\"",
-                    name_upper,
-                    escape_value(password)
-                );
-            }
-            if let Some(fields) = &output.fields {
-                for field in fields {
-                    let field_name = sanitize_env_name(&field.name);
-                    println!(
-                        "export {}_{}=\"{}\"",
-                        name_upper,
-                        field_name,
-                        escape_value(&field.value)
-                    );
-                }
-            }
-        }
-        "value" | "password" => {
-            // Output just the password value
-            if let Some(password) = &output.password {
-                print!("{}", password);
-            } else {
-                anyhow::bail!("Item has no password");
-            }
-        }
-        "username" => {
-            if let Some(username) = &output.username {
-                print!("{}", username);
-            } else {
-                anyhow::bail!("Item has no username");
-            }
-        }
-        _ => {
-            anyhow::bail!(
-                "Unknown format: {}. Use: json, env, value, username",
-                format
-            );
-        }
-    }
-
-    Ok(())
+    print_cipher_output(&output, format)
 }
 
 pub async fn get_by_uri(uri: &str, format: &str) -> Result<()> {
@@ -562,54 +503,53 @@ pub async fn get_by_uri(uri: &str, format: &str) -> Result<()> {
 
     let output = found.context(format!("No item found with URI containing '{}'", uri))?;
 
+    print_cipher_output(&output, format)
+}
+
+fn cipher_to_env_vars(output: &CipherOutput) -> Vec<(String, String)> {
+    let prefix = sanitize_env_name(&output.name);
+    let mut vars: Vec<(String, String)> = Vec::new();
+    if let Some(v) = &output.uri {
+        vars.push((format!("{}_URI", prefix), v.clone()));
+    }
+    if let Some(v) = &output.username {
+        vars.push((format!("{}_USERNAME", prefix), v.clone()));
+    }
+    if let Some(v) = &output.password {
+        vars.push((format!("{}_PASSWORD", prefix), v.clone()));
+    }
+    if let Some(fields) = &output.fields {
+        for field in fields {
+            vars.push((
+                format!("{}_{}", prefix, sanitize_env_name(&field.name)),
+                field.value.clone(),
+            ));
+        }
+    }
+    vars
+}
+
+fn print_cipher_output(output: &CipherOutput, format: &str) -> Result<()> {
     match format {
         "json" => {
-            println!("{}", serde_json::to_string_pretty(&output)?);
+            println!("{}", serde_json::to_string_pretty(output)?);
         }
         "env" => {
-            let name_upper = sanitize_env_name(&output.name);
-            if let Some(uri) = &output.uri {
-                println!("export {}_URI=\"{}\"", name_upper, escape_value(uri));
-            }
-            if let Some(username) = &output.username {
-                println!(
-                    "export {}_USERNAME=\"{}\"",
-                    name_upper,
-                    escape_value(username)
-                );
-            }
-            if let Some(password) = &output.password {
-                println!(
-                    "export {}_PASSWORD=\"{}\"",
-                    name_upper,
-                    escape_value(password)
-                );
-            }
-            if let Some(fields) = &output.fields {
-                for field in fields {
-                    let field_name = sanitize_env_name(&field.name);
-                    println!(
-                        "export {}_{}=\"{}\"",
-                        name_upper,
-                        field_name,
-                        escape_value(&field.value)
-                    );
-                }
+            for (name, value) in cipher_to_env_vars(output) {
+                println!("export {}=\"{}\"", name, escape_value(&value));
             }
         }
         "value" | "password" => {
-            if let Some(password) = &output.password {
-                print!("{}", password);
-            } else {
-                anyhow::bail!("Item has no password");
-            }
+            print!(
+                "{}",
+                output.password.as_deref().context("Item has no password")?
+            );
         }
         "username" => {
-            if let Some(username) = &output.username {
-                print!("{}", username);
-            } else {
-                anyhow::bail!("Item has no username");
-            }
+            print!(
+                "{}",
+                output.username.as_deref().context("Item has no username")?
+            );
         }
         _ => {
             anyhow::bail!(
@@ -618,7 +558,6 @@ pub async fn get_by_uri(uri: &str, format: &str) -> Result<()> {
             );
         }
     }
-
     Ok(())
 }
 
@@ -791,28 +730,8 @@ pub async fn run_with_secrets(
         found.context("No item found matching the specified filters")?
     };
 
-    // Build environment variable names
-    let name_upper = sanitize_env_name(&output.name);
-    let mut env_vars: Vec<(String, String)> = Vec::new();
-
-    if let Some(uri) = &output.uri {
-        env_vars.push((format!("{}_URI", name_upper), uri.clone()));
-    }
-    if let Some(username) = &output.username {
-        env_vars.push((format!("{}_USERNAME", name_upper), username.clone()));
-    }
-    if let Some(password) = &output.password {
-        env_vars.push((format!("{}_PASSWORD", name_upper), password.clone()));
-    }
-    if let Some(fields) = &output.fields {
-        for field in fields {
-            let field_name = sanitize_env_name(&field.name);
-            env_vars.push((
-                format!("{}_{}", name_upper, field_name),
-                field.value.clone(),
-            ));
-        }
-    }
+    // Build environment variables from the cipher
+    let env_vars = cipher_to_env_vars(&output);
 
     // If --info flag, just print variable names
     if info_only {
