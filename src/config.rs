@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -73,44 +74,31 @@ impl Config {
         Ok(())
     }
 
+    fn keys_to_key_data(keys: &CryptoKeys) -> KeyData {
+        KeyData {
+            enc_key: BASE64.encode(&keys.enc_key),
+            mac_key: BASE64.encode(&keys.mac_key),
+        }
+    }
+
+    fn key_data_to_keys(data: KeyData) -> Result<CryptoKeys> {
+        Ok(CryptoKeys {
+            enc_key: BASE64.decode(&data.enc_key)?,
+            mac_key: BASE64.decode(&data.mac_key)?,
+        })
+    }
+
     pub fn save_keys(&self) -> Result<()> {
         let path = Self::keys_path()?;
 
-        let user_keys = self.crypto_keys.as_ref().map(|keys| KeyData {
-            enc_key: base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                &keys.enc_key,
-            ),
-            mac_key: base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                &keys.mac_key,
-            ),
-        });
-
-        let org_keys: HashMap<String, KeyData> = self
+        let user_keys = self.crypto_keys.as_ref().map(Self::keys_to_key_data);
+        let org_keys = self
             .org_crypto_keys
             .iter()
-            .map(|(id, keys)| {
-                (
-                    id.clone(),
-                    KeyData {
-                        enc_key: base64::Engine::encode(
-                            &base64::engine::general_purpose::STANDARD,
-                            &keys.enc_key,
-                        ),
-                        mac_key: base64::Engine::encode(
-                            &base64::engine::general_purpose::STANDARD,
-                            &keys.mac_key,
-                        ),
-                    },
-                )
-            })
+            .map(|(id, keys)| (id.clone(), Self::keys_to_key_data(keys)))
             .collect();
 
-        let saved = SavedKeys {
-            user_keys,
-            org_keys,
-        };
+        let saved = SavedKeys { user_keys, org_keys };
         let content = serde_json::to_string(&saved)?;
         fs::write(&path, content)?;
 
@@ -124,28 +112,12 @@ impl Config {
             let saved: SavedKeys = serde_json::from_str(&content)?;
 
             if let Some(keys_data) = saved.user_keys {
-                let enc_key = base64::Engine::decode(
-                    &base64::engine::general_purpose::STANDARD,
-                    &keys_data.enc_key,
-                )?;
-                let mac_key = base64::Engine::decode(
-                    &base64::engine::general_purpose::STANDARD,
-                    &keys_data.mac_key,
-                )?;
-                self.crypto_keys = Some(CryptoKeys { enc_key, mac_key });
+                self.crypto_keys = Some(Self::key_data_to_keys(keys_data)?);
             }
 
             for (id, keys_data) in saved.org_keys {
-                let enc_key = base64::Engine::decode(
-                    &base64::engine::general_purpose::STANDARD,
-                    &keys_data.enc_key,
-                )?;
-                let mac_key = base64::Engine::decode(
-                    &base64::engine::general_purpose::STANDARD,
-                    &keys_data.mac_key,
-                )?;
                 self.org_crypto_keys
-                    .insert(id, CryptoKeys { enc_key, mac_key });
+                    .insert(id, Self::key_data_to_keys(keys_data)?);
             }
         }
         Ok(())
