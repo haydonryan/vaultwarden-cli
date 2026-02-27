@@ -176,33 +176,6 @@ impl CryptoKeys {
     }
 }
 
-/// Decrypt a cipher's data using the crypto keys
-pub fn decrypt_cipher_data(
-    keys: &CryptoKeys,
-    name: &str,
-    username: Option<&str>,
-    password: Option<&str>,
-    uri: Option<&str>,
-    notes: Option<&str>,
-) -> Result<DecryptedCipherData> {
-    Ok(DecryptedCipherData {
-        name: keys.decrypt_to_string(name)?,
-        username: username.map(|u| keys.decrypt_to_string(u)).transpose()?,
-        password: password.map(|p| keys.decrypt_to_string(p)).transpose()?,
-        uri: uri.map(|u| keys.decrypt_to_string(u)).transpose()?,
-        notes: notes.map(|n| keys.decrypt_to_string(n)).transpose()?,
-    })
-}
-
-#[derive(Debug, Clone)]
-pub struct DecryptedCipherData {
-    pub name: String,
-    pub username: Option<String>,
-    pub password: Option<String>,
-    pub uri: Option<String>,
-    pub notes: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -517,30 +490,6 @@ mod tests {
         let stretched = CryptoKeys::stretch_master_key(&master_key).unwrap();
         assert_eq!(stretched.enc_key.len(), 32);
         assert_eq!(stretched.mac_key.len(), 32);
-    }
-
-    // Test helper function
-    #[test]
-    fn test_decrypt_cipher_data_all_fields() {
-        // This tests the decrypt_cipher_data function with mocked encryption
-        // Since we can't easily create valid encrypted data, we test the function exists
-        // and handles the right types
-
-        let keys = CryptoKeys {
-            enc_key: vec![0u8; 32],
-            mac_key: vec![0u8; 32],
-        };
-
-        // Invalid encrypted name should fail
-        let result = decrypt_cipher_data(
-            &keys,
-            "invalid",
-            Some("invalid"),
-            Some("invalid"),
-            Some("invalid"),
-            Some("invalid"),
-        );
-        assert!(result.is_err());
     }
 
     // Round-trip encryption/decryption test using real crypto
