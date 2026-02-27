@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::io::{self, Write};
 use std::process::Command;
 use std::str::FromStr;
-use std::time::{SystemTime, UNIX_EPOCH};  // used by unix_now()
+use std::time::{SystemTime, UNIX_EPOCH}; // used by unix_now()
 
 fn unix_now() -> i64 {
     SystemTime::now()

@@ -98,7 +98,10 @@ impl Config {
             .map(|(id, keys)| (id.clone(), Self::keys_to_key_data(keys)))
             .collect();
 
-        let saved = SavedKeys { user_keys, org_keys };
+        let saved = SavedKeys {
+            user_keys,
+            org_keys,
+        };
         let content = serde_json::to_string(&saved)?;
         fs::write(&path, content)?;
 
