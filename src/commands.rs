@@ -2,7 +2,14 @@ use anyhow::{Context, Result};
 use std::io::{self, Write};
 use std::process::Command;
 use std::str::FromStr;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};  // used by unix_now()
+
+fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock is before UNIX epoch")
+        .as_secs() as i64
+}
 
 use crate::api::ApiClient;
 use crate::config::{self, Config};
@@ -40,11 +47,7 @@ pub async fn login(
     let token_response = api.login(&client_id, &client_secret).await?;
 
     // Calculate token expiry
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
-    let expiry = now + token_response.expires_in;
+    let expiry = unix_now() + token_response.expires_in;
 
     // Save configuration
     config.server = Some(server);
@@ -213,10 +216,7 @@ pub async fn status() -> Result<()> {
 
     // Check token expiry
     if let Some(expiry) = config.token_expiry {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = unix_now();
         if expiry > now {
             let remaining = expiry - now;
             let hours = remaining / 3600;
@@ -243,10 +243,7 @@ async fn ensure_valid_token(config: &mut Config) -> Result<String> {
         .context("Not logged in. Please run 'vaultwarden-cli login' first.")?;
 
     // Check if token is expired
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+    let now = unix_now();
 
     if let Some(expiry) = config.token_expiry {
         if now >= expiry - 60 {
