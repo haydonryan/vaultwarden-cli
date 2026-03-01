@@ -93,8 +93,8 @@ enum Commands {
     /// Run a command with secrets injected as environment variables
     Run {
         /// Item name or ID to inject (comma-separated for multiple)
-        #[arg(long)]
-        credential_name: Option<String>,
+        #[arg(long, alias = "credential-name")]
+        name: Option<String>,
 
         /// Filter by organization name or ID
         #[arg(long)]
@@ -179,14 +179,14 @@ async fn main() {
             commands::get_by_uri(&uri, effective_format).await
         }
         Commands::Run {
-            credential_name,
+            name,
             org,
             folder,
             info,
             command,
         } => {
             commands::run_with_secrets(
-                credential_name.as_deref(),
+                name.as_deref(),
                 false,
                 org.as_deref(),
                 folder.as_deref(),

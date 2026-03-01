@@ -113,10 +113,13 @@ Run commands with secrets injected as environment variables. The secrets are onl
 
 ```bash
 # Run a command with secrets from an item injected as env vars
-vaultwarden-cli run --credential-name "My Login" -- printenv MY_LOGIN_USERNAME MY_LOGIN_PASSWORD
+vaultwarden-cli run --name "My Login" -- printenv MY_LOGIN_USERNAME MY_LOGIN_PASSWORD
 
 # Run a command with multiple items (comma-separated)
-vaultwarden-cli run --credential-name "My Login, API Token" -- ./deploy.sh
+vaultwarden-cli run --name "My Login, API Token" -- ./deploy.sh
+
+# Run a bash script directly
+vaultwarden-cli run --name "My Login" -- bash ./scripts/rotate-keys.sh
 
 # Filter by organisation and/or folder instead of (or in addition to) a name
 vaultwarden-cli run --org "Acme Corp" --folder "Production" -- ./deploy.sh
@@ -125,7 +128,7 @@ vaultwarden-cli run --org "Acme Corp" --folder "Production" -- ./deploy.sh
 vaultwarden-cli run-uri github.com -- git push
 
 # Preview which environment variables would be injected (without values)
-vaultwarden-cli run --credential-name "My Login" --info
+vaultwarden-cli run --name "My Login" --info
 vaultwarden-cli run-uri github.com --info
 ```
 

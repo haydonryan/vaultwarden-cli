@@ -603,10 +603,10 @@ pub async fn run_with_secrets(
         && org_filter.is_none()
         && folder_filter.is_none()
     {
-        anyhow::bail!("At least one of --credential-name, --org, or --folder must be specified.");
+        anyhow::bail!("At least one of --name, --org, or --folder must be specified.");
     }
     if !search_by_uri && item_or_uri.is_some() && requested_items.is_empty() {
-        anyhow::bail!("No credential names provided.");
+        anyhow::bail!("No item names provided.");
     }
 
     let mut config = Config::load()?;
