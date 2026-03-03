@@ -196,7 +196,7 @@ jobs:
         run: cargo install cargo-sbom
 
       - name: Generate SBOM (CycloneDX)
-        run: cargo sbom --output-format cyclonedx_json_1_4 > sbom.cdx.json
+        run: cargo sbom --output-format cyclone_dx_json_1_4 > sbom.cdx.json
 
       - name: Generate SBOM (SPDX)
         run: cargo sbom --output-format spdx_json_2_3 > sbom.spdx.json
