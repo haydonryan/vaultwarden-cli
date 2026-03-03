@@ -18,6 +18,7 @@ Additionally, this uses the system certificate store for TLS verification, not a
 - Multiple output formats: JSON, environment exports, raw values
 - Search and filter vault items
 - Run commands with secrets injected as environment variables
+- Interpolate secrets into YAML files
 
 ## Installation
 
@@ -135,6 +136,22 @@ vaultwarden-cli run-uri github.com --info
 Environment variables are named `{ITEM_NAME}_{FIELD}` where:
 - `{ITEM_NAME}` is the item name converted to uppercase with non-alphanumeric chars replaced by underscores
 - `{FIELD}` is one of: `URI`, `USERNAME`, `PASSWORD`, or custom field names
+
+### Interpolating YAML
+
+Replace placeholders like `((s3.username))` in a YAML file with Vaultwarden secrets and write to stdout.
+
+```bash
+# Replace placeholders and write to a new file
+vaultwarden-cli interpolate --file config.yml > config.rendered.yml
+
+# Leave missing placeholders untouched instead of failing
+vaultwarden-cli interpolate --file config.yml --skip-missing
+```
+
+Placeholders use the format `((name.component))` where:
+- `name` matches a Vaultwarden item name (case-insensitive)
+- `component` is `username`, `password`, `uri`, or a custom field name such as `token`
 
 ### Session Management
 

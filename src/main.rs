@@ -130,6 +130,17 @@ enum Commands {
 
     /// Show current session status
     Status,
+
+    /// Interpolate secrets into a YAML file
+    Interpolate {
+        /// YAML file to interpolate
+        #[arg(short, long)]
+        file: String,
+
+        /// Skip missing secrets and leave placeholders unchanged
+        #[arg(short = 's', long)]
+        skip_missing: bool,
+    },
 }
 
 #[tokio::main]
@@ -199,6 +210,9 @@ async fn main() {
             commands::run_with_secrets(Some(&uri), true, None, None, info, &command).await
         }
         Commands::Status => commands::status().await,
+        Commands::Interpolate { file, skip_missing } => {
+            commands::interpolate(&file, skip_missing).await
+        }
     };
 
     if let Err(e) = result {

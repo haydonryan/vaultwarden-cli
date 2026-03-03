@@ -1,4 +1,7 @@
 use anyhow::{Context, Result};
+use regex::Regex;
+use std::collections::HashMap;
+use std::fs;
 use std::io::{self, Write};
 use std::process::Command;
 use std::str::FromStr;
@@ -506,6 +509,100 @@ pub async fn get_by_uri(uri: &str, format: &str) -> Result<()> {
     print_cipher_output(&output, format)
 }
 
+fn parse_placeholder(placeholder: &str) -> Result<(String, String)> {
+    let mut parts = placeholder.rsplitn(2, '.');
+    let component = parts.next().unwrap_or_default();
+    let name = parts.next().unwrap_or_default();
+    if name.is_empty() || component.is_empty() {
+        anyhow::bail!("Expected format name.component");
+    }
+    Ok((name.to_string(), component.to_string()))
+}
+
+fn resolve_component(output: &CipherOutput, component: &str) -> Result<String> {
+    match component.to_lowercase().as_str() {
+        "username" => output.username.clone().context("Item has no username"),
+        "password" => output.password.clone().context("Item has no password"),
+        "uri" => output.uri.clone().context("Item has no uri"),
+        _ => {
+            if let Some(fields) = &output.fields {
+                if let Some(field) = fields
+                    .iter()
+                    .find(|f| f.name.eq_ignore_ascii_case(component))
+                {
+                    return Ok(field.value.clone());
+                }
+            }
+            anyhow::bail!("Item has no component '{}'", component);
+        }
+    }
+}
+
+pub async fn interpolate(file: &str, skip_missing: bool) -> Result<()> {
+    let mut config = Config::load()?;
+    let access_token = ensure_valid_token(&mut config).await?;
+    ensure_unlocked(&config)?;
+    let api = ApiClient::from_config(&config)?;
+
+    let sync_response = api.sync(&access_token).await?;
+    let mut by_name: HashMap<String, CipherOutput> = HashMap::new();
+
+    for cipher in &sync_response.ciphers {
+        let keys = match get_cipher_keys(&config, cipher) {
+            Ok(k) => k,
+            Err(_) => continue,
+        };
+        if let Ok(output) = decrypt_cipher(cipher, keys) {
+            let key = output.name.to_lowercase();
+            by_name.entry(key).or_insert(output);
+        }
+    }
+
+    let input =
+        fs::read_to_string(file).with_context(|| format!("Failed to read file '{}'", file))?;
+    let re = Regex::new(r"\(\(([^\s()]+)\)\)").expect("valid regex");
+    let mut missing: Vec<String> = Vec::new();
+
+    let output = re.replace_all(&input, |caps: &regex::Captures| {
+        let placeholder = &caps[1];
+        match parse_placeholder(placeholder) {
+            Ok((raw_name, component)) => {
+                let key = raw_name.to_lowercase();
+                match by_name.get(&key) {
+                    Some(cipher) => match resolve_component(cipher, &component) {
+                        Ok(value) => value,
+                        Err(err) => {
+                            if !skip_missing {
+                                missing.push(format!("{}: {}", placeholder, err));
+                            }
+                            caps[0].to_string()
+                        }
+                    },
+                    None => {
+                        if !skip_missing {
+                            missing.push(format!("{}: item '{}' not found", placeholder, raw_name));
+                        }
+                        caps[0].to_string()
+                    }
+                }
+            }
+            Err(err) => {
+                if !skip_missing {
+                    missing.push(format!("{}: {}", placeholder, err));
+                }
+                caps[0].to_string()
+            }
+        }
+    });
+
+    if !skip_missing && !missing.is_empty() {
+        anyhow::bail!("Interpolation failed:\n{}", missing.join("\n"));
+    }
+
+    print!("{}", output);
+    Ok(())
+}
+
 fn cipher_to_env_vars(output: &CipherOutput) -> Vec<(String, String)> {
     let prefix = sanitize_env_name(&output.name);
     let mut vars: Vec<(String, String)> = Vec::new();
@@ -925,6 +1022,58 @@ mod tests {
             // Ensure potential shell injection is safely escaped
             assert_eq!(escape_value("$(rm -rf /)"), "\\$(rm -rf /)");
             assert_eq!(escape_value("`rm -rf /`"), "\\`rm -rf /\\`");
+        }
+    }
+
+    mod interpolate_helpers_tests {
+        use super::*;
+
+        #[test]
+        fn test_parse_placeholder_valid() {
+            let (name, component) = parse_placeholder("s3.username").unwrap();
+            assert_eq!(name, "s3");
+            assert_eq!(component, "username");
+        }
+
+        #[test]
+        fn test_parse_placeholder_uses_last_dot() {
+            let (name, component) = parse_placeholder("path.to.s3.token").unwrap();
+            assert_eq!(name, "path.to.s3");
+            assert_eq!(component, "token");
+        }
+
+        #[test]
+        fn test_parse_placeholder_invalid() {
+            assert!(parse_placeholder("s3").is_err());
+            assert!(parse_placeholder("s3.").is_err());
+            assert!(parse_placeholder(".username").is_err());
+        }
+
+        #[test]
+        fn test_resolve_component() {
+            let output = CipherOutput {
+                id: "1".to_string(),
+                cipher_type: "login".to_string(),
+                name: "S3".to_string(),
+                username: Some("user".to_string()),
+                password: Some("pass".to_string()),
+                uri: Some("https://example.com".to_string()),
+                notes: None,
+                fields: Some(vec![FieldOutput {
+                    name: "token".to_string(),
+                    value: "tok-123".to_string(),
+                    hidden: true,
+                }]),
+            };
+
+            assert_eq!(resolve_component(&output, "username").unwrap(), "user");
+            assert_eq!(resolve_component(&output, "password").unwrap(), "pass");
+            assert_eq!(
+                resolve_component(&output, "uri").unwrap(),
+                "https://example.com"
+            );
+            assert_eq!(resolve_component(&output, "token").unwrap(), "tok-123");
+            assert_eq!(resolve_component(&output, "TOKEN").unwrap(), "tok-123");
         }
     }
 
