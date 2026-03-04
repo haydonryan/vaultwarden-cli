@@ -103,6 +103,9 @@ pub async fn unlock(password: Option<String>) -> Result<()> {
         anyhow::bail!("Not logged in. Please run 'vaultwarden-cli login' first.");
     }
 
+    // Ensure token is still valid before prompting for password
+    ensure_valid_token(&mut config).await?;
+
     let email = config
         .email
         .as_ref()

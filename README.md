@@ -64,6 +64,9 @@ vaultwarden-cli login --server https://your-vaultwarden-server.com
 vaultwarden-cli unlock
 ```
 
+Note: `unlock` validates (and refreshes if needed) your API token before prompting.
+If the token is expired and cannot be refreshed, you will need to run `vaultwarden-cli login` again.
+
 ### Retrieving Secrets
 
 ```bash
