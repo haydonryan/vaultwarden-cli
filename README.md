@@ -22,10 +22,20 @@ Additionally, this uses the system certificate store for TLS verification, not a
 
 ## Installation
 
+### From GitHub Releases
+
+Download the latest prebuilt binary for your OS/arch from:
+
+```
+https://github.com/haydonryan/vaultwarden-cli/releases
+```
+
+Extract the archive and place `vaultwarden-cli` somewhere on your `PATH`.
+
 ### From Source
 
 ```bash
-git clone https://github.com/yourusername/vaultwarden-cli.git
+git clone https://github.com/haydonryan/vaultwarden-cli.git
 cd vaultwarden-cli
 cargo build --release
 ```
