@@ -7,7 +7,7 @@ authors = ["Haydon Ryan", "AI coders and agents"]
 license = "MIT"
 
 [dependencies]
-clap = { version = "4.4", features = ["derive", "env"] }
+clap = { version = "4.6", features = ["derive", "env"] }
 tokio = { version = "1.50", features = ["full"] }
 reqwest = { version = "0.13.2", features = ["json", "form"] }
 serde = { version = "1.0", features = ["derive"] }
