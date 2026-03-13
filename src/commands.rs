@@ -363,10 +363,7 @@ fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
     })
 }
 
-fn resolve_org_id(
-    profile: &crate::models::Profile,
-    org_filter: &str,
-) -> Result<String> {
+fn resolve_org_id(profile: &crate::models::Profile, org_filter: &str) -> Result<String> {
     let matched = profile.organizations.iter().find(|o| {
         o.id == org_filter
             || o.name
