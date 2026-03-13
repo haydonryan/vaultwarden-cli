@@ -363,14 +363,109 @@ fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
     })
 }
 
-pub async fn list(type_filter: Option<String>, search: Option<String>) -> Result<()> {
+fn resolve_org_id(profile: &crate::models::Profile, org_filter: &str) -> Result<String> {
+    let matched = profile.organizations.iter().find(|o| {
+        o.id == org_filter
+            || o.name
+                .as_deref()
+                .map(|n| n.eq_ignore_ascii_case(org_filter))
+                .unwrap_or(false)
+    });
+    Ok(matched
+        .with_context(|| format!("Organization '{}' not found", org_filter))?
+        .id
+        .clone())
+}
+
+fn resolve_collection_id(
+    collections: &[crate::models::Collection],
+    collection_filter: &str,
+    org_id_filter: Option<&str>,
+    config: &Config,
+) -> Result<String> {
+    // Try exact ID match first
+    if let Some(c) = collections.iter().find(|c| c.id == collection_filter) {
+        return Ok(c.id.clone());
+    }
+
+    // Try decrypted name match — collection names are encrypted with the org key
+    for col in collections {
+        if let Some(oid) = org_id_filter {
+            if col.organization_id != oid {
+                continue;
+            }
+        }
+        let keys = match config.get_keys_for_cipher(Some(&col.organization_id)) {
+            Some(k) => k,
+            None => continue,
+        };
+        if let Ok(name) = keys.decrypt_to_string(&col.name) {
+            if name.eq_ignore_ascii_case(collection_filter) {
+                return Ok(col.id.clone());
+            }
+        }
+    }
+
+    anyhow::bail!("Collection '{}' not found", collection_filter)
+}
+
+fn cipher_matches_filters(
+    cipher: &Cipher,
+    org_id_filter: Option<&str>,
+    collection_id_filter: Option<&str>,
+) -> bool {
+    if let Some(oid) = org_id_filter {
+        if cipher.organization_id.as_deref() != Some(oid) {
+            return false;
+        }
+    }
+    if let Some(cid) = collection_id_filter {
+        if !cipher.collection_ids.iter().any(|id| id == cid) {
+            return false;
+        }
+    }
+    true
+}
+
+pub async fn list(
+    type_filter: Option<String>,
+    search: Option<String>,
+    org_filter: Option<String>,
+    collection_filter: Option<String>,
+) -> Result<()> {
     let mut config = Config::load()?;
     let access_token = ensure_valid_token(&mut config).await?;
     ensure_unlocked(&config)?;
     let api = ApiClient::from_config(&config)?;
 
     let sync_response = api.sync(&access_token).await?;
-    let mut ciphers: Vec<&Cipher> = sync_response.ciphers.iter().collect();
+
+    // Resolve org filter
+    let org_id_filter = org_filter
+        .as_deref()
+        .map(|org| resolve_org_id(&sync_response.profile, org))
+        .transpose()?;
+
+    // Resolve collection filter
+    let collection_id_filter = collection_filter
+        .as_deref()
+        .map(|col| {
+            resolve_collection_id(
+                &sync_response.collections,
+                col,
+                org_id_filter.as_deref(),
+                &config,
+            )
+        })
+        .transpose()?;
+
+    let mut ciphers: Vec<&Cipher> = sync_response
+        .ciphers
+        .iter()
+        .filter(|c| {
+            cipher_matches_filters(c, org_id_filter.as_deref(), collection_id_filter.as_deref())
+        })
+        .collect();
 
     // Apply type filter
     if let Some(type_str) = &type_filter {
@@ -435,7 +530,12 @@ pub async fn list(type_filter: Option<String>, search: Option<String>) -> Result
     Ok(())
 }
 
-pub async fn get(item: &str, format: &str) -> Result<()> {
+pub async fn get(
+    item: &str,
+    format: &str,
+    org_filter: Option<String>,
+    collection_filter: Option<String>,
+) -> Result<()> {
     let mut config = Config::load()?;
     let access_token = ensure_valid_token(&mut config).await?;
     ensure_unlocked(&config)?;
@@ -443,8 +543,34 @@ pub async fn get(item: &str, format: &str) -> Result<()> {
 
     let sync_response = api.sync(&access_token).await?;
 
+    // Resolve org filter
+    let org_id_filter = org_filter
+        .as_deref()
+        .map(|org| resolve_org_id(&sync_response.profile, org))
+        .transpose()?;
+
+    // Resolve collection filter
+    let collection_id_filter = collection_filter
+        .as_deref()
+        .map(|col| {
+            resolve_collection_id(
+                &sync_response.collections,
+                col,
+                org_id_filter.as_deref(),
+                &config,
+            )
+        })
+        .transpose()?;
+
+    let matches = |c: &Cipher| -> bool {
+        cipher_matches_filters(c, org_id_filter.as_deref(), collection_id_filter.as_deref())
+    };
+
     // Find the cipher by ID first
-    let cipher = sync_response.ciphers.iter().find(|c| c.id == item);
+    let cipher = sync_response
+        .ciphers
+        .iter()
+        .find(|c| c.id == item && matches(c));
 
     // If not found by ID, decrypt all and search by name/uri
     let output = if let Some(cipher) = cipher {
@@ -456,6 +582,9 @@ pub async fn get(item: &str, format: &str) -> Result<()> {
         let mut found: Option<CipherOutput> = None;
 
         for cipher in &sync_response.ciphers {
+            if !matches(cipher) {
+                continue;
+            }
             let keys = match get_cipher_keys(&config, cipher) {
                 Ok(k) => k,
                 Err(_) => continue,
@@ -480,7 +609,12 @@ pub async fn get(item: &str, format: &str) -> Result<()> {
     print_cipher_output(&output, format)
 }
 
-pub async fn get_by_uri(uri: &str, format: &str) -> Result<()> {
+pub async fn get_by_uri(
+    uri: &str,
+    format: &str,
+    org_filter: Option<String>,
+    collection_filter: Option<String>,
+) -> Result<()> {
     let mut config = Config::load()?;
     let access_token = ensure_valid_token(&mut config).await?;
     ensure_unlocked(&config)?;
@@ -488,11 +622,37 @@ pub async fn get_by_uri(uri: &str, format: &str) -> Result<()> {
 
     let sync_response = api.sync(&access_token).await?;
 
+    // Resolve org filter
+    let org_id_filter = org_filter
+        .as_deref()
+        .map(|org| resolve_org_id(&sync_response.profile, org))
+        .transpose()?;
+
+    // Resolve collection filter
+    let collection_id_filter = collection_filter
+        .as_deref()
+        .map(|col| {
+            resolve_collection_id(
+                &sync_response.collections,
+                col,
+                org_id_filter.as_deref(),
+                &config,
+            )
+        })
+        .transpose()?;
+
     // Search through decrypted ciphers by URI
     let uri_lower = uri.to_lowercase();
     let mut found: Option<CipherOutput> = None;
 
     for cipher in &sync_response.ciphers {
+        if !cipher_matches_filters(
+            cipher,
+            org_id_filter.as_deref(),
+            collection_id_filter.as_deref(),
+        ) {
+            continue;
+        }
         let keys = match get_cipher_keys(&config, cipher) {
             Ok(k) => k,
             Err(_) => continue,
@@ -681,6 +841,7 @@ pub async fn run_with_secrets(
     search_by_uri: bool,
     org_filter: Option<&str>,
     folder_filter: Option<&str>,
+    collection_filter: Option<&str>,
     info_only: bool,
     command: &[String],
 ) -> Result<()> {
@@ -702,8 +863,11 @@ pub async fn run_with_secrets(
         && requested_items.is_empty()
         && org_filter.is_none()
         && folder_filter.is_none()
+        && collection_filter.is_none()
     {
-        anyhow::bail!("At least one of --name, --org, or --folder must be specified.");
+        anyhow::bail!(
+            "At least one of --name, --org, --folder, or --collection must be specified."
+        );
     }
     if !search_by_uri && item_or_uri.is_some() && requested_items.is_empty() {
         anyhow::bail!("No item names provided.");
@@ -716,24 +880,10 @@ pub async fn run_with_secrets(
 
     let sync_response = api.sync(&access_token).await?;
 
-    // Resolve org_filter to an org ID (org names are plaintext in the profile)
-    let org_id_filter: Option<String> = if let Some(org) = org_filter {
-        let matched = sync_response.profile.organizations.iter().find(|o| {
-            o.id == org
-                || o.name
-                    .as_deref()
-                    .map(|n| n.eq_ignore_ascii_case(org))
-                    .unwrap_or(false)
-        });
-        Some(
-            matched
-                .with_context(|| format!("Organization '{}' not found", org))?
-                .id
-                .clone(),
-        )
-    } else {
-        None
-    };
+    // Resolve org filter
+    let org_id_filter = org_filter
+        .map(|org| resolve_org_id(&sync_response.profile, org))
+        .transpose()?;
 
     // Resolve folder_filter to a folder ID (folder names are encrypted)
     let folder_id_filter: Option<String> = if let Some(folder) = folder_filter {
@@ -761,7 +911,19 @@ pub async fn run_with_secrets(
         None
     };
 
-    // Check whether a cipher passes the org/folder filters
+    // Resolve collection filter
+    let collection_id_filter = collection_filter
+        .map(|col| {
+            resolve_collection_id(
+                &sync_response.collections,
+                col,
+                org_id_filter.as_deref(),
+                &config,
+            )
+        })
+        .transpose()?;
+
+    // Check whether a cipher passes the org/folder/collection filters
     let matches_filters = |cipher: &Cipher| -> bool {
         if let Some(ref oid) = org_id_filter {
             if cipher.organization_id.as_deref() != Some(oid.as_str()) {
@@ -770,6 +932,11 @@ pub async fn run_with_secrets(
         }
         if let Some(ref fid) = folder_id_filter {
             if cipher.folder_id.as_deref() != Some(fid.as_str()) {
+                return false;
+            }
+        }
+        if let Some(ref cid) = collection_id_filter {
+            if !cipher.collection_ids.iter().any(|id| id == cid) {
                 return false;
             }
         }
@@ -1093,6 +1260,7 @@ mod tests {
                 name: None,
                 notes: None,
                 folder_id: None,
+                collection_ids: Vec::new(),
                 login: None,
                 card: None,
                 identity: None,
@@ -1173,6 +1341,7 @@ mod tests {
                 name: None,
                 notes: None,
                 folder_id: None,
+                collection_ids: Vec::new(),
                 login: None,
                 card: None,
                 identity: None,

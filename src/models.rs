@@ -26,6 +26,8 @@ pub struct SyncResponse {
     pub ciphers: Vec<Cipher>,
     #[serde(alias = "Folders", alias = "folders")]
     pub folders: Vec<Folder>,
+    #[serde(alias = "Collections", alias = "collections", default)]
+    pub collections: Vec<Collection>,
     #[serde(alias = "Profile", alias = "profile")]
     pub profile: Profile,
 }
@@ -62,6 +64,16 @@ pub struct Folder {
     pub id: String,
     #[serde(alias = "Name", alias = "name")]
     pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Collection {
+    #[serde(alias = "Id", alias = "id")]
+    pub id: String,
+    #[serde(alias = "Name", alias = "name")]
+    pub name: String,
+    #[serde(alias = "OrganizationId", alias = "organizationId")]
+    pub organization_id: String,
 }
 
 // Cipher types
@@ -132,6 +144,8 @@ pub struct Cipher {
     pub identity: Option<IdentityData>,
     #[serde(alias = "SecureNote", alias = "secureNote")]
     pub secure_note: Option<SecureNoteData>,
+    #[serde(alias = "CollectionIds", alias = "collectionIds", default)]
+    pub collection_ids: Vec<String>,
     #[serde(alias = "Fields", alias = "fields")]
     pub fields: Option<Vec<FieldData>>,
     // Handle nested data structure (Vaultwarden format)
@@ -409,6 +423,7 @@ mod tests {
                 name: Some("encrypted-name".to_string()),
                 notes: Some("encrypted-notes".to_string()),
                 folder_id: None,
+                collection_ids: Vec::new(),
                 login: Some(LoginData {
                     username: Some("encrypted-username".to_string()),
                     password: Some("encrypted-password".to_string()),
@@ -438,6 +453,7 @@ mod tests {
                 name: None,
                 notes: None,
                 folder_id: None,
+                collection_ids: Vec::new(),
                 login: None,
                 card: None,
                 identity: None,
@@ -508,6 +524,7 @@ mod tests {
                 name: None,
                 notes: None,
                 folder_id: None,
+                collection_ids: Vec::new(),
                 login: None,
                 card: None,
                 identity: None,
@@ -563,6 +580,7 @@ mod tests {
                 name: None,
                 notes: None,
                 folder_id: None,
+                collection_ids: Vec::new(),
                 login: None,
                 card: None,
                 identity: None,
@@ -715,6 +733,7 @@ mod tests {
             let json = r#"{
                 "Ciphers": [],
                 "Folders": [],
+                "Collections": [],
                 "Profile": {
                     "Id": "user-123",
                     "Email": "user@example.com",
@@ -726,7 +745,46 @@ mod tests {
             let response: SyncResponse = serde_json::from_str(json).unwrap();
             assert!(response.ciphers.is_empty());
             assert!(response.folders.is_empty());
+            assert!(response.collections.is_empty());
             assert_eq!(response.profile.email, "user@example.com");
+        }
+
+        #[test]
+        fn test_sync_response_with_collections() {
+            let json = r#"{
+                "Ciphers": [],
+                "Folders": [],
+                "Collections": [
+                    {"Id": "col-1", "Name": "encrypted-name", "OrganizationId": "org-1"},
+                    {"Id": "col-2", "Name": "encrypted-name-2", "OrganizationId": "org-1"}
+                ],
+                "Profile": {
+                    "Id": "user-123",
+                    "Email": "user@example.com",
+                    "Organizations": []
+                }
+            }"#;
+
+            let response: SyncResponse = serde_json::from_str(json).unwrap();
+            assert_eq!(response.collections.len(), 2);
+            assert_eq!(response.collections[0].id, "col-1");
+            assert_eq!(response.collections[0].organization_id, "org-1");
+        }
+
+        #[test]
+        fn test_cipher_with_collection_ids() {
+            let json = r#"{
+                "Id": "cipher-abc",
+                "Type": 1,
+                "OrganizationId": "org-1",
+                "CollectionIds": ["col-1", "col-2"],
+                "Name": "Org Item"
+            }"#;
+
+            let cipher: Cipher = serde_json::from_str(json).unwrap();
+            assert_eq!(cipher.collection_ids.len(), 2);
+            assert_eq!(cipher.collection_ids[0], "col-1");
+            assert_eq!(cipher.collection_ids[1], "col-2");
         }
 
         #[test]

@@ -51,6 +51,14 @@ enum Commands {
         /// Search term
         #[arg(short, long)]
         search: Option<String>,
+
+        /// Filter by organization name or ID
+        #[arg(long)]
+        org: Option<String>,
+
+        /// Filter by collection name or ID
+        #[arg(short, long)]
+        collection: Option<String>,
     },
 
     /// Get a specific item or secret
@@ -69,6 +77,14 @@ enum Commands {
         /// Output only the password (shorthand for --format value)
         #[arg(short, long)]
         password: bool,
+
+        /// Filter by organization name or ID
+        #[arg(long)]
+        org: Option<String>,
+
+        /// Filter by collection name or ID
+        #[arg(long)]
+        collection: Option<String>,
     },
 
     /// Get a specific item by URI
@@ -88,6 +104,14 @@ enum Commands {
         /// Output only the password (shorthand for --format value)
         #[arg(short, long)]
         password: bool,
+
+        /// Filter by organization name or ID
+        #[arg(long)]
+        org: Option<String>,
+
+        /// Filter by collection name or ID
+        #[arg(long)]
+        collection: Option<String>,
     },
 
     /// Run a command with secrets injected as environment variables
@@ -103,6 +127,10 @@ enum Commands {
         /// Filter by folder name or ID
         #[arg(long)]
         folder: Option<String>,
+
+        /// Filter by collection name or ID
+        #[arg(long)]
+        collection: Option<String>,
 
         /// Print list of injected environment variables without values
         #[arg(short, long)]
@@ -156,12 +184,19 @@ async fn main() {
         Commands::Unlock { password } => commands::unlock(password).await,
         Commands::Lock => commands::lock().await,
         Commands::Logout => commands::logout().await,
-        Commands::List { r#type, search } => commands::list(r#type, search).await,
+        Commands::List {
+            r#type,
+            search,
+            org,
+            collection,
+        } => commands::list(r#type, search, org, collection).await,
         Commands::Get {
             item,
             format,
             username,
             password,
+            org,
+            collection,
         } => {
             // --username and --password flags override --format
             let effective_format = if username {
@@ -171,13 +206,15 @@ async fn main() {
             } else {
                 &format
             };
-            commands::get(&item, effective_format).await
+            commands::get(&item, effective_format, org, collection).await
         }
         Commands::GetUri {
             uri,
             format,
             username,
             password,
+            org,
+            collection,
         } => {
             // --username and --password flags override --format
             let effective_format = if username {
@@ -187,12 +224,13 @@ async fn main() {
             } else {
                 &format
             };
-            commands::get_by_uri(&uri, effective_format).await
+            commands::get_by_uri(&uri, effective_format, org, collection).await
         }
         Commands::Run {
             name,
             org,
             folder,
+            collection,
             info,
             command,
         } => {
@@ -201,13 +239,14 @@ async fn main() {
                 false,
                 org.as_deref(),
                 folder.as_deref(),
+                collection.as_deref(),
                 info,
                 &command,
             )
             .await
         }
         Commands::RunUri { uri, info, command } => {
-            commands::run_with_secrets(Some(&uri), true, None, None, info, &command).await
+            commands::run_with_secrets(Some(&uri), true, None, None, None, info, &command).await
         }
         Commands::Status => commands::status().await,
         Commands::Interpolate { file, skip_missing } => {
