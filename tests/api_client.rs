@@ -27,7 +27,10 @@ async fn api_client_new_trims_trailing_slash_for_requests() {
 fn api_client_from_config_requires_server() {
     let config = Config::default();
 
-    let err = ApiClient::from_config(&config).err().expect("missing server");
+    let err = match ApiClient::from_config(&config) {
+        Ok(_) => panic!("missing server"),
+        Err(err) => err,
+    };
     assert!(err.to_string().contains("No server configured"));
 }
 
@@ -112,8 +115,7 @@ async fn api_client_login_surfaces_non_success_responses() {
     let err = client
         .login("bad-client", "bad-secret")
         .await
-        .err()
-        .expect("login should fail");
+        .expect_err("login should fail");
 
     let message = err.to_string();
     assert!(message.contains("Login failed (400 Bad Request)"));
@@ -135,8 +137,7 @@ async fn api_client_login_reports_malformed_json() {
     let err = client
         .login("test-client", "test-secret")
         .await
-        .err()
-        .expect("parse should fail");
+        .expect_err("parse should fail");
 
     assert!(err.to_string().contains("Failed to parse token response"));
 }
@@ -174,9 +175,7 @@ async fn api_client_refresh_token_surfaces_non_success_responses() {
 
     Mock::given(method("POST"))
         .and(path("/identity/connect/token"))
-        .respond_with(
-            ResponseTemplate::new(401).set_body_string("{\"error\":\"invalid_token\"}"),
-        )
+        .respond_with(ResponseTemplate::new(401).set_body_string("{\"error\":\"invalid_token\"}"))
         .expect(1)
         .mount(&mock_server)
         .await;
@@ -185,8 +184,7 @@ async fn api_client_refresh_token_surfaces_non_success_responses() {
     let err = client
         .refresh_token("expired-refresh-token")
         .await
-        .err()
-        .expect("refresh should fail");
+        .expect_err("refresh should fail");
 
     let message = err.to_string();
     assert!(message.contains("Token refresh failed (401 Unauthorized)"));
@@ -208,8 +206,7 @@ async fn api_client_refresh_token_reports_malformed_json() {
     let err = client
         .refresh_token("refresh-token")
         .await
-        .err()
-        .expect("parse should fail");
+        .expect_err("parse should fail");
 
     assert!(err.to_string().contains("Failed to parse token response"));
 }
@@ -268,7 +265,10 @@ async fn api_client_sync_surfaces_non_success_responses() {
         .await;
 
     let client = ApiClient::new(&mock_server.uri()).unwrap();
-    let err = client.sync("access-token").await.err().expect("sync should fail");
+    let err = client
+        .sync("access-token")
+        .await
+        .expect_err("sync should fail");
 
     let message = err.to_string();
     assert!(message.contains("Sync failed (403 Forbidden)"));
@@ -290,8 +290,7 @@ async fn api_client_sync_reports_malformed_json() {
     let err = client
         .sync("access-token")
         .await
-        .err()
-        .expect("parse should fail");
+        .expect_err("parse should fail");
 
     assert!(err.to_string().contains("Failed to parse sync response"));
 }
@@ -320,8 +319,7 @@ async fn api_client_check_server_reports_transport_errors() {
     let err = client
         .check_server()
         .await
-        .err()
-        .expect("transport should fail");
+        .expect_err("transport should fail");
 
     assert!(err.to_string().contains("Failed to check server status"));
 }

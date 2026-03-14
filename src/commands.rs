@@ -1249,9 +1249,9 @@ mod tests {
 
     mod filter_resolution_tests {
         use super::*;
+        use crate::models::{Collection, Organization, Profile};
         use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
         use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-        use crate::models::{Collection, Organization, Profile};
         use cbc::Encryptor;
         use hmac::{Hmac, Mac};
         use sha2::Sha256;
@@ -1369,9 +1369,21 @@ mod tests {
                 data: None,
             };
 
-            assert!(cipher_matches_filters(&cipher, Some("org-1"), Some("col-2")));
-            assert!(!cipher_matches_filters(&cipher, Some("org-2"), Some("col-2")));
-            assert!(!cipher_matches_filters(&cipher, Some("org-1"), Some("col-9")));
+            assert!(cipher_matches_filters(
+                &cipher,
+                Some("org-1"),
+                Some("col-2")
+            ));
+            assert!(!cipher_matches_filters(
+                &cipher,
+                Some("org-2"),
+                Some("col-2")
+            ));
+            assert!(!cipher_matches_filters(
+                &cipher,
+                Some("org-1"),
+                Some("col-9")
+            ));
         }
 
         #[test]
@@ -1383,7 +1395,8 @@ mod tests {
             };
 
             let config = Config::default();
-            let collection_id = resolve_collection_id(&[collection], "col-1", None, &config).unwrap();
+            let collection_id =
+                resolve_collection_id(&[collection], "col-1", None, &config).unwrap();
             assert_eq!(collection_id, "col-1");
         }
 
@@ -1651,7 +1664,9 @@ mod tests {
         #[test]
         fn test_resolve_component_errors_for_unknown_custom_field() {
             let err = resolve_component(&sample_output(), "missing-field").unwrap_err();
-            assert!(err.to_string().contains("Item has no component 'missing-field'"));
+            assert!(err
+                .to_string()
+                .contains("Item has no component 'missing-field'"));
         }
 
         #[test]
@@ -1661,10 +1676,7 @@ mod tests {
             assert_eq!(
                 vars,
                 vec![
-                    (
-                        "MY_APP_URI".to_string(),
-                        "https://example.com".to_string()
-                    ),
+                    ("MY_APP_URI".to_string(), "https://example.com".to_string()),
                     ("MY_APP_USERNAME".to_string(), "user".to_string()),
                     ("MY_APP_PASSWORD".to_string(), "pass".to_string()),
                     ("MY_APP_API_TOKEN".to_string(), "tok-123".to_string()),

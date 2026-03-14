@@ -57,7 +57,9 @@ fn status_reports_logged_in_locked_details_from_saved_config() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Status: Logged in"))
-        .stdout(predicate::str::contains("Server: https://vault.example.com"))
+        .stdout(predicate::str::contains(
+            "Server: https://vault.example.com",
+        ))
         .stdout(predicate::str::contains("Client ID: client-id"))
         .stdout(predicate::str::contains("Email: user@example.com"))
         .stdout(predicate::str::contains("Token: Expired"))

@@ -10,7 +10,7 @@ fn config_load_fails_for_invalid_config_json() {
     ctx.set_process_env();
     ctx.write_raw_config("{not-json").unwrap();
 
-    let err = Config::load().err().expect("config load should fail");
+    let err = Config::load().expect_err("config load should fail");
 
     assert!(err.to_string().contains("Failed to parse config"));
 }
@@ -83,8 +83,7 @@ fn config_save_keys_fails_when_config_dir_is_missing() {
 
     let err = config
         .save_keys()
-        .err()
-        .expect("save_keys should fail without a config dir");
+        .expect_err("save_keys should fail without a config dir");
 
     assert!(err.to_string().contains("No such file"));
 }
