@@ -88,3 +88,43 @@ fn config_save_keys_fails_when_config_dir_is_missing() {
 
     assert!(err.to_string().contains("No such file"));
 }
+
+#[test]
+fn config_save_keys_round_trips_when_config_dir_exists() {
+    let _guard = env_lock();
+    let ctx = TestContext::new();
+    ctx.set_process_env();
+
+    let mut config = Config {
+        server: Some("https://vault.example.com".to_string()),
+        access_token: Some("token".to_string()),
+        crypto_keys: Some(vaultwarden_cli::crypto::CryptoKeys {
+            enc_key: vec![1u8; 32],
+            mac_key: vec![2u8; 32],
+        }),
+        ..Default::default()
+    };
+    config.org_crypto_keys.insert(
+        "org-1".to_string(),
+        vaultwarden_cli::crypto::CryptoKeys {
+            enc_key: vec![3u8; 32],
+            mac_key: vec![4u8; 32],
+        },
+    );
+
+    config.save().unwrap();
+    config.save_keys().unwrap();
+
+    let loaded = Config::load().unwrap();
+
+    let user_keys = loaded.crypto_keys.expect("user keys should load");
+    assert_eq!(user_keys.enc_key, vec![1u8; 32]);
+    assert_eq!(user_keys.mac_key, vec![2u8; 32]);
+
+    let org_keys = loaded
+        .org_crypto_keys
+        .get("org-1")
+        .expect("org keys should load");
+    assert_eq!(org_keys.enc_key, vec![3u8; 32]);
+    assert_eq!(org_keys.mac_key, vec![4u8; 32]);
+}
