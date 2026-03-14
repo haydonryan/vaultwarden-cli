@@ -91,6 +91,20 @@ impl TestContext {
         Ok(())
     }
 
+    pub fn write_saved_user_keys(&self, keys: &CryptoKeys) -> Result<()> {
+        self.write_raw_keys(&format!(
+            r#"{{
+                "user_keys": {{
+                    "enc_key": "{}",
+                    "mac_key": "{}"
+                }},
+                "org_keys": {{}}
+            }}"#,
+            BASE64.encode(&keys.enc_key),
+            BASE64.encode(&keys.mac_key)
+        ))
+    }
+
     pub fn read_config_json(&self) -> Result<serde_json::Value> {
         let content = fs::read_to_string(self.config_path())?;
         serde_json::from_str(&content).context("parse config json")
