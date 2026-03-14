@@ -3,7 +3,7 @@ mod support;
 use support::TestContext;
 use vaultwarden_cli::api::ApiClient;
 use vaultwarden_cli::config::Config;
-use wiremock::matchers::{body_string_contains, method, path};
+use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
@@ -212,4 +212,86 @@ async fn api_client_refresh_token_reports_malformed_json() {
         .expect("parse should fail");
 
     assert!(err.to_string().contains("Failed to parse token response"));
+}
+
+#[tokio::test]
+async fn api_client_sync_sends_bearer_token_and_parses_response() {
+    let mock_server = MockServer::start().await;
+    let response = serde_json::json!({
+        "Ciphers": [
+            {
+                "Id": "cipher-1",
+                "Type": 1,
+                "Name": "2.encrypted-name",
+                "Login": {
+                    "Username": "2.encrypted-username",
+                    "Password": "2.encrypted-password",
+                    "Uris": [
+                        { "Uri": "2.encrypted-uri", "Match": 0 }
+                    ]
+                }
+            }
+        ],
+        "Folders": [],
+        "Collections": [],
+        "Profile": {
+            "Id": "user-1",
+            "Email": "user@example.com",
+            "Organizations": []
+        }
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/api/sync"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::new(&mock_server.uri()).unwrap();
+    let sync = client.sync("access-token").await.unwrap();
+
+    assert_eq!(sync.ciphers.len(), 1);
+    assert_eq!(sync.profile.email, "user@example.com");
+}
+
+#[tokio::test]
+async fn api_client_sync_surfaces_non_success_responses() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/sync"))
+        .respond_with(ResponseTemplate::new(403).set_body_string("{\"error\":\"forbidden\"}"))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::new(&mock_server.uri()).unwrap();
+    let err = client.sync("access-token").await.err().expect("sync should fail");
+
+    let message = err.to_string();
+    assert!(message.contains("Sync failed (403 Forbidden)"));
+    assert!(message.contains("forbidden"));
+}
+
+#[tokio::test]
+async fn api_client_sync_reports_malformed_json() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/sync"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("null"))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::new(&mock_server.uri()).unwrap();
+    let err = client
+        .sync("access-token")
+        .await
+        .err()
+        .expect("parse should fail");
+
+    assert!(err.to_string().contains("Failed to parse sync response"));
 }
