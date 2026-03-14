@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
 use anyhow::{Context, Result};
 use assert_cmd::Command;
@@ -7,6 +9,7 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use tempfile::TempDir;
 use vaultwarden_cli::config::Config;
 use vaultwarden_cli::crypto::CryptoKeys;
@@ -20,6 +23,8 @@ type Aes256CbcEnc = Encryptor<aes::Aes256>;
 pub struct TestContext {
     temp_dir: TempDir,
 }
+
+static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 impl TestContext {
     pub fn new() -> Self {
@@ -97,6 +102,13 @@ impl TestContext {
         cmd.env("XDG_CONFIG_HOME", self.config_root());
         cmd
     }
+}
+
+pub fn env_lock() -> MutexGuard<'static, ()> {
+    ENV_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("env lock poisoned")
 }
 
 pub fn test_crypto_keys() -> CryptoKeys {
