@@ -144,7 +144,12 @@ pub fn test_crypto_keys() -> CryptoKeys {
     }
 }
 
-pub fn encrypted_user_key(password: &str, email: &str, iterations: u32, keys: &CryptoKeys) -> String {
+pub fn encrypted_user_key(
+    password: &str,
+    email: &str,
+    iterations: u32,
+    keys: &CryptoKeys,
+) -> String {
     let master_key = CryptoKeys::derive_master_key(password, email, iterations);
     let stretched = CryptoKeys::stretch_master_key(&master_key).expect("stretch master key");
 

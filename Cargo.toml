@@ -1,6 +1,6 @@
 [package]
 name = "vaultwarden-cli"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 description = "CLI client for Vaultwarden - retrieve secrets for batch files and environment variables"
 authors = ["Haydon Ryan", "AI coders and agents"]
