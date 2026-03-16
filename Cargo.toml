@@ -36,3 +36,15 @@ rstest = "0.26"
 rand = "0.10"
 assert_cmd = "2.0"
 predicates = "3.1"
+
+
+[package.metadata.release]
+allow-branch = ["main", "master"]
+sign-commit = false
+sign-tag = false
+push = true
+tag = true
+publish = false
+tag-name = "v{{version}}"
+tag-message = "release: v{{version}}"
+pre-release-commit-message = "release: v{{version}}"
