@@ -165,6 +165,10 @@ enum Commands {
         #[arg(short, long)]
         file: String,
 
+        /// Write the interpolated output to a file instead of stdout
+        #[arg(short, long)]
+        output: Option<String>,
+
         /// Skip missing secrets and leave placeholders unchanged
         #[arg(short = 's', long)]
         skip_missing: bool,
@@ -249,9 +253,11 @@ async fn main() {
             commands::run_with_secrets(Some(&uri), true, None, None, None, info, &command).await
         }
         Commands::Status => commands::status().await,
-        Commands::Interpolate { file, skip_missing } => {
-            commands::interpolate(&file, skip_missing).await
-        }
+        Commands::Interpolate {
+            file,
+            output,
+            skip_missing,
+        } => commands::interpolate(&file, output.as_deref(), skip_missing).await,
     };
 
     if let Err(e) = result {

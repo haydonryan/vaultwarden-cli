@@ -158,6 +158,9 @@ Replace placeholders like `((s3.username))` in a YAML file with Vaultwarden secr
 # Replace placeholders and write to a new file
 vaultwarden-cli interpolate --file config.yml > config.rendered.yml
 
+# Safely write to a file, including replacing the input file
+vaultwarden-cli interpolate --file config.yml --output config.yml
+
 # Leave missing placeholders untouched instead of failing
 vaultwarden-cli interpolate --file config.yml --skip-missing
 ```

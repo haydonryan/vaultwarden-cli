@@ -72,3 +72,18 @@ fn run_parses_trailing_command_after_double_dash() {
         .failure()
         .stderr(predicate::str::contains("Not logged in"));
 }
+
+#[test]
+fn interpolate_accepts_output_file_option() {
+    let ctx = TestContext::new();
+
+    ctx.binary()
+        .arg("interpolate")
+        .arg("--file")
+        .arg("config.yml")
+        .arg("--output")
+        .arg("rendered.yml")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Not logged in"));
+}

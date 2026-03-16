@@ -701,7 +701,7 @@ fn resolve_component(output: &CipherOutput, component: &str) -> Result<String> {
     }
 }
 
-pub async fn interpolate(file: &str, skip_missing: bool) -> Result<()> {
+pub async fn interpolate(file: &str, output_file: Option<&str>, skip_missing: bool) -> Result<()> {
     let mut config = Config::load()?;
     let access_token = ensure_valid_token(&mut config).await?;
     ensure_unlocked(&config)?;
@@ -762,8 +762,19 @@ pub async fn interpolate(file: &str, skip_missing: bool) -> Result<()> {
         anyhow::bail!("Interpolation failed:\n{}", missing.join("\n"));
     }
 
-    print!("{}", output);
+    write_interpolated_output(&output, output_file)?;
     Ok(())
+}
+
+fn write_interpolated_output(output: &str, output_file: Option<&str>) -> Result<()> {
+    match output_file {
+        Some(path) => fs::write(path, output)
+            .with_context(|| format!("Failed to write interpolated output to '{}'", path)),
+        None => {
+            print!("{}", output);
+            Ok(())
+        }
+    }
 }
 
 fn cipher_to_env_vars(output: &CipherOutput) -> Vec<(String, String)> {
@@ -1625,6 +1636,7 @@ mod tests {
 
     mod output_helper_tests {
         use super::*;
+        use tempfile::TempDir;
 
         fn sample_output() -> CipherOutput {
             CipherOutput {
@@ -1697,6 +1709,16 @@ mod tests {
 
             let vars = cipher_to_env_vars(&output);
             assert!(vars.is_empty());
+        }
+
+        #[test]
+        fn test_write_interpolated_output_writes_to_file() {
+            let temp_dir = TempDir::new().unwrap();
+            let path = temp_dir.path().join("config.yml");
+
+            write_interpolated_output("rendered: true\n", Some(path.to_str().unwrap())).unwrap();
+
+            assert_eq!(fs::read_to_string(path).unwrap(), "rendered: true\n");
         }
     }
 }
