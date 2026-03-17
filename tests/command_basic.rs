@@ -195,3 +195,70 @@ async fn run_with_collection_scope_injects_all_matching_items() {
         .stdout(predicate::str::contains("BETA_USERNAME"))
         .stdout(predicate::str::contains("BETA_PASSWORD"));
 }
+
+#[tokio::test]
+async fn interpolate_skip_missing_reports_unmatched_placeholders_on_stderr() {
+    let ctx = TestContext::new();
+    let keys = test_crypto_keys();
+    let mock_server = MockServer::start().await;
+    let input_path = ctx.root().join("config.yml");
+
+    std::fs::write(
+        &input_path,
+        "username: ((Alpha.username))\npassword: ((Missing.password))\n",
+    )
+    .unwrap();
+
+    let sync_response = serde_json::json!({
+        "Ciphers": [
+            {
+                "Id": "cipher-1",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Alpha", &keys),
+                "Login": {
+                    "Username": encrypt_string_for_test("alice", &keys),
+                    "Password": encrypt_string_for_test("alpha-secret", &keys)
+                },
+                "CollectionIds": []
+            }
+        ],
+        "Folders": [],
+        "Collections": [],
+        "Profile": {
+            "Id": "user-1",
+            "Email": "user@example.com",
+            "Organizations": []
+        }
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/api/sync"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    ctx.write_config(&Config {
+        server: Some(mock_server.uri()),
+        access_token: Some("access-token".to_string()),
+        token_expiry: Some(i64::MAX),
+        ..Default::default()
+    })
+    .unwrap();
+    ctx.write_saved_user_keys(&keys).unwrap();
+
+    ctx.binary()
+        .arg("interpolate")
+        .arg("--file")
+        .arg(&input_path)
+        .arg("--skip-missing")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("username: alice"))
+        .stdout(predicate::str::contains("password: ((Missing.password))"))
+        .stderr(predicate::str::contains(
+            "Unmatched placeholders left unchanged:",
+        ))
+        .stderr(predicate::str::contains("((Missing.password))"));
+}

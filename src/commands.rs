@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io::{self, Write};
 use std::process::Command;
@@ -725,8 +725,10 @@ pub async fn interpolate(file: &str, output_file: Option<&str>, skip_missing: bo
         fs::read_to_string(file).with_context(|| format!("Failed to read file '{}'", file))?;
     let re = Regex::new(r"\(\(([^\s()]+)\)\)").expect("valid regex");
     let mut missing: Vec<String> = Vec::new();
+    let mut unmatched_placeholders: Vec<String> = Vec::new();
 
     let output = re.replace_all(&input, |caps: &regex::Captures| {
+        let full_placeholder = caps[0].to_string();
         let placeholder = &caps[1];
         match parse_placeholder(placeholder) {
             Ok((raw_name, component)) => {
@@ -735,25 +737,28 @@ pub async fn interpolate(file: &str, output_file: Option<&str>, skip_missing: bo
                     Some(cipher) => match resolve_component(cipher, &component) {
                         Ok(value) => value,
                         Err(err) => {
+                            unmatched_placeholders.push(full_placeholder.clone());
                             if !skip_missing {
                                 missing.push(format!("{}: {}", placeholder, err));
                             }
-                            caps[0].to_string()
+                            full_placeholder
                         }
                     },
                     None => {
+                        unmatched_placeholders.push(full_placeholder.clone());
                         if !skip_missing {
                             missing.push(format!("{}: item '{}' not found", placeholder, raw_name));
                         }
-                        caps[0].to_string()
+                        full_placeholder
                     }
                 }
             }
             Err(err) => {
+                unmatched_placeholders.push(full_placeholder.clone());
                 if !skip_missing {
                     missing.push(format!("{}: {}", placeholder, err));
                 }
-                caps[0].to_string()
+                full_placeholder
             }
         }
     });
@@ -762,8 +767,26 @@ pub async fn interpolate(file: &str, output_file: Option<&str>, skip_missing: bo
         anyhow::bail!("Interpolation failed:\n{}", missing.join("\n"));
     }
 
+    if skip_missing {
+        if let Some(warning) = format_unmatched_placeholder_warning(&unmatched_placeholders) {
+            eprintln!("{}", warning);
+        }
+    }
+
     write_interpolated_output(&output, output_file)?;
     Ok(())
+}
+
+fn format_unmatched_placeholder_warning(placeholders: &[String]) -> Option<String> {
+    let unique: BTreeSet<&str> = placeholders.iter().map(String::as_str).collect();
+    if unique.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "Unmatched placeholders left unchanged:\n{}",
+        unique.into_iter().collect::<Vec<_>>().join("\n")
+    ))
 }
 
 fn write_interpolated_output(output: &str, output_file: Option<&str>) -> Result<()> {
@@ -1718,6 +1741,26 @@ mod tests {
             write_interpolated_output("rendered: true\n", Some(path.to_str().unwrap())).unwrap();
 
             assert_eq!(fs::read_to_string(path).unwrap(), "rendered: true\n");
+        }
+
+        #[test]
+        fn test_format_unmatched_placeholder_warning_deduplicates_and_sorts() {
+            let warning = format_unmatched_placeholder_warning(&[
+                "((beta.password))".to_string(),
+                "((alpha.username))".to_string(),
+                "((beta.password))".to_string(),
+            ])
+            .unwrap();
+
+            assert_eq!(
+                warning,
+                "Unmatched placeholders left unchanged:\n((alpha.username))\n((beta.password))"
+            );
+        }
+
+        #[test]
+        fn test_format_unmatched_placeholder_warning_returns_none_when_empty() {
+            assert!(format_unmatched_placeholder_warning(&[]).is_none());
         }
     }
 }
