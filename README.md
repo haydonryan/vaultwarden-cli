@@ -42,6 +42,14 @@ cargo build --release
 
 The binary will be at `target/release/vaultwarden-cli`.
 
+## Development
+
+Enable the repo's pre-commit hook to run formatting, clippy, and tests before each commit:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Usage
 
 ### Authentication
