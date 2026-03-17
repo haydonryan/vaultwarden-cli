@@ -1017,23 +1017,22 @@ pub async fn run_with_secrets(
             .map(|name| find_by_name_or_id(name))
             .collect::<Result<Vec<_>>>()?
     } else {
-        // No name specified — return the first item matching org/folder filters
-        let mut found: Option<CipherOutput> = None;
+        // No specific item requested — inject every item matching the scope filters.
+        let outputs: Vec<CipherOutput> = sync_response
+            .ciphers
+            .iter()
+            .filter(|cipher| matches_filters(cipher))
+            .filter_map(|cipher| {
+                let keys = get_cipher_keys(&config, cipher).ok()?;
+                decrypt_cipher(cipher, keys).ok()
+            })
+            .collect();
 
-        for cipher in &sync_response.ciphers {
-            if !matches_filters(cipher) {
-                continue;
-            }
-            let keys = match get_cipher_keys(&config, cipher) {
-                Ok(k) => k,
-                Err(_) => continue,
-            };
-            if let Ok(output) = decrypt_cipher(cipher, keys) {
-                found = Some(output);
-                break;
-            }
+        if outputs.is_empty() {
+            anyhow::bail!("No item found matching the specified filters");
         }
-        vec![found.context("No item found matching the specified filters")?]
+
+        outputs
     };
 
     // Build environment variables from the ciphers
