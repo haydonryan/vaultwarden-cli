@@ -105,7 +105,7 @@ jobs:
           body-includes: '<!-- rust-starter-coverage-comment -->'
 
       - name: Create or update PR coverage comment
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@v5
         with:
           issue-number: ${{ github.event.pull_request.number }}
           comment-id: ${{ steps.find-comment.outputs.comment-id }}
