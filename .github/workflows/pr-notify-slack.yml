@@ -1,21 +1,27 @@
 name: PR Notify
 
 permissions:
-  checks: write
   contents: read
 
 on:
-  pull_request:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - ready_for_review
 
 jobs:
   run:
-    name: Sent Notification of PR
+    name: Send Notification for External PRs
+    if: >
+      github.event.pull_request.user.login != github.repository_owner &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     env:
       SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
       SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
     steps:
-      - name: Post blocks to a Slack channel
+      - name: Post PR notification to Slack
         if: ${{ env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL_ID != '' }}
         uses: slackapi/slack-github-action@v3.0.1
         with:
@@ -23,4 +29,4 @@ jobs:
           token: ${{ secrets.SLACK_BOT_TOKEN }}
           payload: |
             channel: ${{ secrets.SLACK_CHANNEL_ID }}
-            text: "Incoming PR: ${{ github.event.pull_request.html_url}}"
+            text: "Incoming PR: ${{ github.event.pull_request.html_url }}"

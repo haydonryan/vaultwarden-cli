@@ -9,7 +9,6 @@ on:
       - ready_for_review
 
 permissions:
-  checks: write
   contents: write
   pull-requests: write
 
@@ -26,3 +25,24 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: gh pr merge --auto --squash "$PR_URL"
+
+  notify-on-auto-merge-failure:
+    name: Notify when dependabot auto-merge fails
+    needs: enable-auto-merge
+    if: >
+      always() &&
+      needs.enable-auto-merge.result == 'failure'
+    runs-on: ubuntu-latest
+    env:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+    steps:
+      - name: Post failed dependabot PR notification to Slack
+        if: ${{ env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL_ID != '' }}
+        uses: slackapi/slack-github-action@v3.0.1
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: ${{ secrets.SLACK_CHANNEL_ID }}
+            text: "Dependabot PR needs attention: ${{ github.event.pull_request.html_url }}"
