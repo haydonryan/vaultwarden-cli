@@ -13,7 +13,6 @@ on:
         type: string
 
 permissions:
-  checks: write
   contents: write
 
 env:
