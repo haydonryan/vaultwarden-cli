@@ -20,6 +20,28 @@ jobs:
       github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
+      - name: Detect workflow file changes
+        id: changed-files
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          files=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename')
+          if printf '%s\n' "$files" | grep -q '^.github/workflows/'; then
+            echo "touches_workflows=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "touches_workflows=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Require dedicated token for workflow changes
+        if: >
+          steps.changed-files.outputs.touches_workflows == 'true' &&
+          secrets.AUTOMERGE_GH_TOKEN == ''
+        run: |
+          echo "Dependabot PR modifies .github/workflows/*, but AUTOMERGE_GH_TOKEN is not configured." >&2
+          echo "Configure a repo secret named AUTOMERGE_GH_TOKEN with Pull requests: Write, Contents: Write, and Workflows: Write." >&2
+          exit 1
+
       - name: Enable squash auto-merge
         env:
           GH_TOKEN: ${{ secrets.AUTOMERGE_GH_TOKEN != '' && secrets.AUTOMERGE_GH_TOKEN || secrets.GITHUB_TOKEN }}
