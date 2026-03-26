@@ -87,7 +87,7 @@ jobs:
           steps.updated-tests.outcome == 'success' &&
           steps.updated-audit.outcome == 'success' &&
           steps.updated-deny.outcome == 'success'
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           add-paths: |
