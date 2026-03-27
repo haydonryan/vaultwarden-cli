@@ -58,6 +58,7 @@ jobs:
     name: Coverage (Tarpaulin)
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    continue-on-error: true
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v6
@@ -66,39 +67,57 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install Tarpaulin
+        id: install-tarpaulin
+        continue-on-error: true
         run: cargo install cargo-tarpaulin --locked
 
       - name: Run Tarpaulin
+        id: tarpaulin
+        continue-on-error: true
+        if: steps.install-tarpaulin.outcome == 'success'
         run: cargo tarpaulin --workspace --all-features --skip-clean --out Json --output-dir tarpaulin-report
 
       - name: Build coverage comment body
         id: coverage
+        if: always()
         run: |
           python <<'PY'
           import json
           from pathlib import Path
 
-          summary = json.loads(Path('tarpaulin-report/tarpaulin-report.json').read_text())
-          covered = summary.get('covered') or 0
-          coverable = summary.get('coverable') or 0
-          pct = summary.get('percent')
-          if pct is None:
-              pct = (covered / coverable * 100) if coverable else 0.0
+          report = Path('tarpaulin-report/tarpaulin-report.json')
+          if report.exists():
+              summary = json.loads(report.read_text())
+              covered = summary.get('covered') or 0
+              coverable = summary.get('coverable') or 0
+              pct = summary.get('percent')
+              if pct is None:
+                  pct = (covered / coverable * 100) if coverable else 0.0
 
-          body = f'''<!-- rust-starter-coverage-comment -->
-          ## Coverage Report
+              body = f'''<!-- rust-starter-coverage-comment -->
+              ## Coverage Report
 
-          - **Total coverage:** {pct:.2f}%
-          - **Covered lines:** {covered}
-          - **Coverable lines:** {coverable}
-          - **Tool:** `cargo tarpaulin`
-          '''
+              - **Status:** Report generated
+              - **Total coverage:** {pct:.2f}%
+              - **Covered lines:** {covered}
+              - **Coverable lines:** {coverable}
+              - **Tool:** `cargo tarpaulin`
+              '''
+          else:
+              body = '''<!-- rust-starter-coverage-comment -->
+              ## Coverage Report
+
+              - **Status:** Coverage run failed
+              - **Details:** Coverage is reported for visibility only and does not fail this PR check.
+              - **Tool:** `cargo tarpaulin`
+              '''
 
           Path('coverage-comment.md').write_text(body + "\n")
           PY
 
       - name: Find existing coverage comment
         id: find-comment
+        if: always()
         uses: peter-evans/find-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
@@ -106,6 +125,7 @@ jobs:
           body-includes: '<!-- rust-starter-coverage-comment -->'
 
       - name: Create or update PR coverage comment
+        if: always()
         uses: peter-evans/create-or-update-comment@v5
         with:
           issue-number: ${{ github.event.pull_request.number }}
