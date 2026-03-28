@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 
-use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 use anyhow::{Context, Result};
 use assert_cmd::Command;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use cbc::Encryptor;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;

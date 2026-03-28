@@ -2,7 +2,7 @@ mod support;
 
 use predicates::prelude::*;
 use support::{
-    encrypt_string_for_test, encrypted_user_key, env_lock, test_crypto_keys, TestContext,
+    TestContext, encrypt_string_for_test, encrypted_user_key, env_lock, test_crypto_keys,
 };
 use vaultwarden_cli::config::Config;
 use wiremock::matchers::{header, method, path};

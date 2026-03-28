@@ -1,10 +1,10 @@
-use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
 use anyhow::{Context, Result};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use pbkdf2::pbkdf2_hmac;
-use rsa::{pkcs8::DecodePrivateKey, Oaep, RsaPrivateKey};
+use rsa::{Oaep, RsaPrivateKey, pkcs8::DecodePrivateKey};
 use sha1::Sha1;
 use sha2::Sha256;
 
@@ -294,10 +294,12 @@ mod tests {
 
         let result = keys.decrypt("invalid_no_dot");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid encrypted string format"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid encrypted string format")
+        );
     }
 
     #[test]
@@ -310,10 +312,12 @@ mod tests {
         // Type 99 is not supported
         let result = keys.decrypt("99.abc|def|ghi");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Unsupported encryption type"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unsupported encryption type")
+        );
     }
 
     #[test]
@@ -325,10 +329,12 @@ mod tests {
 
         let result = keys.decrypt("abc.iv|ciphertext|mac");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid encryption type"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid encryption type")
+        );
     }
 
     #[test]
@@ -380,10 +386,12 @@ mod tests {
 
         let result = keys.decrypt("2.!!!invalid!!|AAAA|AAAA");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Failed to decode IV"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to decode IV")
+        );
     }
 
     #[test]
@@ -395,10 +403,12 @@ mod tests {
 
         let result = keys.decrypt("2.AAAAAAAAAAAAAAAAAAAAAA==|!!!invalid!!|AAAA");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Failed to decode ciphertext"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to decode ciphertext")
+        );
     }
 
     #[test]
@@ -425,10 +435,12 @@ mod tests {
         // Missing dot separator
         let result = CryptoKeys::decrypt_rsa("nodot", &private_key);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid encrypted string format"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid encrypted string format")
+        );
     }
 
     #[test]
@@ -440,10 +452,12 @@ mod tests {
         // Type "abc" is not a valid number
         let result = CryptoKeys::decrypt_rsa("abc.AAAA", &private_key);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid encryption type"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid encryption type")
+        );
     }
 
     #[test]
@@ -455,10 +469,12 @@ mod tests {
         // Type 5 is not supported (only 4 and 6)
         let result = CryptoKeys::decrypt_rsa("5.AAAA", &private_key);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Unsupported RSA encryption type"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unsupported RSA encryption type")
+        );
     }
 
     #[test]
@@ -469,10 +485,12 @@ mod tests {
 
         let result = CryptoKeys::decrypt_rsa("4.!!!notbase64!!!", &private_key);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Failed to decode RSA ciphertext"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to decode RSA ciphertext")
+        );
     }
 
     #[test]
@@ -495,7 +513,7 @@ mod tests {
     // Round-trip encryption/decryption test using real crypto
     mod roundtrip_tests {
         use super::*;
-        use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+        use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
         use hmac::{Hmac, Mac};
         use sha2::Sha256;
 

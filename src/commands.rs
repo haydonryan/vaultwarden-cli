@@ -251,27 +251,27 @@ async fn ensure_valid_token(config: &mut Config) -> Result<String> {
     // Check if token is expired
     let now = unix_now();
 
-    if let Some(expiry) = config.token_expiry {
-        if now >= expiry - 60 {
-            // Token expired or expiring soon, try to refresh
-            if let Some(refresh_token) = &config.refresh_token {
-                let api = ApiClient::from_config(config)?;
-                match api.refresh_token(refresh_token).await {
-                    Ok(token_response) => {
-                        let new_expiry = now + token_response.expires_in;
-                        config.access_token = Some(token_response.access_token.clone());
-                        config.refresh_token = token_response.refresh_token;
-                        config.token_expiry = Some(new_expiry);
-                        config.save()?;
-                        return Ok(token_response.access_token);
-                    }
-                    Err(_) => {
-                        anyhow::bail!("Token expired and refresh failed. Please login again.");
-                    }
+    if let Some(expiry) = config.token_expiry
+        && now >= expiry - 60
+    {
+        // Token expired or expiring soon, try to refresh
+        if let Some(refresh_token) = &config.refresh_token {
+            let api = ApiClient::from_config(config)?;
+            match api.refresh_token(refresh_token).await {
+                Ok(token_response) => {
+                    let new_expiry = now + token_response.expires_in;
+                    config.access_token = Some(token_response.access_token.clone());
+                    config.refresh_token = token_response.refresh_token;
+                    config.token_expiry = Some(new_expiry);
+                    config.save()?;
+                    return Ok(token_response.access_token);
                 }
-            } else {
-                anyhow::bail!("Token expired. Please login again.");
+                Err(_) => {
+                    anyhow::bail!("Token expired and refresh failed. Please login again.");
+                }
             }
+        } else {
+            anyhow::bail!("Token expired. Please login again.");
         }
     }
 
@@ -390,19 +390,19 @@ fn resolve_collection_id(
 
     // Try decrypted name match — collection names are encrypted with the org key
     for col in collections {
-        if let Some(oid) = org_id_filter {
-            if col.organization_id != oid {
-                continue;
-            }
+        if let Some(oid) = org_id_filter
+            && col.organization_id != oid
+        {
+            continue;
         }
         let keys = match config.get_keys_for_cipher(Some(&col.organization_id)) {
             Some(k) => k,
             None => continue,
         };
-        if let Ok(name) = keys.decrypt_to_string(&col.name) {
-            if name.eq_ignore_ascii_case(collection_filter) {
-                return Ok(col.id.clone());
-            }
+        if let Ok(name) = keys.decrypt_to_string(&col.name)
+            && name.eq_ignore_ascii_case(collection_filter)
+        {
+            return Ok(col.id.clone());
         }
     }
 
@@ -414,15 +414,15 @@ fn cipher_matches_filters(
     org_id_filter: Option<&str>,
     collection_id_filter: Option<&str>,
 ) -> bool {
-    if let Some(oid) = org_id_filter {
-        if cipher.organization_id.as_deref() != Some(oid) {
-            return false;
-        }
+    if let Some(oid) = org_id_filter
+        && cipher.organization_id.as_deref() != Some(oid)
+    {
+        return false;
     }
-    if let Some(cid) = collection_id_filter {
-        if !cipher.collection_ids.iter().any(|id| id == cid) {
-            return false;
-        }
+    if let Some(cid) = collection_id_filter
+        && !cipher.collection_ids.iter().any(|id| id == cid)
+    {
+        return false;
     }
     true
 }
@@ -589,17 +589,16 @@ pub async fn get(
                 Ok(k) => k,
                 Err(_) => continue,
             };
-            if let Ok(output) = decrypt_cipher(cipher, keys) {
-                if output.name.to_lowercase() == item_lower
+            if let Ok(output) = decrypt_cipher(cipher, keys)
+                && (output.name.to_lowercase() == item_lower
                     || output
                         .uri
                         .as_ref()
                         .map(|u| u.to_lowercase().contains(&item_lower))
-                        .unwrap_or(false)
-                {
-                    found = Some(output);
-                    break;
-                }
+                        .unwrap_or(false))
+            {
+                found = Some(output);
+                break;
             }
         }
 
@@ -657,13 +656,12 @@ pub async fn get_by_uri(
             Ok(k) => k,
             Err(_) => continue,
         };
-        if let Ok(output) = decrypt_cipher(cipher, keys) {
-            if let Some(item_uri) = &output.uri {
-                if item_uri.to_lowercase().contains(&uri_lower) {
-                    found = Some(output);
-                    break;
-                }
-            }
+        if let Ok(output) = decrypt_cipher(cipher, keys)
+            && let Some(item_uri) = &output.uri
+            && item_uri.to_lowercase().contains(&uri_lower)
+        {
+            found = Some(output);
+            break;
         }
     }
 
@@ -688,13 +686,12 @@ fn resolve_component(output: &CipherOutput, component: &str) -> Result<String> {
         "password" => output.password.clone().context("Item has no password"),
         "uri" => output.uri.clone().context("Item has no uri"),
         _ => {
-            if let Some(fields) = &output.fields {
-                if let Some(field) = fields
+            if let Some(fields) = &output.fields
+                && let Some(field) = fields
                     .iter()
                     .find(|f| f.name.eq_ignore_ascii_case(component))
-                {
-                    return Ok(field.value.clone());
-                }
+            {
+                return Ok(field.value.clone());
             }
             anyhow::bail!("Item has no component '{}'", component);
         }
@@ -767,10 +764,10 @@ pub async fn interpolate(file: &str, output_file: Option<&str>, skip_missing: bo
         anyhow::bail!("Interpolation failed:\n{}", missing.join("\n"));
     }
 
-    if skip_missing {
-        if let Some(warning) = format_unmatched_placeholder_warning(&unmatched_placeholders) {
-            eprintln!("{}", warning);
-        }
+    if skip_missing
+        && let Some(warning) = format_unmatched_placeholder_warning(&unmatched_placeholders)
+    {
+        eprintln!("{}", warning);
     }
 
     write_interpolated_output(&output, output_file)?;
@@ -959,20 +956,20 @@ pub async fn run_with_secrets(
 
     // Check whether a cipher passes the org/folder/collection filters
     let matches_filters = |cipher: &Cipher| -> bool {
-        if let Some(ref oid) = org_id_filter {
-            if cipher.organization_id.as_deref() != Some(oid.as_str()) {
-                return false;
-            }
+        if let Some(ref oid) = org_id_filter
+            && cipher.organization_id.as_deref() != Some(oid.as_str())
+        {
+            return false;
         }
-        if let Some(ref fid) = folder_id_filter {
-            if cipher.folder_id.as_deref() != Some(fid.as_str()) {
-                return false;
-            }
+        if let Some(ref fid) = folder_id_filter
+            && cipher.folder_id.as_deref() != Some(fid.as_str())
+        {
+            return false;
         }
-        if let Some(ref cid) = collection_id_filter {
-            if !cipher.collection_ids.iter().any(|id| id == cid) {
-                return false;
-            }
+        if let Some(ref cid) = collection_id_filter
+            && !cipher.collection_ids.iter().any(|id| id == cid)
+        {
+            return false;
         }
         true
     };
@@ -1000,11 +997,11 @@ pub async fn run_with_secrets(
                 Ok(k) => k,
                 Err(_) => continue,
             };
-            if let Ok(output) = decrypt_cipher(cipher, keys) {
-                if output.name.to_lowercase() == item_lower {
-                    found = Some(output);
-                    break;
-                }
+            if let Ok(output) = decrypt_cipher(cipher, keys)
+                && output.name.to_lowercase() == item_lower
+            {
+                found = Some(output);
+                break;
             }
         }
         found.context(format!("Item '{}' not found", name_or_id))
@@ -1024,13 +1021,12 @@ pub async fn run_with_secrets(
                 Ok(k) => k,
                 Err(_) => continue,
             };
-            if let Ok(output) = decrypt_cipher(cipher, keys) {
-                if let Some(item_uri) = &output.uri {
-                    if item_uri.to_lowercase().contains(&uri_lower) {
-                        found = Some(output);
-                        break;
-                    }
-                }
+            if let Ok(output) = decrypt_cipher(cipher, keys)
+                && let Some(item_uri) = &output.uri
+                && item_uri.to_lowercase().contains(&uri_lower)
+            {
+                found = Some(output);
+                break;
             }
         }
         vec![found.context(format!("No item found with URI containing '{}'", uri))?]
@@ -1283,8 +1279,8 @@ mod tests {
     mod filter_resolution_tests {
         use super::*;
         use crate::models::{Collection, Organization, Profile};
-        use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
-        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+        use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
         use cbc::Encryptor;
         use hmac::{Hmac, Mac};
         use sha2::Sha256;
@@ -1636,10 +1632,12 @@ mod tests {
             let cipher = create_minimal_cipher(Some("nonexistent-org"));
             let result = get_cipher_keys(&config, &cipher);
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Organization key not available"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Organization key not available")
+            );
         }
 
         #[test]
@@ -1649,10 +1647,12 @@ mod tests {
             let cipher = create_minimal_cipher(None);
             let result = get_cipher_keys(&config, &cipher);
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("No decryption keys"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("No decryption keys")
+            );
         }
     }
 
@@ -1698,9 +1698,10 @@ mod tests {
         #[test]
         fn test_resolve_component_errors_for_unknown_custom_field() {
             let err = resolve_component(&sample_output(), "missing-field").unwrap_err();
-            assert!(err
-                .to_string()
-                .contains("Item has no component 'missing-field'"));
+            assert!(
+                err.to_string()
+                    .contains("Item has no component 'missing-field'")
+            );
         }
 
         #[test]

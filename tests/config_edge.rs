@@ -1,6 +1,6 @@
 mod support;
 
-use support::{env_lock, TestContext};
+use support::{TestContext, env_lock};
 use vaultwarden_cli::config::Config;
 
 #[test]
