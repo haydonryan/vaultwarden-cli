@@ -265,3 +265,179 @@ async fn main() {
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cli_login_parsing() {
+        let cli = Cli::parse_from([
+            "vaultwarden-cli",
+            "login",
+            "--server",
+            "https://example.com",
+        ]);
+        match cli.command {
+            Commands::Login {
+                server,
+                client_id,
+                client_secret,
+            } => {
+                assert_eq!(server, Some("https://example.com".to_string()));
+                assert_eq!(client_id, None);
+                assert_eq!(client_secret, None);
+            }
+            _ => panic!("expected Login command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_unlock_parsing() {
+        let cli = Cli::parse_from(["vaultwarden-cli", "unlock", "--password", "secret"]);
+        match cli.command {
+            Commands::Unlock { password } => {
+                assert_eq!(password, Some("secret".to_string()));
+            }
+            _ => panic!("expected Unlock command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_get_username_flag_overrides_format() {
+        let cli = Cli::parse_from([
+            "vaultwarden-cli",
+            "get",
+            "item-name",
+            "--format",
+            "json",
+            "--username",
+        ]);
+        match cli.command {
+            Commands::Get {
+                item,
+                format,
+                username,
+                password,
+                org,
+                collection,
+            } => {
+                assert_eq!(item, "item-name");
+                assert!(username);
+                assert!(!password);
+                assert_eq!(format, "json");
+                assert_eq!(org, None);
+                assert_eq!(collection, None);
+            }
+            _ => panic!("expected Get command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_get_password_flag_overrides_format() {
+        let cli = Cli::parse_from(["vaultwarden-cli", "get", "item-name", "--password"]);
+        match cli.command {
+            Commands::Get {
+                item,
+                format,
+                username,
+                password,
+                org,
+                collection,
+            } => {
+                assert_eq!(item, "item-name");
+                assert!(!username);
+                assert!(password);
+                assert_eq!(format, "json"); // default
+                assert_eq!(org, None);
+                assert_eq!(collection, None);
+            }
+            _ => panic!("expected Get command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_get_uri_parsing() {
+        let cli = Cli::parse_from([
+            "vaultwarden-cli",
+            "get-uri",
+            "example.com",
+            "--format",
+            "env",
+        ]);
+        match cli.command {
+            Commands::GetUri {
+                uri,
+                format,
+                username,
+                password,
+                org,
+                collection,
+            } => {
+                assert_eq!(uri, "example.com");
+                assert_eq!(format, "env");
+                assert!(!username);
+                assert!(!password);
+                assert_eq!(org, None);
+                assert_eq!(collection, None);
+            }
+            _ => panic!("expected GetUri command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_run_parsing() {
+        let cli = Cli::parse_from([
+            "vaultwarden-cli",
+            "run",
+            "--name",
+            "My App",
+            "--",
+            "echo",
+            "hello",
+        ]);
+        match cli.command {
+            Commands::Run {
+                name,
+                org,
+                folder,
+                collection,
+                info,
+                command,
+            } => {
+                assert_eq!(name, Some("My App".to_string()));
+                assert_eq!(org, None);
+                assert_eq!(folder, None);
+                assert_eq!(collection, None);
+                assert!(!info);
+                assert_eq!(command, vec!["echo", "hello"]);
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_interpolate_parsing() {
+        let cli = Cli::parse_from([
+            "vaultwarden-cli",
+            "interpolate",
+            "--file",
+            "config.yml",
+            "--output",
+            "rendered.yml",
+            "--skip-missing",
+        ]);
+        match cli.command {
+            Commands::Interpolate {
+                file,
+                output,
+                skip_missing,
+            } => {
+                assert_eq!(file, "config.yml");
+                assert_eq!(output, Some("rendered.yml".to_string()));
+                assert!(skip_missing);
+            }
+            _ => panic!("expected Interpolate command"),
+        }
+    }
+}
