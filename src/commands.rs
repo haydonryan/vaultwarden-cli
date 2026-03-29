@@ -1559,6 +1559,126 @@ mod tests {
         }
     }
 
+    // Tests for ensure_valid_token helper
+    mod ensure_valid_token_tests {
+        use super::*;
+        use tokio::sync::Mutex;
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        static ENV_LOCK: Mutex<()> = Mutex::const_new(());
+
+        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) {
+            unsafe {
+                std::env::set_var("HOME", temp_dir.path());
+                std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
+            }
+        }
+
+        #[test]
+        fn test_ensure_valid_token_errors_when_not_logged_in() {
+            let _guard = tokio_test::block_on(ENV_LOCK.lock());
+            let mut config = Config::default();
+            let err = tokio_test::block_on(ensure_valid_token(&mut config)).unwrap_err();
+            assert!(err.to_string().contains("Not logged in"));
+        }
+
+        #[test]
+        fn test_ensure_valid_token_returns_token_when_not_expired() {
+            let _guard = tokio_test::block_on(ENV_LOCK.lock());
+            let mut config = Config {
+                access_token: Some("valid-token".to_string()),
+                token_expiry: Some(i64::MAX),
+                ..Default::default()
+            };
+            let token = tokio_test::block_on(ensure_valid_token(&mut config)).unwrap();
+            assert_eq!(token, "valid-token");
+        }
+
+        #[test]
+        fn test_ensure_valid_token_errors_when_expired_without_refresh() {
+            let _guard = tokio_test::block_on(ENV_LOCK.lock());
+            let mut config = Config {
+                access_token: Some("expired-token".to_string()),
+                token_expiry: Some(0),
+                ..Default::default()
+            };
+            let err = tokio_test::block_on(ensure_valid_token(&mut config)).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("Token expired. Please login again.")
+            );
+        }
+
+        #[tokio::test]
+        async fn test_ensure_valid_token_refreshes_successfully() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let response = serde_json::json!({
+                "access_token": "new-token",
+                "expires_in": 3600,
+                "token_type": "Bearer",
+                "refresh_token": "new-refresh"
+            });
+
+            Mock::given(method("POST"))
+                .and(path("/identity/connect/token"))
+                .and(body_string_contains("grant_type=refresh_token"))
+                .and(body_string_contains("refresh_token=old-refresh"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+                .mount(&mock_server)
+                .await;
+
+            let mut config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("expired-token".to_string()),
+                refresh_token: Some("old-refresh".to_string()),
+                token_expiry: Some(0),
+                ..Default::default()
+            };
+
+            let token = ensure_valid_token(&mut config).await.unwrap();
+            assert_eq!(token, "new-token");
+            assert_eq!(config.access_token, Some("new-token".to_string()));
+            assert_eq!(config.refresh_token, Some("new-refresh".to_string()));
+            assert!(config.token_expiry.unwrap() > 0);
+        }
+
+        #[tokio::test]
+        async fn test_ensure_valid_token_refresh_failure() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+
+            Mock::given(method("POST"))
+                .and(path("/identity/connect/token"))
+                .respond_with(
+                    ResponseTemplate::new(401).set_body_string("{\"error\":\"invalid_token\"}"),
+                )
+                .mount(&mock_server)
+                .await;
+
+            let mut config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("expired-token".to_string()),
+                refresh_token: Some("old-refresh".to_string()),
+                token_expiry: Some(0),
+                ..Default::default()
+            };
+
+            let err = ensure_valid_token(&mut config).await.unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("Token expired and refresh failed. Please login again.")
+            );
+        }
+    }
+
     // Tests for get_cipher_keys helper
     mod get_cipher_keys_tests {
         use super::*;
