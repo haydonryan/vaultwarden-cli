@@ -67,8 +67,14 @@ impl ApiClient {
 
     // Sync vault data
     pub async fn sync(&self, access_token: &str) -> Result<SyncResponse> {
-        self.get_json("/api/sync", access_token, "sync", "Sync", "Failed to parse sync response")
-            .await
+        self.get_json(
+            "/api/sync",
+            access_token,
+            "sync",
+            "Sync",
+            "Failed to parse sync response",
+        )
+        .await
     }
 
     // Check server status/health

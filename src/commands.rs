@@ -362,7 +362,9 @@ fn find_cipher_output(
             Ok(k) => k,
             Err(_) => continue,
         };
-        if let Ok(output) = decrypt_cipher(cipher, keys) && predicate(&output) {
+        if let Ok(output) = decrypt_cipher(cipher, keys)
+            && predicate(&output)
+        {
             return Some(output);
         }
     }
@@ -827,7 +829,10 @@ fn cipher_to_env_vars(output: &CipherOutput) -> Vec<(String, String)> {
 }
 
 fn get_field_string(field: &Option<String>, name: &str) -> Result<String> {
-    field.as_deref().with_context(|| format!("Item has no {}", name)).map(|s| s.to_string())
+    field
+        .as_deref()
+        .with_context(|| format!("Item has no {}", name))
+        .map(|s| s.to_string())
 }
 
 fn format_cipher_output(output: &CipherOutput, format: &str) -> Result<String> {
@@ -955,15 +960,14 @@ pub async fn run_with_secrets(
         })
         .transpose()?;
 
-    let matches_filters =
-        |cipher: &Cipher| -> bool {
-            cipher_matches_filters(
-                cipher,
-                org_id_filter.as_deref(),
-                collection_id_filter.as_deref(),
-                folder_id_filter.as_deref(),
-            )
-        };
+    let matches_filters = |cipher: &Cipher| -> bool {
+        cipher_matches_filters(
+            cipher,
+            org_id_filter.as_deref(),
+            collection_id_filter.as_deref(),
+            folder_id_filter.as_deref(),
+        )
+    };
 
     let find_by_name_or_id = |name_or_id: &str| -> Result<CipherOutput> {
         let cipher_by_id = ctx
@@ -990,18 +994,20 @@ pub async fn run_with_secrets(
     let outputs: Vec<CipherOutput> = if search_by_uri {
         let uri = item_or_uri.expect("URI required for URI search");
         let uri_lower = uri.to_lowercase();
-        vec![find_cipher_output(
-            &ctx.sync_response.ciphers,
-            &ctx.config,
-            |o| {
-                o.uri
-                    .as_ref()
-                    .map(|u| u.to_lowercase().contains(&uri_lower))
-                    .unwrap_or(false)
-            },
-            matches_filters,
-        )
-        .context(format!("No item found with URI containing '{}'", uri))?]
+        vec![
+            find_cipher_output(
+                &ctx.sync_response.ciphers,
+                &ctx.config,
+                |o| {
+                    o.uri
+                        .as_ref()
+                        .map(|u| u.to_lowercase().contains(&uri_lower))
+                        .unwrap_or(false)
+                },
+                matches_filters,
+            )
+            .context(format!("No item found with URI containing '{}'", uri))?,
+        ]
     } else if !requested_items.is_empty() {
         requested_items
             .iter()

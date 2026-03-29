@@ -212,8 +212,13 @@ async fn main() {
             org,
             collection,
         } => {
-            commands::get(&item, effective_format(&format, username, password), org, collection)
-                .await
+            commands::get(
+                &item,
+                effective_format(&format, username, password),
+                org,
+                collection,
+            )
+            .await
         }
         Commands::GetUri {
             uri,
