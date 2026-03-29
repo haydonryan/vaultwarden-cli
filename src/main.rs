@@ -175,6 +175,16 @@ enum Commands {
     },
 }
 
+fn effective_format(format: &str, username: bool, password: bool) -> &str {
+    if username {
+        "username"
+    } else if password {
+        "value"
+    } else {
+        format
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -202,15 +212,8 @@ async fn main() {
             org,
             collection,
         } => {
-            // --username and --password flags override --format
-            let effective_format = if username {
-                "username"
-            } else if password {
-                "value"
-            } else {
-                &format
-            };
-            commands::get(&item, effective_format, org, collection).await
+            commands::get(&item, effective_format(&format, username, password), org, collection)
+                .await
         }
         Commands::GetUri {
             uri,
@@ -220,15 +223,13 @@ async fn main() {
             org,
             collection,
         } => {
-            // --username and --password flags override --format
-            let effective_format = if username {
-                "username"
-            } else if password {
-                "value"
-            } else {
-                &format
-            };
-            commands::get_by_uri(&uri, effective_format, org, collection).await
+            commands::get_by_uri(
+                &uri,
+                effective_format(&format, username, password),
+                org,
+                collection,
+            )
+            .await
         }
         Commands::Run {
             name,

@@ -28,8 +28,6 @@ impl ApiClient {
 
     // OAuth2 token endpoint using client credentials
     pub async fn login(&self, client_id: &str, client_secret: &str) -> Result<TokenResponse> {
-        let url = format!("{}/identity/connect/token", self.base_url);
-
         let params = [
             ("grant_type", "client_credentials"),
             ("scope", "api"),
@@ -40,77 +38,37 @@ impl ApiClient {
             ("deviceName", "Vaultwarden CLI"),
         ];
 
-        let response = self
-            .client
-            .post(&url)
-            .form(&params)
-            .send()
-            .await
-            .context("Failed to send login request")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Login failed ({}): {}", status, body);
-        }
-
-        response
-            .json::<TokenResponse>()
-            .await
-            .context("Failed to parse token response")
+        self.post_form(
+            "/identity/connect/token",
+            &params,
+            "login",
+            "Login",
+            "Failed to parse token response",
+        )
+        .await
     }
 
     // Refresh access token
     pub async fn refresh_token(&self, refresh_token: &str) -> Result<TokenResponse> {
-        let url = format!("{}/identity/connect/token", self.base_url);
-
         let params = [
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token),
         ];
 
-        let response = self
-            .client
-            .post(&url)
-            .form(&params)
-            .send()
-            .await
-            .context("Failed to send refresh request")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Token refresh failed ({}): {}", status, body);
-        }
-
-        response
-            .json::<TokenResponse>()
-            .await
-            .context("Failed to parse token response")
+        self.post_form(
+            "/identity/connect/token",
+            &params,
+            "token refresh",
+            "Token refresh",
+            "Failed to parse token response",
+        )
+        .await
     }
 
     // Sync vault data
     pub async fn sync(&self, access_token: &str) -> Result<SyncResponse> {
-        let url = format!("{}/api/sync", self.base_url);
-
-        let response = self
-            .client
-            .get(&url)
-            .bearer_auth(access_token)
-            .send()
+        self.get_json("/api/sync", access_token, "sync", "Sync", "Failed to parse sync response")
             .await
-            .context("Failed to send sync request")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Sync failed ({}): {}", status, body);
-        }
-
-        response
-            .json::<SyncResponse>()
-            .await
-            .context("Failed to parse sync response")
     }
 
     // Check server status/health
@@ -125,5 +83,63 @@ impl ApiClient {
             .context("Failed to check server status")?;
 
         Ok(response.status().is_success())
+    }
+
+    async fn post_form<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        params: &[(&str, &str)],
+        operation: &str,
+        error_prefix: &str,
+        parse_context: &str,
+    ) -> Result<T> {
+        let url = format!("{}{}", self.base_url, path);
+        let response = self
+            .client
+            .post(&url)
+            .form(params)
+            .send()
+            .await
+            .with_context(|| format!("Failed to send {} request", operation))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("{} failed ({}): {}", error_prefix, status, body);
+        }
+
+        response
+            .json::<T>()
+            .await
+            .with_context(|| parse_context.to_string())
+    }
+
+    async fn get_json<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        access_token: &str,
+        operation: &str,
+        error_prefix: &str,
+        parse_context: &str,
+    ) -> Result<T> {
+        let url = format!("{}{}", self.base_url, path);
+        let response = self
+            .client
+            .get(&url)
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .with_context(|| format!("Failed to send {} request", operation))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("{} failed ({}): {}", error_prefix, status, body);
+        }
+
+        response
+            .json::<T>()
+            .await
+            .with_context(|| parse_context.to_string())
     }
 }

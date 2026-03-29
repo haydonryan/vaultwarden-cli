@@ -74,25 +74,15 @@ impl CryptoKeys {
             .decode(data)
             .context("Failed to decode RSA ciphertext")?;
 
-        match enc_type {
-            4 => {
-                // RSA-OAEP with SHA-1
-                let padding = Oaep::new::<Sha1>();
-                private_key
-                    .decrypt(padding, &ciphertext)
-                    .map_err(|e| anyhow::anyhow!("RSA-OAEP SHA1 decryption failed: {}", e))
-            }
-            6 => {
-                // RSA-OAEP with SHA-256
-                let padding = Oaep::new::<Sha256>();
-                private_key
-                    .decrypt(padding, &ciphertext)
-                    .map_err(|e| anyhow::anyhow!("RSA-OAEP SHA256 decryption failed: {}", e))
-            }
-            _ => {
-                anyhow::bail!("Unsupported RSA encryption type: {}", enc_type);
-            }
-        }
+        let padding = match enc_type {
+            4 => Oaep::new::<Sha1>(),
+            6 => Oaep::new::<Sha256>(),
+            _ => anyhow::bail!("Unsupported RSA encryption type: {}", enc_type),
+        };
+
+        private_key
+            .decrypt(padding, &ciphertext)
+            .map_err(|e| anyhow::anyhow!("RSA-OAEP decryption failed: {}", e))
     }
 
     /// Decrypt the user's RSA private key using their symmetric key
@@ -510,45 +500,40 @@ mod tests {
         assert_eq!(stretched.mac_key.len(), 32);
     }
 
-    // Round-trip encryption/decryption test using real crypto
-    mod roundtrip_tests {
-        use super::*;
+    fn encrypt_bytes_for_test(plaintext: &[u8], enc_key: &[u8], mac_key: &[u8]) -> String {
         use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
         use hmac::{Hmac, Mac};
         use sha2::Sha256;
 
         type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
 
-        fn encrypt_for_test(plaintext: &[u8], enc_key: &[u8], mac_key: &[u8]) -> String {
-            // Generate random IV
-            let iv: [u8; 16] = [
-                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
-                0x0e, 0x0f,
-            ];
+        let iv: Vec<u8> = (64u8..80).collect();
+        let mut buf = plaintext.to_vec();
+        let msg_len = buf.len();
+        buf.resize(msg_len + 16, 0);
 
-            // Encrypt with AES-256-CBC
-            let mut buf = vec![0u8; plaintext.len() + 16]; // Extra space for padding
-            buf[..plaintext.len()].copy_from_slice(plaintext);
+        let ciphertext = Aes256CbcEnc::new_from_slices(enc_key, &iv)
+            .unwrap()
+            .encrypt_padded_mut::<Pkcs7>(&mut buf, msg_len)
+            .unwrap()
+            .to_vec();
 
-            let ciphertext = Aes256CbcEnc::new_from_slices(enc_key, &iv)
-                .unwrap()
-                .encrypt_padded_mut::<Pkcs7>(&mut buf, plaintext.len())
-                .unwrap();
+        let mut hmac = Hmac::<Sha256>::new_from_slice(mac_key).unwrap();
+        hmac.update(&iv);
+        hmac.update(&ciphertext);
+        let mac = hmac.finalize().into_bytes();
 
-            // Calculate MAC
-            let mut hmac = Hmac::<Sha256>::new_from_slice(mac_key).unwrap();
-            hmac.update(&iv);
-            hmac.update(ciphertext);
-            let mac = hmac.finalize().into_bytes();
+        format!(
+            "2.{}|{}|{}",
+            BASE64.encode(&iv),
+            BASE64.encode(&ciphertext),
+            BASE64.encode(mac)
+        )
+    }
 
-            // Format as Bitwarden encrypted string
-            format!(
-                "2.{}|{}|{}",
-                BASE64.encode(iv),
-                BASE64.encode(ciphertext),
-                BASE64.encode(mac)
-            )
-        }
+    // Round-trip encryption/decryption test using real crypto
+    mod roundtrip_tests {
+        use super::*;
 
         #[test]
         fn test_roundtrip_simple_text() {
@@ -561,7 +546,7 @@ mod tests {
             };
 
             let plaintext = b"Hello, World!";
-            let encrypted = encrypt_for_test(plaintext, &enc_key, &mac_key);
+            let encrypted = encrypt_bytes_for_test(plaintext, &enc_key, &mac_key);
             let decrypted = keys.decrypt(&encrypted).unwrap();
 
             assert_eq!(decrypted, plaintext);
@@ -578,7 +563,7 @@ mod tests {
             };
 
             let plaintext = "Hello, 世界! 🔐";
-            let encrypted = encrypt_for_test(plaintext.as_bytes(), &enc_key, &mac_key);
+            let encrypted = encrypt_bytes_for_test(plaintext.as_bytes(), &enc_key, &mac_key);
             let decrypted = keys.decrypt_to_string(&encrypted).unwrap();
 
             assert_eq!(decrypted, plaintext);
@@ -595,7 +580,7 @@ mod tests {
             };
 
             let plaintext = b"";
-            let encrypted = encrypt_for_test(plaintext, &enc_key, &mac_key);
+            let encrypted = encrypt_bytes_for_test(plaintext, &enc_key, &mac_key);
             let decrypted = keys.decrypt(&encrypted).unwrap();
 
             assert_eq!(decrypted, plaintext);
@@ -613,7 +598,7 @@ mod tests {
 
             // Create a long string (multiple AES blocks)
             let plaintext: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
-            let encrypted = encrypt_for_test(&plaintext, &enc_key, &mac_key);
+            let encrypted = encrypt_bytes_for_test(&plaintext, &enc_key, &mac_key);
             let decrypted = keys.decrypt(&encrypted).unwrap();
 
             assert_eq!(decrypted, plaintext);
@@ -630,7 +615,7 @@ mod tests {
             };
 
             let plaintext = b"Secret data";
-            let encrypted = encrypt_for_test(plaintext, &enc_key, &mac_key);
+            let encrypted = encrypt_bytes_for_test(plaintext, &enc_key, &mac_key);
 
             // Tamper with the ciphertext
             let parts: Vec<&str> = encrypted.split('|').collect();
@@ -651,7 +636,7 @@ mod tests {
             };
 
             let plaintext = b"Secret data";
-            let encrypted = encrypt_for_test(plaintext, &enc_key, &mac_key);
+            let encrypted = encrypt_bytes_for_test(plaintext, &enc_key, &mac_key);
 
             // Decryption with wrong keys should fail MAC verification
             let result = wrong_keys.decrypt(&encrypted);
@@ -661,40 +646,10 @@ mod tests {
 
     mod rsa_roundtrip_tests {
         use super::*;
-        use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
-        use cbc::Encryptor;
-        use hmac::{Hmac, Mac};
         use rsa::pkcs8::EncodePrivateKey;
         use rsa::rand_core::OsRng;
         use rsa::{Oaep, RsaPrivateKey, RsaPublicKey};
         use sha2::Sha256;
-
-        type Aes256CbcEnc = Encryptor<aes::Aes256>;
-
-        fn encrypt_bytes_for_test(plaintext: &[u8], enc_key: &[u8], mac_key: &[u8]) -> String {
-            let iv: Vec<u8> = (64u8..80).collect();
-            let mut buf = plaintext.to_vec();
-            let msg_len = buf.len();
-            buf.resize(msg_len + 16, 0);
-
-            let ciphertext = Aes256CbcEnc::new_from_slices(enc_key, &iv)
-                .unwrap()
-                .encrypt_padded_mut::<Pkcs7>(&mut buf, msg_len)
-                .unwrap()
-                .to_vec();
-
-            let mut hmac = Hmac::<Sha256>::new_from_slice(mac_key).unwrap();
-            hmac.update(&iv);
-            hmac.update(&ciphertext);
-            let mac = hmac.finalize().into_bytes();
-
-            format!(
-                "2.{}|{}|{}",
-                BASE64.encode(&iv),
-                BASE64.encode(&ciphertext),
-                BASE64.encode(mac)
-            )
-        }
 
         #[test]
         fn test_decrypt_rsa_type4_success() {

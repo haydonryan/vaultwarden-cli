@@ -285,6 +285,90 @@ fn ensure_unlocked(config: &Config) -> Result<()> {
     Ok(())
 }
 
+struct SyncContext {
+    config: Config,
+    sync_response: crate::models::SyncResponse,
+}
+
+async fn load_sync_context() -> Result<SyncContext> {
+    let mut config = Config::load()?;
+    let access_token = ensure_valid_token(&mut config).await?;
+    ensure_unlocked(&config)?;
+    let api = ApiClient::from_config(&config)?;
+    let sync_response = api.sync(&access_token).await?;
+    Ok(SyncContext {
+        config,
+        sync_response,
+    })
+}
+
+fn resolve_org_and_collection_filters(
+    sync_response: &crate::models::SyncResponse,
+    config: &Config,
+    org_filter: Option<&str>,
+    collection_filter: Option<&str>,
+) -> Result<(Option<String>, Option<String>)> {
+    let org_id_filter = org_filter
+        .map(|org| resolve_org_id(&sync_response.profile, org))
+        .transpose()?;
+    let collection_id_filter = collection_filter
+        .map(|col| {
+            resolve_collection_id(
+                &sync_response.collections,
+                col,
+                org_id_filter.as_deref(),
+                config,
+            )
+        })
+        .transpose()?;
+    Ok((org_id_filter, collection_id_filter))
+}
+
+fn cipher_matches_filters(
+    cipher: &Cipher,
+    org_id_filter: Option<&str>,
+    collection_id_filter: Option<&str>,
+    folder_id_filter: Option<&str>,
+) -> bool {
+    if let Some(oid) = org_id_filter
+        && cipher.organization_id.as_deref() != Some(oid)
+    {
+        return false;
+    }
+    if let Some(fid) = folder_id_filter
+        && cipher.folder_id.as_deref() != Some(fid)
+    {
+        return false;
+    }
+    if let Some(cid) = collection_id_filter
+        && !cipher.collection_ids.iter().any(|id| id == cid)
+    {
+        return false;
+    }
+    true
+}
+
+fn find_cipher_output(
+    ciphers: &[Cipher],
+    config: &Config,
+    mut predicate: impl FnMut(&CipherOutput) -> bool,
+    matches_filters: impl Fn(&Cipher) -> bool,
+) -> Option<CipherOutput> {
+    for cipher in ciphers {
+        if !matches_filters(cipher) {
+            continue;
+        }
+        let keys = match get_cipher_keys(config, cipher) {
+            Ok(k) => k,
+            Err(_) => continue,
+        };
+        if let Ok(output) = decrypt_cipher(cipher, keys) && predicate(&output) {
+            return Some(output);
+        }
+    }
+    None
+}
+
 fn get_cipher_keys<'a>(config: &'a Config, cipher: &Cipher) -> Result<&'a CryptoKeys> {
     match config.get_keys_for_cipher(cipher.organization_id.as_deref()) {
         Some(keys) => Ok(keys),
@@ -300,31 +384,18 @@ fn get_cipher_keys<'a>(config: &'a Config, cipher: &Cipher) -> Result<&'a Crypto
     }
 }
 
+fn try_decrypt(keys: &CryptoKeys, encrypted: Option<&str>) -> Result<Option<String>> {
+    encrypted.map(|e| keys.decrypt_to_string(e)).transpose()
+}
+
 fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
-    // Get encrypted name
     let name = cipher.get_name().context("Cipher has no name")?;
     let decrypted_name = keys.decrypt_to_string(name)?;
 
-    // Decrypt other fields if present
-    let decrypted_username = cipher
-        .get_username()
-        .map(|u| keys.decrypt_to_string(u))
-        .transpose()?;
-
-    let decrypted_password = cipher
-        .get_password()
-        .map(|p| keys.decrypt_to_string(p))
-        .transpose()?;
-
-    let decrypted_uri = cipher
-        .get_uri()
-        .map(|u| keys.decrypt_to_string(u))
-        .transpose()?;
-
-    let decrypted_notes = cipher
-        .get_notes()
-        .map(|n| keys.decrypt_to_string(n))
-        .transpose()?;
+    let decrypted_username = try_decrypt(keys, cipher.get_username())?;
+    let decrypted_password = try_decrypt(keys, cipher.get_password())?;
+    let decrypted_uri = try_decrypt(keys, cipher.get_uri())?;
+    let decrypted_notes = try_decrypt(keys, cipher.get_notes())?;
 
     let decrypted_fields = cipher.get_fields().map(|fields| {
         fields
@@ -409,22 +480,18 @@ fn resolve_collection_id(
     anyhow::bail!("Collection '{}' not found", collection_filter)
 }
 
-fn cipher_matches_filters(
-    cipher: &Cipher,
-    org_id_filter: Option<&str>,
-    collection_id_filter: Option<&str>,
-) -> bool {
-    if let Some(oid) = org_id_filter
-        && cipher.organization_id.as_deref() != Some(oid)
-    {
-        return false;
-    }
-    if let Some(cid) = collection_id_filter
-        && !cipher.collection_ids.iter().any(|id| id == cid)
-    {
-        return false;
-    }
-    true
+fn output_matches_search(output: &CipherOutput, search_lower: &str) -> bool {
+    output.name.to_lowercase().contains(search_lower)
+        || output
+            .username
+            .as_ref()
+            .map(|u| u.to_lowercase().contains(search_lower))
+            .unwrap_or(false)
+        || output
+            .uri
+            .as_ref()
+            .map(|u| u.to_lowercase().contains(search_lower))
+            .unwrap_or(false)
 }
 
 pub async fn list(
@@ -433,37 +500,25 @@ pub async fn list(
     org_filter: Option<String>,
     collection_filter: Option<String>,
 ) -> Result<()> {
-    let mut config = Config::load()?;
-    let access_token = ensure_valid_token(&mut config).await?;
-    ensure_unlocked(&config)?;
-    let api = ApiClient::from_config(&config)?;
+    let ctx = load_sync_context().await?;
+    let (org_id_filter, collection_id_filter) = resolve_org_and_collection_filters(
+        &ctx.sync_response,
+        &ctx.config,
+        org_filter.as_deref(),
+        collection_filter.as_deref(),
+    )?;
 
-    let sync_response = api.sync(&access_token).await?;
-
-    // Resolve org filter
-    let org_id_filter = org_filter
-        .as_deref()
-        .map(|org| resolve_org_id(&sync_response.profile, org))
-        .transpose()?;
-
-    // Resolve collection filter
-    let collection_id_filter = collection_filter
-        .as_deref()
-        .map(|col| {
-            resolve_collection_id(
-                &sync_response.collections,
-                col,
-                org_id_filter.as_deref(),
-                &config,
-            )
-        })
-        .transpose()?;
-
-    let mut ciphers: Vec<&Cipher> = sync_response
+    let mut ciphers: Vec<&Cipher> = ctx
+        .sync_response
         .ciphers
         .iter()
         .filter(|c| {
-            cipher_matches_filters(c, org_id_filter.as_deref(), collection_id_filter.as_deref())
+            cipher_matches_filters(
+                c,
+                org_id_filter.as_deref(),
+                collection_id_filter.as_deref(),
+                None,
+            )
         })
         .collect();
 
@@ -482,7 +537,7 @@ pub async fn list(
     // Decrypt and filter
     let mut outputs: Vec<CipherOutput> = Vec::new();
     for cipher in ciphers {
-        let keys = match get_cipher_keys(&config, cipher) {
+        let keys = match get_cipher_keys(&ctx.config, cipher) {
             Ok(k) => k,
             Err(e) => {
                 eprintln!("Warning: No keys for cipher {}: {}", cipher.id, e);
@@ -492,24 +547,10 @@ pub async fn list(
 
         match decrypt_cipher(cipher, keys) {
             Ok(output) => {
-                // Apply search filter on decrypted data
-                if let Some(search_term) = &search {
-                    let search_lower = search_term.to_lowercase();
-                    let matches = output.name.to_lowercase().contains(&search_lower)
-                        || output
-                            .username
-                            .as_ref()
-                            .map(|u| u.to_lowercase().contains(&search_lower))
-                            .unwrap_or(false)
-                        || output
-                            .uri
-                            .as_ref()
-                            .map(|u| u.to_lowercase().contains(&search_lower))
-                            .unwrap_or(false);
-
-                    if !matches {
-                        continue;
-                    }
+                if let Some(search_term) = &search
+                    && !output_matches_search(&output, &search_term.to_lowercase())
+                {
+                    continue;
                 }
                 outputs.push(output);
             }
@@ -524,9 +565,7 @@ pub async fn list(
         return Ok(());
     }
 
-    // Output as JSON array
     println!("{}", serde_json::to_string_pretty(&outputs)?);
-
     Ok(())
 }
 
@@ -536,73 +575,47 @@ pub async fn get(
     org_filter: Option<String>,
     collection_filter: Option<String>,
 ) -> Result<()> {
-    let mut config = Config::load()?;
-    let access_token = ensure_valid_token(&mut config).await?;
-    ensure_unlocked(&config)?;
-    let api = ApiClient::from_config(&config)?;
-
-    let sync_response = api.sync(&access_token).await?;
-
-    // Resolve org filter
-    let org_id_filter = org_filter
-        .as_deref()
-        .map(|org| resolve_org_id(&sync_response.profile, org))
-        .transpose()?;
-
-    // Resolve collection filter
-    let collection_id_filter = collection_filter
-        .as_deref()
-        .map(|col| {
-            resolve_collection_id(
-                &sync_response.collections,
-                col,
-                org_id_filter.as_deref(),
-                &config,
-            )
-        })
-        .transpose()?;
+    let ctx = load_sync_context().await?;
+    let (org_id_filter, collection_id_filter) = resolve_org_and_collection_filters(
+        &ctx.sync_response,
+        &ctx.config,
+        org_filter.as_deref(),
+        collection_filter.as_deref(),
+    )?;
 
     let matches = |c: &Cipher| -> bool {
-        cipher_matches_filters(c, org_id_filter.as_deref(), collection_id_filter.as_deref())
+        cipher_matches_filters(
+            c,
+            org_id_filter.as_deref(),
+            collection_id_filter.as_deref(),
+            None,
+        )
     };
 
-    // Find the cipher by ID first
-    let cipher = sync_response
+    let cipher = ctx
+        .sync_response
         .ciphers
         .iter()
         .find(|c| c.id == item && matches(c));
 
-    // If not found by ID, decrypt all and search by name/uri
     let output = if let Some(cipher) = cipher {
-        let keys = get_cipher_keys(&config, cipher)?;
+        let keys = get_cipher_keys(&ctx.config, cipher)?;
         decrypt_cipher(cipher, keys)?
     } else {
-        // Search through decrypted ciphers
         let item_lower = item.to_lowercase();
-        let mut found: Option<CipherOutput> = None;
-
-        for cipher in &sync_response.ciphers {
-            if !matches(cipher) {
-                continue;
-            }
-            let keys = match get_cipher_keys(&config, cipher) {
-                Ok(k) => k,
-                Err(_) => continue,
-            };
-            if let Ok(output) = decrypt_cipher(cipher, keys)
-                && (output.name.to_lowercase() == item_lower
-                    || output
-                        .uri
+        find_cipher_output(
+            &ctx.sync_response.ciphers,
+            &ctx.config,
+            |o| {
+                o.name.to_lowercase() == item_lower
+                    || o.uri
                         .as_ref()
                         .map(|u| u.to_lowercase().contains(&item_lower))
-                        .unwrap_or(false))
-            {
-                found = Some(output);
-                break;
-            }
-        }
-
-        found.context(format!("Item '{}' not found", item))?
+                        .unwrap_or(false)
+            },
+            matches,
+        )
+        .context(format!("Item '{}' not found", item))?
     };
 
     print_cipher_output(&output, format)
@@ -614,58 +627,34 @@ pub async fn get_by_uri(
     org_filter: Option<String>,
     collection_filter: Option<String>,
 ) -> Result<()> {
-    let mut config = Config::load()?;
-    let access_token = ensure_valid_token(&mut config).await?;
-    ensure_unlocked(&config)?;
-    let api = ApiClient::from_config(&config)?;
+    let ctx = load_sync_context().await?;
+    let (org_id_filter, collection_id_filter) = resolve_org_and_collection_filters(
+        &ctx.sync_response,
+        &ctx.config,
+        org_filter.as_deref(),
+        collection_filter.as_deref(),
+    )?;
 
-    let sync_response = api.sync(&access_token).await?;
-
-    // Resolve org filter
-    let org_id_filter = org_filter
-        .as_deref()
-        .map(|org| resolve_org_id(&sync_response.profile, org))
-        .transpose()?;
-
-    // Resolve collection filter
-    let collection_id_filter = collection_filter
-        .as_deref()
-        .map(|col| {
-            resolve_collection_id(
-                &sync_response.collections,
-                col,
-                org_id_filter.as_deref(),
-                &config,
-            )
-        })
-        .transpose()?;
-
-    // Search through decrypted ciphers by URI
     let uri_lower = uri.to_lowercase();
-    let mut found: Option<CipherOutput> = None;
-
-    for cipher in &sync_response.ciphers {
-        if !cipher_matches_filters(
-            cipher,
-            org_id_filter.as_deref(),
-            collection_id_filter.as_deref(),
-        ) {
-            continue;
-        }
-        let keys = match get_cipher_keys(&config, cipher) {
-            Ok(k) => k,
-            Err(_) => continue,
-        };
-        if let Ok(output) = decrypt_cipher(cipher, keys)
-            && let Some(item_uri) = &output.uri
-            && item_uri.to_lowercase().contains(&uri_lower)
-        {
-            found = Some(output);
-            break;
-        }
-    }
-
-    let output = found.context(format!("No item found with URI containing '{}'", uri))?;
+    let output = find_cipher_output(
+        &ctx.sync_response.ciphers,
+        &ctx.config,
+        |o| {
+            o.uri
+                .as_ref()
+                .map(|u| u.to_lowercase().contains(&uri_lower))
+                .unwrap_or(false)
+        },
+        |c| {
+            cipher_matches_filters(
+                c,
+                org_id_filter.as_deref(),
+                collection_id_filter.as_deref(),
+                None,
+            )
+        },
+    )
+    .context(format!("No item found with URI containing '{}'", uri))?;
 
     print_cipher_output(&output, format)
 }
@@ -680,11 +669,15 @@ fn parse_placeholder(placeholder: &str) -> Result<(String, String)> {
     Ok((name.to_string(), component.to_string()))
 }
 
+fn clone_option<T: Clone>(opt: &Option<T>, name: &str) -> Result<T> {
+    opt.clone().with_context(|| format!("Item has no {}", name))
+}
+
 fn resolve_component(output: &CipherOutput, component: &str) -> Result<String> {
     match component.to_lowercase().as_str() {
-        "username" => output.username.clone().context("Item has no username"),
-        "password" => output.password.clone().context("Item has no password"),
-        "uri" => output.uri.clone().context("Item has no uri"),
+        "username" => clone_option(&output.username, "username"),
+        "password" => clone_option(&output.password, "password"),
+        "uri" => clone_option(&output.uri, "uri"),
         _ => {
             if let Some(fields) = &output.fields
                 && let Some(field) = fields
@@ -698,17 +691,27 @@ fn resolve_component(output: &CipherOutput, component: &str) -> Result<String> {
     }
 }
 
-pub async fn interpolate(file: &str, output_file: Option<&str>, skip_missing: bool) -> Result<()> {
-    let mut config = Config::load()?;
-    let access_token = ensure_valid_token(&mut config).await?;
-    ensure_unlocked(&config)?;
-    let api = ApiClient::from_config(&config)?;
+fn track_missing_placeholder(
+    placeholder: &str,
+    error: &str,
+    full: &str,
+    skip_missing: bool,
+    missing: &mut Vec<String>,
+    unmatched: &mut Vec<String>,
+) -> String {
+    unmatched.push(full.to_string());
+    if !skip_missing {
+        missing.push(format!("{}: {}", placeholder, error));
+    }
+    full.to_string()
+}
 
-    let sync_response = api.sync(&access_token).await?;
+pub async fn interpolate(file: &str, output_file: Option<&str>, skip_missing: bool) -> Result<()> {
+    let ctx = load_sync_context().await?;
     let mut by_name: HashMap<String, CipherOutput> = HashMap::new();
 
-    for cipher in &sync_response.ciphers {
-        let keys = match get_cipher_keys(&config, cipher) {
+    for cipher in &ctx.sync_response.ciphers {
+        let keys = match get_cipher_keys(&ctx.config, cipher) {
             Ok(k) => k,
             Err(_) => continue,
         };
@@ -733,30 +736,33 @@ pub async fn interpolate(file: &str, output_file: Option<&str>, skip_missing: bo
                 match by_name.get(&key) {
                     Some(cipher) => match resolve_component(cipher, &component) {
                         Ok(value) => value,
-                        Err(err) => {
-                            unmatched_placeholders.push(full_placeholder.clone());
-                            if !skip_missing {
-                                missing.push(format!("{}: {}", placeholder, err));
-                            }
-                            full_placeholder
-                        }
+                        Err(err) => track_missing_placeholder(
+                            placeholder,
+                            &err.to_string(),
+                            &full_placeholder,
+                            skip_missing,
+                            &mut missing,
+                            &mut unmatched_placeholders,
+                        ),
                     },
-                    None => {
-                        unmatched_placeholders.push(full_placeholder.clone());
-                        if !skip_missing {
-                            missing.push(format!("{}: item '{}' not found", placeholder, raw_name));
-                        }
-                        full_placeholder
-                    }
+                    None => track_missing_placeholder(
+                        placeholder,
+                        &format!("item '{}' not found", raw_name),
+                        &full_placeholder,
+                        skip_missing,
+                        &mut missing,
+                        &mut unmatched_placeholders,
+                    ),
                 }
             }
-            Err(err) => {
-                unmatched_placeholders.push(full_placeholder.clone());
-                if !skip_missing {
-                    missing.push(format!("{}: {}", placeholder, err));
-                }
-                full_placeholder
-            }
+            Err(err) => track_missing_placeholder(
+                placeholder,
+                &err.to_string(),
+                &full_placeholder,
+                skip_missing,
+                &mut missing,
+                &mut unmatched_placeholders,
+            ),
         }
     });
 
@@ -820,6 +826,10 @@ fn cipher_to_env_vars(output: &CipherOutput) -> Vec<(String, String)> {
     vars
 }
 
+fn get_field_string(field: &Option<String>, name: &str) -> Result<String> {
+    field.as_deref().with_context(|| format!("Item has no {}", name)).map(|s| s.to_string())
+}
+
 fn format_cipher_output(output: &CipherOutput, format: &str) -> Result<String> {
     match format {
         "json" => Ok(serde_json::to_string_pretty(output)?),
@@ -830,16 +840,8 @@ fn format_cipher_output(output: &CipherOutput, format: &str) -> Result<String> {
             }
             Ok(lines)
         }
-        "value" | "password" => Ok(output
-            .password
-            .as_deref()
-            .context("Item has no password")?
-            .to_string()),
-        "username" => Ok(output
-            .username
-            .as_deref()
-            .context("Item has no username")?
-            .to_string()),
+        "value" | "password" => get_field_string(&output.password, "password"),
+        "username" => get_field_string(&output.username, "username"),
         _ => {
             anyhow::bail!(
                 "Unknown format: {}. Use: json, env, value, username",
@@ -866,11 +868,14 @@ fn sanitize_env_name(name: &str) -> String {
 }
 
 fn escape_value(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('$', "\\$")
-        .replace('`', "\\`")
+    let mut result = String::with_capacity(value.len());
+    for c in value.chars() {
+        if matches!(c, '\\' | '"' | '$' | '`') {
+            result.push('\\');
+        }
+        result.push(c);
+    }
+    result
 }
 
 pub async fn run_with_secrets(
@@ -910,27 +915,18 @@ pub async fn run_with_secrets(
         anyhow::bail!("No item names provided.");
     }
 
-    let mut config = Config::load()?;
-    let access_token = ensure_valid_token(&mut config).await?;
-    ensure_unlocked(&config)?;
-    let api = ApiClient::from_config(&config)?;
+    let ctx = load_sync_context().await?;
 
-    let sync_response = api.sync(&access_token).await?;
-
-    // Resolve org filter
     let org_id_filter = org_filter
-        .map(|org| resolve_org_id(&sync_response.profile, org))
+        .map(|org| resolve_org_id(&ctx.sync_response.profile, org))
         .transpose()?;
 
-    // Resolve folder_filter to a folder ID (folder names are encrypted)
     let folder_id_filter: Option<String> = if let Some(folder) = folder_filter {
-        // Try exact ID match first
-        if let Some(f) = sync_response.folders.iter().find(|f| f.id == folder) {
+        if let Some(f) = ctx.sync_response.folders.iter().find(|f| f.id == folder) {
             Some(f.id.clone())
         } else {
-            // Try decrypted name match using the user's vault key
-            let user_keys = config.crypto_keys.as_ref().context("Vault locked")?;
-            let matched = sync_response.folders.iter().find(|f| {
+            let user_keys = ctx.config.crypto_keys.as_ref().context("Vault locked")?;
+            let matched = ctx.sync_response.folders.iter().find(|f| {
                 user_keys
                     .decrypt_to_string(&f.name)
                     .ok()
@@ -948,107 +944,77 @@ pub async fn run_with_secrets(
         None
     };
 
-    // Resolve collection filter
     let collection_id_filter = collection_filter
         .map(|col| {
             resolve_collection_id(
-                &sync_response.collections,
+                &ctx.sync_response.collections,
                 col,
                 org_id_filter.as_deref(),
-                &config,
+                &ctx.config,
             )
         })
         .transpose()?;
 
-    // Check whether a cipher passes the org/folder/collection filters
-    let matches_filters = |cipher: &Cipher| -> bool {
-        if let Some(ref oid) = org_id_filter
-            && cipher.organization_id.as_deref() != Some(oid.as_str())
-        {
-            return false;
-        }
-        if let Some(ref fid) = folder_id_filter
-            && cipher.folder_id.as_deref() != Some(fid.as_str())
-        {
-            return false;
-        }
-        if let Some(ref cid) = collection_id_filter
-            && !cipher.collection_ids.iter().any(|id| id == cid)
-        {
-            return false;
-        }
-        true
-    };
+    let matches_filters =
+        |cipher: &Cipher| -> bool {
+            cipher_matches_filters(
+                cipher,
+                org_id_filter.as_deref(),
+                collection_id_filter.as_deref(),
+                folder_id_filter.as_deref(),
+            )
+        };
 
     let find_by_name_or_id = |name_or_id: &str| -> Result<CipherOutput> {
-        // Search by ID first, then by name
-        let cipher_by_id = sync_response
+        let cipher_by_id = ctx
+            .sync_response
             .ciphers
             .iter()
             .find(|c| c.id == name_or_id && matches_filters(c));
 
         if let Some(cipher) = cipher_by_id {
-            let keys = get_cipher_keys(&config, cipher)?;
+            let keys = get_cipher_keys(&ctx.config, cipher)?;
             return decrypt_cipher(cipher, keys);
         }
 
         let item_lower = name_or_id.to_lowercase();
-        let mut found: Option<CipherOutput> = None;
-
-        for cipher in &sync_response.ciphers {
-            if !matches_filters(cipher) {
-                continue;
-            }
-            let keys = match get_cipher_keys(&config, cipher) {
-                Ok(k) => k,
-                Err(_) => continue,
-            };
-            if let Ok(output) = decrypt_cipher(cipher, keys)
-                && output.name.to_lowercase() == item_lower
-            {
-                found = Some(output);
-                break;
-            }
-        }
-        found.context(format!("Item '{}' not found", name_or_id))
+        find_cipher_output(
+            &ctx.sync_response.ciphers,
+            &ctx.config,
+            |o| o.name.to_lowercase() == item_lower,
+            matches_filters,
+        )
+        .context(format!("Item '{}' not found", name_or_id))
     };
 
-    // Find matching items
     let outputs: Vec<CipherOutput> = if search_by_uri {
         let uri = item_or_uri.expect("URI required for URI search");
         let uri_lower = uri.to_lowercase();
-        let mut found: Option<CipherOutput> = None;
-
-        for cipher in &sync_response.ciphers {
-            if !matches_filters(cipher) {
-                continue;
-            }
-            let keys = match get_cipher_keys(&config, cipher) {
-                Ok(k) => k,
-                Err(_) => continue,
-            };
-            if let Ok(output) = decrypt_cipher(cipher, keys)
-                && let Some(item_uri) = &output.uri
-                && item_uri.to_lowercase().contains(&uri_lower)
-            {
-                found = Some(output);
-                break;
-            }
-        }
-        vec![found.context(format!("No item found with URI containing '{}'", uri))?]
+        vec![find_cipher_output(
+            &ctx.sync_response.ciphers,
+            &ctx.config,
+            |o| {
+                o.uri
+                    .as_ref()
+                    .map(|u| u.to_lowercase().contains(&uri_lower))
+                    .unwrap_or(false)
+            },
+            matches_filters,
+        )
+        .context(format!("No item found with URI containing '{}'", uri))?]
     } else if !requested_items.is_empty() {
         requested_items
             .iter()
             .map(|name| find_by_name_or_id(name))
             .collect::<Result<Vec<_>>>()?
     } else {
-        // No specific item requested — inject every item matching the scope filters.
-        let outputs: Vec<CipherOutput> = sync_response
+        let outputs: Vec<CipherOutput> = ctx
+            .sync_response
             .ciphers
             .iter()
             .filter(|cipher| matches_filters(cipher))
             .filter_map(|cipher| {
-                let keys = get_cipher_keys(&config, cipher).ok()?;
+                let keys = get_cipher_keys(&ctx.config, cipher).ok()?;
                 decrypt_cipher(cipher, keys).ok()
             })
             .collect();
@@ -1383,7 +1349,7 @@ mod tests {
                 data: None,
             };
 
-            assert!(cipher_matches_filters(&cipher, None, None));
+            assert!(cipher_matches_filters(&cipher, None, None, None));
         }
 
         #[test]
@@ -1407,17 +1373,20 @@ mod tests {
             assert!(cipher_matches_filters(
                 &cipher,
                 Some("org-1"),
-                Some("col-2")
+                Some("col-2"),
+                None
             ));
             assert!(!cipher_matches_filters(
                 &cipher,
                 Some("org-2"),
-                Some("col-2")
+                Some("col-2"),
+                None
             ));
             assert!(!cipher_matches_filters(
                 &cipher,
                 Some("org-1"),
-                Some("col-9")
+                Some("col-9"),
+                None
             ));
         }
 

@@ -181,21 +181,24 @@ struct SavedKeys {
     org_keys: HashMap<String, KeyData>,
 }
 
+fn keyring_entry(client_id: &str) -> Result<keyring::Entry> {
+    Ok(keyring::Entry::new("vaultwarden-cli", client_id)?)
+}
+
 // Store client secret securely using keyring
 pub fn store_client_secret(client_id: &str, secret: &str) -> Result<()> {
-    let entry = keyring::Entry::new("vaultwarden-cli", client_id)?;
-    entry.set_password(secret)?;
+    keyring_entry(client_id)?.set_password(secret)?;
     Ok(())
 }
 
 pub fn get_client_secret(client_id: &str) -> Result<String> {
-    let entry = keyring::Entry::new("vaultwarden-cli", client_id)?;
-    entry.get_password().context("Client secret not found")
+    keyring_entry(client_id)?
+        .get_password()
+        .context("Client secret not found")
 }
 
 pub fn delete_client_secret(client_id: &str) -> Result<()> {
-    let entry = keyring::Entry::new("vaultwarden-cli", client_id)?;
-    entry.delete_credential().ok(); // Ignore errors if not found
+    keyring_entry(client_id)?.delete_credential().ok(); // Ignore errors if not found
     Ok(())
 }
 

@@ -185,53 +185,56 @@ impl Cipher {
         }
     }
 
+    fn resolve_field<'a>(
+        &'a self,
+        direct: Option<&'a str>,
+        nested: impl FnOnce(&'a CipherData) -> Option<&'a str>,
+    ) -> Option<&'a str> {
+        direct.or_else(|| self.data.as_ref().and_then(nested))
+    }
+
     // Get the name from either direct field or nested data
     pub fn get_name(&self) -> Option<&str> {
-        self.name
-            .as_deref()
-            .or_else(|| self.data.as_ref().and_then(|d| d.name.as_deref()))
+        self.resolve_field(self.name.as_deref(), |d| d.name.as_deref())
     }
 
     // Get username from login or nested data
     pub fn get_username(&self) -> Option<&str> {
-        self.login
-            .as_ref()
-            .and_then(|l| l.username.as_deref())
-            .or_else(|| self.data.as_ref().and_then(|d| d.username.as_deref()))
+        self.resolve_field(
+            self.login.as_ref().and_then(|l| l.username.as_deref()),
+            |d| d.username.as_deref(),
+        )
     }
 
     // Get password from login or nested data
     pub fn get_password(&self) -> Option<&str> {
-        self.login
-            .as_ref()
-            .and_then(|l| l.password.as_deref())
-            .or_else(|| self.data.as_ref().and_then(|d| d.password.as_deref()))
+        self.resolve_field(
+            self.login.as_ref().and_then(|l| l.password.as_deref()),
+            |d| d.password.as_deref(),
+        )
     }
 
     // Get URI from login or nested data
     pub fn get_uri(&self) -> Option<&str> {
-        self.login
+        let direct = self
+            .login
             .as_ref()
             .and_then(|l| l.uris.as_ref())
             .and_then(|uris| uris.first())
-            .and_then(|u| u.uri.as_deref())
-            .or_else(|| {
-                self.data.as_ref().and_then(|d| {
-                    d.uri.as_deref().or_else(|| {
-                        d.uris
-                            .as_ref()
-                            .and_then(|uris| uris.first())
-                            .and_then(|u| u.uri.as_deref())
-                    })
-                })
+            .and_then(|u| u.uri.as_deref());
+        self.resolve_field(direct, |d| {
+            d.uri.as_deref().or_else(|| {
+                d.uris
+                    .as_ref()
+                    .and_then(|uris| uris.first())
+                    .and_then(|u| u.uri.as_deref())
             })
+        })
     }
 
     // Get notes
     pub fn get_notes(&self) -> Option<&str> {
-        self.notes
-            .as_deref()
-            .or_else(|| self.data.as_ref().and_then(|d| d.notes.as_deref()))
+        self.resolve_field(self.notes.as_deref(), |d| d.notes.as_deref())
     }
 
     // Get fields
