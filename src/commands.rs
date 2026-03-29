@@ -820,34 +820,40 @@ fn cipher_to_env_vars(output: &CipherOutput) -> Vec<(String, String)> {
     vars
 }
 
-fn print_cipher_output(output: &CipherOutput, format: &str) -> Result<()> {
+fn format_cipher_output(output: &CipherOutput, format: &str) -> Result<String> {
     match format {
-        "json" => {
-            println!("{}", serde_json::to_string_pretty(output)?);
-        }
+        "json" => Ok(serde_json::to_string_pretty(output)?),
         "env" => {
+            let mut lines = String::new();
             for (name, value) in cipher_to_env_vars(output) {
-                println!("export {}=\"{}\"", name, escape_value(&value));
+                lines.push_str(&format!("export {}=\"{}\"\n", name, escape_value(&value)));
             }
+            Ok(lines)
         }
-        "value" | "password" => {
-            print!(
-                "{}",
-                output.password.as_deref().context("Item has no password")?
-            );
-        }
-        "username" => {
-            print!(
-                "{}",
-                output.username.as_deref().context("Item has no username")?
-            );
-        }
+        "value" | "password" => Ok(output
+            .password
+            .as_deref()
+            .context("Item has no password")?
+            .to_string()),
+        "username" => Ok(output
+            .username
+            .as_deref()
+            .context("Item has no username")?
+            .to_string()),
         _ => {
             anyhow::bail!(
                 "Unknown format: {}. Use: json, env, value, username",
                 format
             );
         }
+    }
+}
+
+fn print_cipher_output(output: &CipherOutput, format: &str) -> Result<()> {
+    let text = format_cipher_output(output, format)?;
+    match format {
+        "json" => println!("{}", text),
+        _ => print!("{}", text),
     }
     Ok(())
 }
@@ -1762,6 +1768,95 @@ mod tests {
         #[test]
         fn test_format_unmatched_placeholder_warning_returns_none_when_empty() {
             assert!(format_unmatched_placeholder_warning(&[]).is_none());
+        }
+    }
+
+    mod print_cipher_output_tests {
+        use super::*;
+
+        fn sample_output() -> CipherOutput {
+            CipherOutput {
+                id: "cipher-1".to_string(),
+                cipher_type: "login".to_string(),
+                name: "My App".to_string(),
+                username: Some("user".to_string()),
+                password: Some("pass".to_string()),
+                uri: Some("https://example.com".to_string()),
+                notes: Some("notes".to_string()),
+                fields: Some(vec![FieldOutput {
+                    name: "api token".to_string(),
+                    value: "tok-123".to_string(),
+                    hidden: true,
+                }]),
+            }
+        }
+
+        #[test]
+        fn test_format_cipher_output_json() {
+            let output = sample_output();
+            let json = format_cipher_output(&output, "json").unwrap();
+            assert!(json.contains("\"id\": \"cipher-1\""));
+            assert!(json.contains("\"type\": \"login\""));
+            assert!(json.contains("\"name\": \"My App\""));
+            assert!(json.contains("\"username\": \"user\""));
+        }
+
+        #[test]
+        fn test_format_cipher_output_env() {
+            let output = sample_output();
+            let env = format_cipher_output(&output, "env").unwrap();
+            assert!(env.contains("export MY_APP_URI=\"https://example.com\"\n"));
+            assert!(env.contains("export MY_APP_USERNAME=\"user\"\n"));
+            assert!(env.contains("export MY_APP_PASSWORD=\"pass\"\n"));
+            assert!(env.contains("export MY_APP_API_TOKEN=\"tok-123\"\n"));
+        }
+
+        #[test]
+        fn test_format_cipher_output_value() {
+            let output = sample_output();
+            let value = format_cipher_output(&output, "value").unwrap();
+            assert_eq!(value, "pass");
+        }
+
+        #[test]
+        fn test_format_cipher_output_password_alias() {
+            let output = sample_output();
+            let value = format_cipher_output(&output, "password").unwrap();
+            assert_eq!(value, "pass");
+        }
+
+        #[test]
+        fn test_format_cipher_output_username() {
+            let output = sample_output();
+            let value = format_cipher_output(&output, "username").unwrap();
+            assert_eq!(value, "user");
+        }
+
+        #[test]
+        fn test_format_cipher_output_unknown_format() {
+            let output = sample_output();
+            let err = format_cipher_output(&output, "xml").unwrap_err();
+            assert!(err.to_string().contains("Unknown format: xml"));
+        }
+
+        #[test]
+        fn test_format_cipher_output_missing_password() {
+            let output = CipherOutput {
+                password: None,
+                ..sample_output()
+            };
+            let err = format_cipher_output(&output, "value").unwrap_err();
+            assert!(err.to_string().contains("Item has no password"));
+        }
+
+        #[test]
+        fn test_format_cipher_output_missing_username() {
+            let output = CipherOutput {
+                username: None,
+                ..sample_output()
+            };
+            let err = format_cipher_output(&output, "username").unwrap_err();
+            assert!(err.to_string().contains("Item has no username"));
         }
     }
 }
