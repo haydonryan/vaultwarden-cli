@@ -670,15 +670,11 @@ fn parse_placeholder(placeholder: &str) -> Result<(String, String)> {
     Ok((name.to_string(), component.to_string()))
 }
 
-fn clone_option<T: Clone>(opt: &Option<T>, name: &str) -> Result<T> {
-    opt.clone().with_context(|| format!("Item has no {}", name))
-}
-
 fn resolve_component(output: &CipherOutput, component: &str) -> Result<String> {
     match component.to_lowercase().as_str() {
-        "username" => clone_option(&output.username, "username"),
-        "password" => clone_option(&output.password, "password"),
-        "uri" => clone_option(&output.uri, "uri"),
+        "username" => output.username.clone().context("Item has no username"),
+        "password" => output.password.clone().context("Item has no password"),
+        "uri" => output.uri.clone().context("Item has no uri"),
         _ => {
             if let Some(fields) = &output.fields
                 && let Some(field) = fields
