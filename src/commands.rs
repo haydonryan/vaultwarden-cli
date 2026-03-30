@@ -441,8 +441,7 @@ fn resolve_org_id(profile: &crate::models::Profile, org_filter: &str) -> Result<
         o.id == org_filter
             || o.name
                 .as_deref()
-                .map(|n| n.eq_ignore_ascii_case(org_filter))
-                .unwrap_or(false)
+                .is_some_and(|n| n.eq_ignore_ascii_case(org_filter))
     });
     Ok(matched
         .with_context(|| format!("Organization '{}' not found", org_filter))?
