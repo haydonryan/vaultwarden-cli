@@ -97,26 +97,24 @@ impl std::fmt::Display for CipherType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("invalid cipher type")]
 pub struct ParseCipherTypeError;
-
-impl std::fmt::Display for ParseCipherTypeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "invalid cipher type")
-    }
-}
-
-impl std::error::Error for ParseCipherTypeError {}
 
 impl FromStr for CipherType {
     type Err = ParseCipherTypeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "login" | "1" => Ok(CipherType::Login),
-            "note" | "securenote" | "2" => Ok(CipherType::SecureNote),
-            "card" | "3" => Ok(CipherType::Card),
-            "identity" | "4" => Ok(CipherType::Identity),
+        match s {
+            _ if s.eq_ignore_ascii_case("login") || s == "1" => Ok(CipherType::Login),
+            _ if s.eq_ignore_ascii_case("note")
+                || s.eq_ignore_ascii_case("securenote")
+                || s == "2" =>
+            {
+                Ok(CipherType::SecureNote)
+            }
+            _ if s.eq_ignore_ascii_case("card") || s == "3" => Ok(CipherType::Card),
+            _ if s.eq_ignore_ascii_case("identity") || s == "4" => Ok(CipherType::Identity),
             _ => Err(ParseCipherTypeError),
         }
     }
