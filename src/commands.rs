@@ -425,8 +425,7 @@ fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
         id: cipher.id.clone(),
         cipher_type: cipher
             .cipher_type()
-            .map(|t| t.to_string())
-            .unwrap_or_else(|| "unknown".to_string()),
+            .map_or_else(|| "unknown".into(), |t| t.to_string()),
         name: decrypted_name,
         username: decrypted_username,
         password: decrypted_password,
@@ -834,10 +833,10 @@ fn format_cipher_output(output: &CipherOutput, format: &str) -> Result<String> {
     match format {
         "json" => Ok(serde_json::to_string_pretty(output)?),
         "env" => {
-            let mut lines = String::new();
-            for (name, value) in cipher_to_env_vars(output) {
-                lines.push_str(&format!("export {}=\"{}\"\n", name, escape_value(&value)));
-            }
+            let lines: String = cipher_to_env_vars(output)
+                .into_iter()
+                .map(|(name, value)| format!("export {}=\"{}\"\n", name, escape_value(&value)))
+                .collect();
             Ok(lines)
         }
         "value" | "password" => get_field_string(&output.password, "password"),
