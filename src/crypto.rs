@@ -497,10 +497,22 @@ mod tests {
         let master_key = CryptoKeys::derive_master_key(password, email, iterations);
         assert_eq!(master_key.len(), 32);
 
-        // Stretch master key
+        // Create a known symmetric key (64 bytes: 32 enc + 32 mac)
+        let mut symmetric_key = vec![0x42u8; 32];
+        symmetric_key.extend_from_slice(&[0x43u8; 32]);
+
+        // Stretch master key and encrypt the symmetric key
         let stretched = CryptoKeys::stretch_master_key(&master_key).unwrap();
-        assert_eq!(stretched.enc_key.len(), 32);
-        assert_eq!(stretched.mac_key.len(), 32);
+        let encrypted_key = test_helpers::encrypt_bytes_for_test(
+            &symmetric_key,
+            &stretched.enc_key,
+            &stretched.mac_key,
+        );
+
+        // Decrypt using the high-level API
+        let keys = CryptoKeys::decrypt_symmetric_key(&master_key, &encrypted_key).unwrap();
+        assert_eq!(keys.enc_key, vec![0x42u8; 32]);
+        assert_eq!(keys.mac_key, vec![0x43u8; 32]);
     }
 
     mod test_helpers {
