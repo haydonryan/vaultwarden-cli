@@ -74,7 +74,7 @@ scan_file_contents() {
   while IFS=: read -r line_no line; do
     lowered_line="$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
     case "$lowered_line" in
-      *example*|*sample*|*template*|*placeholder*|*changeme*|*dummy*|*fake*|*todo*|*your_*|*your-*|*\<*|*\$\{* )
+      *example*|*sample*|*template*|*placeholder*|*changeme*|*dummy*|*fake*|*todo*|*your_*|*your-*|*\<*|*\$\{*|*secrets-ignore* )
         continue
         ;;
     esac
