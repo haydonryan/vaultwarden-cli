@@ -296,7 +296,10 @@ async fn load_sync_context() -> Result<SyncContext> {
     let access_token = ensure_valid_token(&mut config).await?;
     ensure_unlocked(&config)?;
     let api = ApiClient::from_config(&config)?;
-    let sync_response = api.sync(&access_token).await?;
+    let mut sync_response = api.sync(&access_token).await?;
+    if let Ok(cipher_list) = api.ciphers(&access_token).await {
+        sync_response.ciphers = cipher_list.data;
+    }
     Ok(SyncContext {
         config,
         sync_response,
@@ -422,6 +425,23 @@ fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
             .collect()
     });
 
+    // Decrypt SSH key fields if present
+    let ssh_public_key = cipher
+        .ssh_key
+        .as_ref()
+        .and_then(|s| s.public_key.as_deref())
+        .and_then(|k| keys.decrypt_to_string(k).ok());
+    let ssh_private_key = cipher
+        .ssh_key
+        .as_ref()
+        .and_then(|s| s.private_key.as_deref())
+        .and_then(|k| keys.decrypt_to_string(k).ok());
+    let ssh_fingerprint = cipher
+        .ssh_key
+        .as_ref()
+        .and_then(|s| s.fingerprint.as_deref())
+        .and_then(|k| keys.decrypt_to_string(k).ok());
+
     Ok(CipherOutput {
         id: cipher.id.clone(),
         cipher_type: cipher
@@ -433,6 +453,9 @@ fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
         uri: decrypted_uri,
         notes: decrypted_notes,
         fields: decrypted_fields,
+        ssh_public_key,
+        ssh_private_key,
+        ssh_fingerprint,
     })
 }
 
@@ -491,6 +514,14 @@ fn output_matches_search(output: &CipherOutput, search_lower: &str) -> bool {
             .uri
             .as_ref()
             .is_some_and(|u| u.to_lowercase().contains(search_lower))
+        || output
+            .ssh_public_key
+            .as_ref()
+            .is_some_and(|k| k.to_lowercase().contains(search_lower))
+        || output
+            .ssh_fingerprint
+            .as_ref()
+            .is_some_and(|f| f.to_lowercase().contains(search_lower))
 }
 
 pub async fn list(
@@ -521,13 +552,13 @@ pub async fn list(
         })
         .collect();
 
-    // Apply type filter
+    // Apply type filter (supports both type 5 and 6 for SSH keys)
     if let Some(type_str) = &type_filter {
         if let Ok(cipher_type) = CipherType::from_str(type_str) {
             ciphers.retain(|c| c.cipher_type() == Some(cipher_type));
         } else {
             anyhow::bail!(
-                "Invalid type filter: {}. Use: login, note, card, identity",
+                "Invalid type filter: {}. Use: login, note, card, identity, ssh",
                 type_str
             );
         }
@@ -674,6 +705,18 @@ fn resolve_component(output: &CipherOutput, component: &str) -> Result<String> {
         "username" => output.username.clone().context("Item has no username"),
         "password" => output.password.clone().context("Item has no password"),
         "uri" => output.uri.clone().context("Item has no uri"),
+        "ssh_public_key" | "public_key" | "publickey" => output
+            .ssh_public_key
+            .clone()
+            .context("Item has no SSH public key"),
+        "ssh_private_key" | "private_key" | "privatekey" => output
+            .ssh_private_key
+            .clone()
+            .context("Item has no SSH private key"),
+        "ssh_fingerprint" | "fingerprint" => output
+            .ssh_fingerprint
+            .clone()
+            .context("Item has no SSH fingerprint"),
         _ => {
             if let Some(fields) = &output.fields
                 && let Some(field) = fields
@@ -811,6 +854,15 @@ fn cipher_to_env_vars(output: &CipherOutput) -> Vec<(String, String)> {
     }
     if let Some(v) = &output.password {
         vars.push((format!("{}_PASSWORD", prefix), v.clone()));
+    }
+    if let Some(v) = &output.ssh_public_key {
+        vars.push((format!("{}_SSH_PUBLIC_KEY", prefix), v.clone()));
+    }
+    if let Some(v) = &output.ssh_private_key {
+        vars.push((format!("{}_SSH_PRIVATE_KEY", prefix), v.clone()));
+    }
+    if let Some(v) = &output.ssh_fingerprint {
+        vars.push((format!("{}_SSH_FINGERPRINT", prefix), v.clone()));
     }
     if let Some(fields) = &output.fields {
         for field in fields {
@@ -1239,6 +1291,9 @@ mod tests {
                     value: "tok-123".to_string(),
                     hidden: true,
                 }]),
+                ssh_public_key: None,
+                ssh_private_key: None,
+                ssh_fingerprint: None,
             };
 
             assert_eq!(resolve_component(&output, "username").unwrap(), "user");
@@ -1348,6 +1403,7 @@ mod tests {
                 card: None,
                 identity: None,
                 secure_note: None,
+                ssh_key: None,
                 collection_ids: vec!["col-1".to_string()],
                 fields: None,
                 data: None,
@@ -1369,6 +1425,7 @@ mod tests {
                 card: None,
                 identity: None,
                 secure_note: None,
+                ssh_key: None,
                 collection_ids: vec!["col-1".to_string(), "col-2".to_string()],
                 fields: None,
                 data: None,
@@ -1469,6 +1526,7 @@ mod tests {
                 card: None,
                 identity: None,
                 secure_note: None,
+                ssh_key: None,
                 fields: None,
                 data: None,
             }
@@ -1501,6 +1559,12 @@ mod tests {
 
             cipher.r#type = 4;
             assert_eq!(cipher.cipher_type().unwrap().to_string(), "identity");
+
+            cipher.r#type = 5;
+            assert_eq!(cipher.cipher_type().unwrap().to_string(), "ssh");
+
+            cipher.r#type = 6;
+            assert_eq!(cipher.cipher_type().unwrap().to_string(), "ssh");
         }
     }
 
@@ -1669,7 +1733,9 @@ mod tests {
                 encrypted_private_key: Some("priv-key".to_string()),
                 ..Default::default()
             };
-            config.org_keys.insert("org-1".to_string(), "key".to_string());
+            config
+                .org_keys
+                .insert("org-1".to_string(), "key".to_string());
             config.crypto_keys = Some(CryptoKeys {
                 enc_key: vec![0u8; 32],
                 mac_key: vec![0u8; 32],
@@ -1787,7 +1853,10 @@ mod tests {
             assert_eq!(config.refresh_token, Some("refresh-123".to_string()));
             assert_eq!(config.email, Some("user@example.com".to_string()));
             assert_eq!(config.encrypted_key, Some("2.encrypted-key".to_string()));
-            assert_eq!(config.encrypted_private_key, Some("2.encrypted-private-key".to_string()));
+            assert_eq!(
+                config.encrypted_private_key,
+                Some("2.encrypted-private-key".to_string())
+            );
             assert_eq!(config.kdf_iterations, Some(600000));
             assert_eq!(config.org_keys.get("org-1"), Some(&"2.org-key".to_string()));
             assert!(config.token_expiry.unwrap() > 0);
@@ -1816,10 +1885,12 @@ mod tests {
             .await;
 
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Server is not reachable"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Server is not reachable")
+            );
         }
 
         #[tokio::test]
@@ -2018,10 +2089,7 @@ mod tests {
 
             let result = unlock(Some("password".to_string())).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Not logged in"));
+            assert!(result.unwrap_err().to_string().contains("Not logged in"));
         }
 
         #[tokio::test]
@@ -2096,10 +2164,12 @@ mod tests {
 
             let result = unlock(Some("wrong-password".to_string())).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to decrypt vault key"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to decrypt vault key")
+            );
         }
 
         #[tokio::test]
@@ -2137,8 +2207,7 @@ mod tests {
             let encrypted_org_key = public_key
                 .encrypt(&mut rng, padding, &org_symmetric_key)
                 .unwrap();
-            let encrypted_org_key_str =
-                format!("6.{}", BASE64.encode(&encrypted_org_key));
+            let encrypted_org_key_str = format!("6.{}", BASE64.encode(&encrypted_org_key));
 
             let mut config = Config {
                 server: Some("https://vault.example.com".to_string()),
@@ -2160,7 +2229,10 @@ mod tests {
 
             let loaded = Config::load().unwrap();
             assert!(loaded.is_unlocked());
-            let org_keys = loaded.org_crypto_keys.get("org-1").expect("org key present");
+            let org_keys = loaded
+                .org_crypto_keys
+                .get("org-1")
+                .expect("org key present");
             assert_eq!(org_keys.enc_key, org_symmetric_key[0..32]);
             assert_eq!(org_keys.mac_key, org_symmetric_key[32..64]);
         }
@@ -2216,6 +2288,9 @@ mod tests {
                 uri: None,
                 notes: None,
                 fields: None,
+                ssh_public_key: None,
+                ssh_private_key: None,
+                ssh_fingerprint: None,
             };
             assert!(output_matches_search(&output, "secret"));
         }
@@ -2231,6 +2306,9 @@ mod tests {
                 uri: None,
                 notes: None,
                 fields: None,
+                ssh_public_key: None,
+                ssh_private_key: None,
+                ssh_fingerprint: None,
             };
             assert!(output_matches_search(&output, "admin"));
         }
@@ -2246,6 +2324,9 @@ mod tests {
                 uri: Some("https://github.com".to_string()),
                 notes: None,
                 fields: None,
+                ssh_public_key: None,
+                ssh_private_key: None,
+                ssh_fingerprint: None,
             };
             assert!(output_matches_search(&output, "github"));
         }
@@ -2261,6 +2342,9 @@ mod tests {
                 uri: Some("https://example.com".to_string()),
                 notes: None,
                 fields: None,
+                ssh_public_key: None,
+                ssh_private_key: None,
+                ssh_fingerprint: None,
             };
             assert!(!output_matches_search(&output, "missing"));
         }
@@ -2295,6 +2379,7 @@ mod tests {
                 card: None,
                 identity: None,
                 secure_note: None,
+                ssh_key: None,
                 collection_ids: Vec::new(),
                 fields: None,
                 data: None,
@@ -2335,6 +2420,7 @@ mod tests {
                 card: None,
                 identity: None,
                 secure_note: None,
+                ssh_key: None,
                 collection_ids: Vec::new(),
                 fields: None,
                 data: None,
@@ -2440,7 +2526,11 @@ mod tests {
             config.save_keys().unwrap();
 
             let input_path = temp_dir.path().join("input.yml");
-            std::fs::write(&input_path, "user: ((MyLogin.username))\npass: ((MyLogin.password))\n").unwrap();
+            std::fs::write(
+                &input_path,
+                "user: ((MyLogin.username))\npass: ((MyLogin.password))\n",
+            )
+            .unwrap();
 
             let result = interpolate(input_path.to_str().unwrap(), None, false).await;
             assert!(result.is_ok());
@@ -2533,10 +2623,12 @@ mod tests {
 
             let result = interpolate(input_path.to_str().unwrap(), None, false).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Interpolation failed"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Interpolation failed")
+            );
         }
 
         #[tokio::test]
@@ -2892,7 +2984,12 @@ mod tests {
 
             let result = list(Some("invalid".to_string()), None, None, None).await;
             assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("Invalid type filter"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Invalid type filter")
+            );
         }
     }
 
@@ -3236,10 +3333,12 @@ mod tests {
 
             let result = get_by_uri("missing.com", "json", None, None).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("No item found with URI containing"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("No item found with URI containing")
+            );
         }
     }
 
@@ -3378,6 +3477,7 @@ mod tests {
                 card: None,
                 identity: None,
                 secure_note: None,
+                ssh_key: None,
                 fields: None,
                 data: None,
             }
@@ -3488,6 +3588,9 @@ mod tests {
                         hidden: false,
                     },
                 ]),
+                ssh_public_key: None,
+                ssh_private_key: None,
+                ssh_fingerprint: None,
             }
         }
 
@@ -3495,6 +3598,9 @@ mod tests {
         fn test_resolve_component_errors_for_missing_standard_field() {
             let output = CipherOutput {
                 username: None,
+                ssh_public_key: None,
+                ssh_private_key: None,
+                ssh_fingerprint: None,
                 ..sample_output()
             };
 
@@ -3534,6 +3640,9 @@ mod tests {
                 password: None,
                 uri: None,
                 fields: None,
+                ssh_public_key: None,
+                ssh_private_key: None,
+                ssh_fingerprint: None,
                 ..sample_output()
             };
 
@@ -3589,6 +3698,9 @@ mod tests {
                     value: "tok-123".to_string(),
                     hidden: true,
                 }]),
+                ssh_public_key: None,
+                ssh_private_key: None,
+                ssh_fingerprint: None,
             }
         }
 

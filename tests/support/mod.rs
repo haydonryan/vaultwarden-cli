@@ -256,6 +256,7 @@ pub fn login_cipher(id: &str, name: &str, username: &str, password: &str, uri: &
         card: None,
         identity: None,
         secure_note: None,
+        ssh_key: None,
         collection_ids: Vec::new(),
         fields: None,
         data: None,
@@ -280,6 +281,7 @@ pub fn nested_login_cipher(
         card: None,
         identity: None,
         secure_note: None,
+        ssh_key: None,
         collection_ids: Vec::new(),
         fields: None,
         data: Some(CipherData {

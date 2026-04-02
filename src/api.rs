@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::models::{SyncResponse, TokenResponse};
+use crate::models::{CipherListResponse, SyncResponse, TokenResponse};
 use anyhow::{Context, Result};
 use reqwest::Client;
 
@@ -72,6 +72,17 @@ impl ApiClient {
             "sync",
             "Sync",
             "Failed to parse sync response",
+        )
+        .await
+    }
+
+    pub async fn ciphers(&self, access_token: &str) -> Result<CipherListResponse> {
+        self.get_json(
+            "/api/ciphers",
+            access_token,
+            "cipher list",
+            "Cipher list",
+            "Failed to parse cipher list response",
         )
         .await
     }

@@ -33,6 +33,12 @@ pub struct SyncResponse {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct CipherListResponse {
+    #[serde(alias = "Data", alias = "data", default)]
+    pub data: Vec<Cipher>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Organization {
     #[serde(alias = "Id", alias = "id")]
     pub id: String,
@@ -84,6 +90,7 @@ pub enum CipherType {
     SecureNote = 2,
     Card = 3,
     Identity = 4,
+    SshKey = 5,
 }
 
 impl std::fmt::Display for CipherType {
@@ -93,6 +100,7 @@ impl std::fmt::Display for CipherType {
             CipherType::SecureNote => write!(f, "note"),
             CipherType::Card => write!(f, "card"),
             CipherType::Identity => write!(f, "identity"),
+            CipherType::SshKey => write!(f, "ssh"),
         }
     }
 }
@@ -115,6 +123,13 @@ impl FromStr for CipherType {
             }
             _ if s.eq_ignore_ascii_case("card") || s == "3" => Ok(CipherType::Card),
             _ if s.eq_ignore_ascii_case("identity") || s == "4" => Ok(CipherType::Identity),
+            _ if s.eq_ignore_ascii_case("ssh")
+                || s.eq_ignore_ascii_case("sshkey")
+                || s == "5"
+                || s == "6" =>
+            {
+                Ok(CipherType::SshKey)
+            }
             _ => Err(ParseCipherTypeError),
         }
     }
@@ -142,6 +157,8 @@ pub struct Cipher {
     pub identity: Option<IdentityData>,
     #[serde(alias = "SecureNote", alias = "secureNote")]
     pub secure_note: Option<SecureNoteData>,
+    #[serde(alias = "SshKey", alias = "sshKey")]
+    pub ssh_key: Option<SshKeyData>,
     #[serde(alias = "CollectionIds", alias = "collectionIds", default)]
     pub collection_ids: Vec<String>,
     #[serde(alias = "Fields", alias = "fields")]
@@ -174,11 +191,17 @@ pub struct CipherData {
 
 impl Cipher {
     pub fn cipher_type(&self) -> Option<CipherType> {
+        if self.ssh_key.is_some() {
+            return Some(CipherType::SshKey);
+        }
+
         match self.r#type {
             1 => Some(CipherType::Login),
             2 => Some(CipherType::SecureNote),
             3 => Some(CipherType::Card),
             4 => Some(CipherType::Identity),
+            5 => Some(CipherType::SshKey),
+            6 => Some(CipherType::SshKey), // Some versions use type 6
             _ => None,
         }
     }
@@ -304,6 +327,16 @@ pub struct SecureNoteData {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct SshKeyData {
+    #[serde(alias = "PrivateKey", alias = "privateKey")]
+    pub private_key: Option<String>,
+    #[serde(alias = "PublicKey", alias = "publicKey")]
+    pub public_key: Option<String>,
+    #[serde(alias = "Fingerprint", alias = "fingerprint")]
+    pub fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct FieldData {
     #[serde(alias = "Name", alias = "name")]
     pub name: Option<String>,
@@ -330,6 +363,13 @@ pub struct CipherOutput {
     pub notes: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fields: Option<Vec<FieldOutput>>,
+    // SSH key fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_public_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_private_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -353,6 +393,7 @@ mod tests {
             assert_eq!(CipherType::SecureNote.to_string(), "note");
             assert_eq!(CipherType::Card.to_string(), "card");
             assert_eq!(CipherType::Identity.to_string(), "identity");
+            assert_eq!(CipherType::SshKey.to_string(), "ssh");
         }
 
         #[test]
@@ -395,11 +436,22 @@ mod tests {
         }
 
         #[test]
+        fn test_cipher_type_from_str_ssh() {
+            assert_eq!(CipherType::from_str("ssh"), Ok(CipherType::SshKey));
+            assert_eq!(CipherType::from_str("SSH"), Ok(CipherType::SshKey));
+            assert_eq!(CipherType::from_str("Ssh"), Ok(CipherType::SshKey));
+            assert_eq!(CipherType::from_str("sshkey"), Ok(CipherType::SshKey));
+            assert_eq!(CipherType::from_str("sshKey"), Ok(CipherType::SshKey));
+            assert_eq!(CipherType::from_str("5"), Ok(CipherType::SshKey));
+            assert_eq!(CipherType::from_str("6"), Ok(CipherType::SshKey));
+        }
+
+        #[test]
         fn test_cipher_type_from_str_invalid() {
             assert!(CipherType::from_str("invalid").is_err());
             assert!(CipherType::from_str("").is_err());
             assert!(CipherType::from_str("0").is_err());
-            assert!(CipherType::from_str("5").is_err());
+            assert!(CipherType::from_str("7").is_err());
             assert!(CipherType::from_str("password").is_err());
         }
 
@@ -409,6 +461,7 @@ mod tests {
             assert_eq!(CipherType::SecureNote as u8, 2);
             assert_eq!(CipherType::Card as u8, 3);
             assert_eq!(CipherType::Identity as u8, 4);
+            assert_eq!(CipherType::SshKey as u8, 5);
         }
     }
 
@@ -437,6 +490,7 @@ mod tests {
                 card: None,
                 identity: None,
                 secure_note: None,
+                ssh_key: None,
                 fields: Some(vec![FieldData {
                     name: Some("field-name".to_string()),
                     value: Some("field-value".to_string()),
@@ -459,6 +513,7 @@ mod tests {
                 card: None,
                 identity: None,
                 secure_note: None,
+                ssh_key: None,
                 fields: None,
                 data: Some(CipherData {
                     name: Some("nested-name".to_string()),
@@ -484,6 +539,14 @@ mod tests {
             cipher.r#type = 1;
             assert_eq!(cipher.cipher_type(), Some(CipherType::Login));
 
+            cipher.ssh_key = Some(SshKeyData {
+                private_key: Some("encrypted-private-key".to_string()),
+                public_key: Some("encrypted-public-key".to_string()),
+                fingerprint: Some("encrypted-fingerprint".to_string()),
+            });
+            assert_eq!(cipher.cipher_type(), Some(CipherType::SshKey));
+            cipher.ssh_key = None;
+
             cipher.r#type = 2;
             assert_eq!(cipher.cipher_type(), Some(CipherType::SecureNote));
 
@@ -492,6 +555,12 @@ mod tests {
 
             cipher.r#type = 4;
             assert_eq!(cipher.cipher_type(), Some(CipherType::Identity));
+
+            cipher.r#type = 5;
+            assert_eq!(cipher.cipher_type(), Some(CipherType::SshKey));
+
+            cipher.r#type = 6;
+            assert_eq!(cipher.cipher_type(), Some(CipherType::SshKey));
 
             cipher.r#type = 99;
             assert_eq!(cipher.cipher_type(), None);
@@ -530,6 +599,7 @@ mod tests {
                 card: None,
                 identity: None,
                 secure_note: None,
+                ssh_key: None,
                 fields: None,
                 data: None,
             };
@@ -586,6 +656,7 @@ mod tests {
                 card: None,
                 identity: None,
                 secure_note: None,
+                ssh_key: None,
                 fields: None,
                 data: Some(CipherData {
                     name: None,
@@ -871,6 +942,9 @@ mod tests {
                 uri: Some("https://example.com".to_string()),
                 notes: None,
                 fields: None,
+                ssh_public_key: None,
+                ssh_private_key: None,
+                ssh_fingerprint: None,
             };
 
             let json = serde_json::to_string(&output).unwrap();
@@ -896,6 +970,9 @@ mod tests {
                     value: "secret-key".to_string(),
                     hidden: true,
                 }]),
+                ssh_public_key: None,
+                ssh_private_key: None,
+                ssh_fingerprint: None,
             };
 
             let json = serde_json::to_string(&output).unwrap();

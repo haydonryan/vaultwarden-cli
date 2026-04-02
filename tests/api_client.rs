@@ -3,6 +3,7 @@ mod support;
 use support::TestContext;
 use vaultwarden_cli::api::ApiClient;
 use vaultwarden_cli::config::Config;
+use vaultwarden_cli::models::CipherType;
 use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -293,6 +294,42 @@ async fn api_client_sync_reports_malformed_json() {
         .expect_err("parse should fail");
 
     assert!(err.to_string().contains("Failed to parse sync response"));
+}
+
+#[tokio::test]
+async fn api_client_ciphers_sends_bearer_token_and_parses_response() {
+    let mock_server = MockServer::start().await;
+    let response = serde_json::json!({
+        "object": "list",
+        "data": [
+            {
+                "id": "cipher-ssh",
+                "type": 5,
+                "name": "2.encrypted-name",
+                "sshKey": {
+                    "privateKey": "2.encrypted-private-key",
+                    "publicKey": "2.encrypted-public-key",
+                    "fingerprint": "2.encrypted-fingerprint"
+                }
+            }
+        ]
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/api/ciphers"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::new(&mock_server.uri()).unwrap();
+    let ciphers = client.ciphers("access-token").await.unwrap();
+
+    assert_eq!(ciphers.data.len(), 1);
+    assert_eq!(ciphers.data[0].id, "cipher-ssh");
+    assert_eq!(ciphers.data[0].cipher_type(), Some(CipherType::SshKey));
+    assert!(ciphers.data[0].ssh_key.is_some());
 }
 
 #[tokio::test]

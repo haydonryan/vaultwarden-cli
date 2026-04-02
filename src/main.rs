@@ -44,7 +44,7 @@ enum Commands {
 
     /// List items in the vault
     List {
-        /// Filter by item type (login, note, card, identity)
+        /// Filter by item type (login, note, card, identity, ssh)
         #[arg(short, long)]
         r#type: Option<String>,
 
