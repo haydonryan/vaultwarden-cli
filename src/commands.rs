@@ -2589,6 +2589,660 @@ mod tests {
         }
     }
 
+    // Tests for list command
+    mod list_tests {
+        use super::*;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) {
+            unsafe {
+                std::env::set_var("HOME", temp_dir.path());
+                std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
+            }
+        }
+
+        fn make_encrypted_login(
+            id: &str,
+            name: &str,
+            username: &str,
+            password: &str,
+            uri: &str,
+            keys: &CryptoKeys,
+        ) -> serde_json::Value {
+            let enc_name = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                name.as_bytes(),
+                &keys.enc_key,
+                &keys.mac_key,
+            );
+            let enc_user = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                username.as_bytes(),
+                &keys.enc_key,
+                &keys.mac_key,
+            );
+            let enc_pass = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                password.as_bytes(),
+                &keys.enc_key,
+                &keys.mac_key,
+            );
+            let enc_uri = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                uri.as_bytes(),
+                &keys.enc_key,
+                &keys.mac_key,
+            );
+
+            serde_json::json!({
+                "id": id,
+                "type": 1,
+                "name": enc_name,
+                "login": {
+                    "username": enc_user,
+                    "password": enc_pass,
+                    "uris": [{"uri": enc_uri, "match": 0}],
+                    "totp": null
+                },
+                "collectionIds": [],
+                "organizationId": null
+            })
+        }
+
+        fn make_encrypted_note(id: &str, name: &str, keys: &CryptoKeys) -> serde_json::Value {
+            let enc_name = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                name.as_bytes(),
+                &keys.enc_key,
+                &keys.mac_key,
+            );
+
+            serde_json::json!({
+                "id": id,
+                "type": 2,
+                "name": enc_name,
+                "secureNote": {},
+                "collectionIds": [],
+                "organizationId": null
+            })
+        }
+
+        #[tokio::test]
+        async fn test_list_no_filters_shows_all_items() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let sync_response = serde_json::json!({
+                "ciphers": [
+                    make_encrypted_login("cipher-1", "GitHub", "user", "pass", "https://github.com", &keys),
+                    make_encrypted_note("cipher-2", "MyNote", &keys),
+                ],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let result = list(None, None, None, None).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_list_with_type_filter() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let sync_response = serde_json::json!({
+                "ciphers": [
+                    make_encrypted_login("cipher-1", "GitHub", "user", "pass", "https://github.com", &keys),
+                    make_encrypted_note("cipher-2", "MyNote", &keys),
+                ],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let result = list(Some("login".to_string()), None, None, None).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_list_with_search_filter() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let sync_response = serde_json::json!({
+                "ciphers": [
+                    make_encrypted_login("cipher-1", "GitHub", "user", "pass", "https://github.com", &keys),
+                    make_encrypted_login("cipher-2", "GitLab", "admin", "secret", "https://gitlab.com", &keys),
+                ],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let result = list(None, Some("hub".to_string()), None, None).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_list_no_matches() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let sync_response = serde_json::json!({
+                "ciphers": [
+                    make_encrypted_login("cipher-1", "GitHub", "user", "pass", "https://github.com", &keys),
+                ],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let result = list(Some("note".to_string()), None, None, None).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_list_invalid_type_filter_errors() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let sync_response = serde_json::json!({
+                "ciphers": [],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let result = list(Some("invalid".to_string()), None, None, None).await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Invalid type filter"));
+        }
+    }
+
+    // Tests for get command
+    mod get_tests {
+        use super::*;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) {
+            unsafe {
+                std::env::set_var("HOME", temp_dir.path());
+                std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
+            }
+        }
+
+        fn make_encrypted_login(
+            id: &str,
+            name: &str,
+            username: &str,
+            password: &str,
+            uri: &str,
+            keys: &CryptoKeys,
+        ) -> serde_json::Value {
+            let enc_name = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                name.as_bytes(),
+                &keys.enc_key,
+                &keys.mac_key,
+            );
+            let enc_user = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                username.as_bytes(),
+                &keys.enc_key,
+                &keys.mac_key,
+            );
+            let enc_pass = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                password.as_bytes(),
+                &keys.enc_key,
+                &keys.mac_key,
+            );
+            let enc_uri = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                uri.as_bytes(),
+                &keys.enc_key,
+                &keys.mac_key,
+            );
+
+            serde_json::json!({
+                "id": id,
+                "type": 1,
+                "name": enc_name,
+                "login": {
+                    "username": enc_user,
+                    "password": enc_pass,
+                    "uris": [{"uri": enc_uri, "match": 0}],
+                    "totp": null
+                },
+                "collectionIds": [],
+                "organizationId": null
+            })
+        }
+
+        #[tokio::test]
+        async fn test_get_by_id() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let sync_response = serde_json::json!({
+                "ciphers": [
+                    make_encrypted_login("cipher-1", "GitHub", "user", "pass", "https://github.com", &keys),
+                ],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let result = get("cipher-1", "json", None, None).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_get_by_name() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let sync_response = serde_json::json!({
+                "ciphers": [
+                    make_encrypted_login("cipher-1", "GitHub", "user", "pass", "https://github.com", &keys),
+                ],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let result = get("github", "json", None, None).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_get_not_found() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let sync_response = serde_json::json!({
+                "ciphers": [],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let result = get("missing", "json", None, None).await;
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("not found"));
+        }
+    }
+
+    // Tests for get_by_uri command
+    mod get_by_uri_tests {
+        use super::*;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) {
+            unsafe {
+                std::env::set_var("HOME", temp_dir.path());
+                std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
+            }
+        }
+
+        fn make_encrypted_login(
+            id: &str,
+            name: &str,
+            username: &str,
+            password: &str,
+            uri: &str,
+            keys: &CryptoKeys,
+        ) -> serde_json::Value {
+            let enc_name = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                name.as_bytes(),
+                &keys.enc_key,
+                &keys.mac_key,
+            );
+            let enc_user = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                username.as_bytes(),
+                &keys.enc_key,
+                &keys.mac_key,
+            );
+            let enc_pass = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                password.as_bytes(),
+                &keys.enc_key,
+                &keys.mac_key,
+            );
+            let enc_uri = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                uri.as_bytes(),
+                &keys.enc_key,
+                &keys.mac_key,
+            );
+
+            serde_json::json!({
+                "id": id,
+                "type": 1,
+                "name": enc_name,
+                "login": {
+                    "username": enc_user,
+                    "password": enc_pass,
+                    "uris": [{"uri": enc_uri, "match": 0}],
+                    "totp": null
+                },
+                "collectionIds": [],
+                "organizationId": null
+            })
+        }
+
+        #[tokio::test]
+        async fn test_get_by_uri_match() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let sync_response = serde_json::json!({
+                "ciphers": [
+                    make_encrypted_login("cipher-1", "GitHub", "user", "pass", "https://github.com", &keys),
+                ],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let result = get_by_uri("github.com", "json", None, None).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_get_by_uri_not_found() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let sync_response = serde_json::json!({
+                "ciphers": [],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let result = get_by_uri("missing.com", "json", None, None).await;
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("No item found with URI containing"));
+        }
+    }
+
     // Tests for ensure_valid_token helper
     mod ensure_valid_token_tests {
         use super::*;
