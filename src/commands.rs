@@ -1074,6 +1074,9 @@ pub async fn run_with_secrets(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
     // Tests for sanitize_env_name
     mod sanitize_env_name_tests {
@@ -1529,14 +1532,174 @@ mod tests {
         }
     }
 
+    // Tests for status, lock, and logout commands
+    mod command_state_tests {
+        use super::*;
+
+        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) {
+            unsafe {
+                std::env::set_var("HOME", temp_dir.path());
+                std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
+            }
+        }
+
+        #[tokio::test]
+        async fn test_status_when_not_logged_in() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let result = status().await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_status_when_logged_in_locked() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let config = Config {
+                server: Some("https://vault.example.com".to_string()),
+                client_id: Some("client-123".to_string()),
+                email: Some("user@example.com".to_string()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                ..Default::default()
+            };
+            config.save().unwrap();
+
+            let result = status().await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_status_when_logged_in_unlocked() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mut config = Config {
+                server: Some("https://vault.example.com".to_string()),
+                client_id: Some("client-123".to_string()),
+                email: Some("user@example.com".to_string()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                ..Default::default()
+            };
+            config.crypto_keys = Some(CryptoKeys {
+                enc_key: vec![0u8; 32],
+                mac_key: vec![0u8; 32],
+            });
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let result = status().await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_status_token_expired() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let config = Config {
+                server: Some("https://vault.example.com".to_string()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(0),
+                ..Default::default()
+            };
+            config.save().unwrap();
+
+            let result = status().await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_lock_deletes_saved_keys() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mut config = Config {
+                server: Some("https://vault.example.com".to_string()),
+                access_token: Some("token".to_string()),
+                ..Default::default()
+            };
+            config.crypto_keys = Some(CryptoKeys {
+                enc_key: vec![0u8; 32],
+                mac_key: vec![0u8; 32],
+            });
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            assert!(Config::keys_path().unwrap().exists());
+
+            let result = lock().await;
+            assert!(result.is_ok());
+            assert!(!Config::keys_path().unwrap().exists());
+            assert!(Config::config_path().unwrap().exists());
+        }
+
+        #[tokio::test]
+        async fn test_logout_when_not_logged_in() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let result = logout().await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_logout_clears_config_and_keys() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mut config = Config {
+                server: Some("https://vault.example.com".to_string()),
+                client_id: Some("client-123".to_string()),
+                email: Some("user@example.com".to_string()),
+                access_token: Some("token".to_string()),
+                refresh_token: Some("refresh".to_string()),
+                token_expiry: Some(1234567890),
+                encrypted_key: Some("enc-key".to_string()),
+                encrypted_private_key: Some("priv-key".to_string()),
+                ..Default::default()
+            };
+            config.org_keys.insert("org-1".to_string(), "key".to_string());
+            config.crypto_keys = Some(CryptoKeys {
+                enc_key: vec![0u8; 32],
+                mac_key: vec![0u8; 32],
+            });
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let result = logout().await;
+            assert!(result.is_ok());
+
+            let loaded = Config::load().unwrap();
+            assert!(!loaded.is_logged_in());
+            assert!(!loaded.is_unlocked());
+            assert!(loaded.access_token.is_none());
+            assert!(loaded.refresh_token.is_none());
+            assert!(loaded.token_expiry.is_none());
+            assert!(loaded.crypto_keys.is_none());
+            assert!(loaded.encrypted_key.is_none());
+            assert!(loaded.encrypted_private_key.is_none());
+            assert!(loaded.org_keys.is_empty());
+            assert!(loaded.org_crypto_keys.is_empty());
+            assert!(!Config::keys_path().unwrap().exists());
+        }
+    }
+
     // Tests for ensure_valid_token helper
     mod ensure_valid_token_tests {
         use super::*;
-        use tokio::sync::Mutex;
         use wiremock::matchers::{body_string_contains, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
         fn set_temp_config_dir(temp_dir: &tempfile::TempDir) {
             unsafe {
