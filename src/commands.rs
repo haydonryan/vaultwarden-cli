@@ -529,6 +529,7 @@ pub async fn list(
     search: Option<String>,
     org_filter: Option<String>,
     collection_filter: Option<String>,
+    json_output: bool,
 ) -> Result<()> {
     let ctx = load_sync_context().await?;
     let (org_id_filter, collection_id_filter) = resolve_org_and_collection_filters(
@@ -596,8 +597,26 @@ pub async fn list(
         return Ok(());
     }
 
-    println!("{}", serde_json::to_string_pretty(&outputs)?);
+    for line in format_list_output(&outputs, json_output)? {
+        println!("{}", line);
+    }
+
     Ok(())
+}
+
+fn format_list_output(outputs: &[CipherOutput], json_output: bool) -> Result<Vec<String>> {
+    if json_output {
+        return Ok(vec![serde_json::to_string_pretty(outputs)?]);
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    for output in outputs {
+        for (name, _) in cipher_to_env_vars(output) {
+            lines.push(name);
+        }
+    }
+
+    Ok(lines)
 }
 
 pub async fn get(
@@ -2798,7 +2817,7 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = list(None, None, None, None).await;
+            let result = list(None, None, None, None, false).await;
             assert!(result.is_ok());
         }
 
@@ -2845,7 +2864,7 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = list(Some("login".to_string()), None, None, None).await;
+            let result = list(Some("login".to_string()), None, None, None, false).await;
             assert!(result.is_ok());
         }
 
@@ -2892,7 +2911,7 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = list(None, Some("hub".to_string()), None, None).await;
+            let result = list(None, Some("hub".to_string()), None, None, false).await;
             assert!(result.is_ok());
         }
 
@@ -2938,7 +2957,7 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = list(Some("note".to_string()), None, None, None).await;
+            let result = list(Some("note".to_string()), None, None, None, false).await;
             assert!(result.is_ok());
         }
 
@@ -2982,7 +3001,7 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = list(Some("invalid".to_string()), None, None, None).await;
+            let result = list(Some("invalid".to_string()), None, None, None, false).await;
             assert!(result.is_err());
             assert!(
                 result
@@ -3614,6 +3633,35 @@ mod tests {
             assert!(
                 err.to_string()
                     .contains("Item has no component 'missing-field'")
+            );
+        }
+
+        #[test]
+        fn test_format_list_output_json() {
+            let output = sample_output();
+            let out = format_list_output(&[output], true).unwrap();
+
+            assert_eq!(out.len(), 1);
+            assert!(out[0].starts_with('['));
+            assert!(out[0].contains("\"id\": \"cipher-1\""));
+            assert!(out[0].contains("\"type\": \"login\""));
+            assert!(out[0].contains("\"name\": \"My App\""));
+        }
+
+        #[test]
+        fn test_format_list_output_plain_env_vars() {
+            let output = sample_output();
+            let out = format_list_output(&[output], false).unwrap();
+
+            assert_eq!(
+                out,
+                vec![
+                    "MY_APP_URI".to_string(),
+                    "MY_APP_USERNAME".to_string(),
+                    "MY_APP_PASSWORD".to_string(),
+                    "MY_APP_API_TOKEN".to_string(),
+                    "MY_APP_REGION".to_string(),
+                ]
             );
         }
 

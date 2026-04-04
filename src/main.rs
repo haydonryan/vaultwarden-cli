@@ -48,6 +48,10 @@ enum Commands {
         #[arg(short, long)]
         r#type: Option<String>,
 
+        /// Output list results as JSON
+        #[arg(long)]
+        json: bool,
+
         /// Search term
         #[arg(short, long)]
         search: Option<String>,
@@ -203,7 +207,8 @@ async fn main() {
             search,
             org,
             collection,
-        } => commands::list(r#type, search, org, collection).await,
+            json,
+        } => commands::list(r#type, search, org, collection, json).await,
         Commands::Get {
             item,
             format,
@@ -369,6 +374,26 @@ mod tests {
         assert!(!username);
         assert!(password);
         assert_eq!(format, "json"); // default
+        assert_eq!(org, None);
+        assert_eq!(collection, None);
+    }
+
+    #[test]
+    fn test_cli_list_parsing_with_json() {
+        let cli = Cli::parse_from(["vaultwarden-cli", "list", "--json"]);
+        let Commands::List {
+            r#type,
+            json,
+            search,
+            org,
+            collection,
+        } = cli.command
+        else {
+            panic!("expected List command");
+        };
+        assert_eq!(r#type, None);
+        assert!(json);
+        assert_eq!(search, None);
         assert_eq!(org, None);
         assert_eq!(collection, None);
     }

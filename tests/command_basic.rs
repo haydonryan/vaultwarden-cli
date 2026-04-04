@@ -326,9 +326,9 @@ async fn list_with_type_filter_shows_only_matching_items() {
         .arg("login")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Alpha Login"))
-        .stdout(predicate::str::contains("Gamma Login"))
-        .stdout(predicate::str::contains("Beta Note").not());
+        .stdout(predicate::str::contains("ALPHA_LOGIN_USERNAME"))
+        .stdout(predicate::str::contains("GAMMA_LOGIN_USERNAME"))
+        .stdout(predicate::str::contains("BETA_NOTE_USERNAME").not());
 }
 
 #[tokio::test]
@@ -388,8 +388,8 @@ async fn list_with_search_filter_matches_decrypted_data() {
         .arg("alice")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Alpha Login"))
-        .stdout(predicate::str::contains("Beta Login").not());
+        .stdout(predicate::str::contains("ALPHA_LOGIN_USERNAME"))
+        .stdout(predicate::str::contains("BETA_LOGIN_USERNAME").not());
 }
 
 #[tokio::test]
@@ -445,8 +445,67 @@ async fn list_with_no_filters_shows_all_items() {
         .arg("list")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Alpha Login"))
-        .stdout(predicate::str::contains("Beta Note"));
+        .stdout(predicate::str::contains("ALPHA_LOGIN_USERNAME"))
+        .stdout(predicate::str::contains("BETA_NOTE").not());
+}
+
+#[tokio::test]
+async fn list_with_json_flag_includes_complete_items() {
+    let ctx = TestContext::new();
+    let keys = test_crypto_keys();
+    let mock_server = MockServer::start().await;
+
+    let sync_response = serde_json::json!({
+        "Ciphers": [
+            {
+                "Id": "cipher-1",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Alpha Login", &keys),
+                "Login": {
+                    "Username": encrypt_string_for_test("alice", &keys)
+                }
+            },
+            {
+                "Id": "cipher-2",
+                "Type": 2,
+                "Name": encrypt_string_for_test("Beta Note", &keys),
+                "SecureNote": { "Type": 0 }
+            }
+        ],
+        "Folders": [],
+        "Collections": [],
+        "Profile": {
+            "Id": "user-1",
+            "Email": "user@example.com",
+            "Organizations": []
+        }
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/api/sync"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    ctx.write_config(&Config {
+        server: Some(mock_server.uri()),
+        access_token: Some("access-token".to_string()),
+        token_expiry: Some(i64::MAX),
+        ..Default::default()
+    })
+    .unwrap();
+    ctx.write_saved_user_keys(&keys).unwrap();
+
+    ctx.binary()
+        .arg("list")
+        .arg("--json")
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("["))
+        .stdout(predicate::str::contains("\"name\": \"Alpha Login\""))
+        .stdout(predicate::str::contains("\"name\": \"Beta Note\""));
 }
 
 #[tokio::test]
@@ -529,8 +588,8 @@ async fn list_with_type_filter_uses_ciphers_endpoint_when_sync_omits_ssh_items()
         .arg("ssh")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Deploy Key"))
-        .stdout(predicate::str::contains("\"type\": \"ssh\""))
-        .stdout(predicate::str::contains("Alpha Login").not())
+        .stdout(predicate::str::contains("DEPLOY_KEY_SSH_PUBLIC_KEY"))
+        .stdout(predicate::str::contains("DEPLOY_KEY_SSH_PRIVATE_KEY"))
+        .stdout(predicate::str::contains("ALPHA_LOGIN_USERNAME").not())
         .stdout(predicate::str::contains("No items found.").not());
 }
