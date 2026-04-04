@@ -80,6 +80,11 @@ If the token is expired and cannot be refreshed, you will need to run `vaultward
 ```bash
 # List all items (plain output: env var names)
 vaultwarden-cli list
+# Output:
+# GITHUB_URI
+# GITHUB_USERNAME
+#
+# MY_NOTE
 
 # List only login items
 vaultwarden-cli list --type login

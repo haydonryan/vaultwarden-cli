@@ -610,9 +610,16 @@ fn format_list_output(outputs: &[CipherOutput], json_output: bool) -> Result<Vec
     }
 
     let mut lines: Vec<String> = Vec::new();
-    for output in outputs {
+    for (idx, output) in outputs.iter().enumerate() {
+        let mut had_var = false;
+
         for (name, _) in cipher_to_env_vars(output) {
             lines.push(name);
+            had_var = true;
+        }
+
+        if had_var && idx + 1 < outputs.len() {
+            lines.push(String::new());
         }
     }
 
@@ -3661,6 +3668,32 @@ mod tests {
                     "MY_APP_PASSWORD".to_string(),
                     "MY_APP_API_TOKEN".to_string(),
                     "MY_APP_REGION".to_string(),
+                ]
+            );
+        }
+
+        #[test]
+        fn test_format_list_output_plain_env_vars_with_grouped_parents() {
+            let mut first = sample_output();
+            first.name = "GitHub".to_string();
+            let mut second = sample_output();
+            second.name = "my_note".to_string();
+            second.uri = None;
+            second.password = None;
+            second.fields = None;
+
+            let out = format_list_output(&[first, second], false).unwrap();
+
+            assert_eq!(
+                out,
+                vec![
+                    "GITHUB_URI".to_string(),
+                    "GITHUB_USERNAME".to_string(),
+                    "GITHUB_PASSWORD".to_string(),
+                    "GITHUB_API_TOKEN".to_string(),
+                    "GITHUB_REGION".to_string(),
+                    "".to_string(),
+                    "MY_NOTE_USERNAME".to_string(),
                 ]
             );
         }
