@@ -1,7 +1,0 @@
-repo_uri: https://github.com/haydonryan/vaultwarden-cli.git
-repo_branch: main
-ci_image_repository: ghcr.io/<your-org>/vaultwarden-cli-rust-ci
-ci_image_tag: latest
-release_tag_filter: 'v*'
-docker_username: <your-docker-username>
-docker_password: <your-docker-token-or-password>
