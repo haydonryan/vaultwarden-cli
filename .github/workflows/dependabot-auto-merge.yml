@@ -70,7 +70,10 @@ jobs:
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
-          if gh pr checks "$PR_NUMBER" --required; then
+          if checks_output="$(gh pr checks "$PR_NUMBER" --required 2>&1)"; then
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+          elif echo "" | grep -q "no required checks reported"; then
+            echo "No required checks configured for this PR; treating as pass for automerge gating."
             echo "passed=true" >> "$GITHUB_OUTPUT"
           else
             echo "passed=false" >> "$GITHUB_OUTPUT"
@@ -89,6 +92,24 @@ jobs:
           else
             echo "touches_workflows=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Debug automerge prerequisites
+        if: steps.pr.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMERGE_GH_TOKEN != '' && secrets.AUTOMERGE_GH_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "actor=${GITHUB_ACTOR}"
+          echo "event=${GITHUB_EVENT_NAME}"
+          echo "pr_eligible=${{ steps.pr.outputs.eligible }}"
+          echo "pr_number=${PR_NUMBER}"
+          echo "checks_passed=${{ steps.checks.outputs.passed }}"
+          echo "touches_workflows=${{ steps.changed-files.outputs.touches_workflows || 'unknown' }}"
+          gh auth status || true
+          gh pr view "$PR_NUMBER" --repo "$REPO" \
+            --json number,author,draft,mergeableState,maintainerCanModify,state,autoMerge \
+            --jq '{number, author: .author.login, draft, mergeableState, maintainerCanModify, state, autoMerge: .autoMerge != null}'
 
       - name: Require dedicated token for workflow changes
         if: >
