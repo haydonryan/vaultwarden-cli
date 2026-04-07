@@ -177,6 +177,9 @@ enum Commands {
         #[arg(short = 's', long)]
         skip_missing: bool,
     },
+
+    /// Update vaultwarden-cli to the latest GitHub release
+    Update,
 }
 
 fn effective_format(format: &str, username: bool, password: bool) -> &str {
@@ -269,6 +272,7 @@ async fn main() {
             output,
             skip_missing,
         } => commands::interpolate(&file, output.as_deref(), skip_missing).await,
+        Commands::Update => commands::update().await,
     };
 
     if let Err(e) = result {
@@ -478,5 +482,11 @@ mod tests {
         assert_eq!(file, "config.yml");
         assert_eq!(output, Some("rendered.yml".to_string()));
         assert!(skip_missing);
+    }
+
+    #[test]
+    fn test_cli_update_parsing() {
+        let cli = Cli::parse_from(["vaultwarden-cli", "update"]);
+        assert!(matches!(cli.command, Commands::Update));
     }
 }

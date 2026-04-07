@@ -1,18 +1,39 @@
 use anyhow::{Context, Result};
+use flate2::read::GzDecoder;
 use regex::Regex;
+use semver::Version;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io::{self, Write};
+use std::path::Path;
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH}; // used by unix_now()
+use tar::Archive;
+use tempfile::tempdir;
+use zip::ZipArchive;
 
 fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock is before UNIX epoch")
         .as_secs() as i64
+}
+
+const GITHUB_OWNER: &str = "haydonryan";
+const GITHUB_REPO: &str = "vaultwarden-cli";
+
+#[derive(serde::Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    assets: Vec<GitHubAsset>,
+}
+
+#[derive(serde::Deserialize)]
+struct GitHubAsset {
+    name: String,
+    browser_download_url: String,
 }
 
 use crate::api::ApiClient;
@@ -240,6 +261,172 @@ pub async fn status() -> Result<()> {
         println!("Vault: Locked");
     }
 
+    Ok(())
+}
+
+pub async fn update() -> Result<()> {
+    if cfg!(target_os = "windows") {
+        anyhow::bail!(
+            "Self-update is not supported on Windows. Download the latest release from https://github.com/{}/{}/releases",
+            GITHUB_OWNER,
+            GITHUB_REPO
+        );
+    }
+
+    let current_version = Version::parse(env!("CARGO_PKG_VERSION"))
+        .context("Failed to parse current package version")?;
+    let release = fetch_latest_release().await?;
+    let latest_version = parse_release_version(&release.tag_name)?;
+
+    if latest_version <= current_version {
+        println!("Already on the latest version ({})", current_version);
+        return Ok(());
+    }
+
+    let (target, archive_ext) = target_triplet_and_archive();
+    let asset_name = format!("vaultwarden-cli-{}.{}", target, archive_ext);
+    let asset = release
+        .assets
+        .iter()
+        .find(|asset| asset.name == asset_name)
+        .with_context(|| format!("No release asset named '{}' was found", asset_name))?;
+
+    let dir = tempdir().context("Failed to create temporary update directory")?;
+    let archive_path = dir.path().join(&asset.name);
+    let binary_name = binary_name();
+    let extracted_binary = dir.path().join(binary_name);
+
+    download_file(&asset.browser_download_url, &archive_path).await?;
+    extract_release_asset(&archive_path, &extracted_binary)?;
+    install_binary(&extracted_binary)?;
+
+    println!(
+        "Updated vaultwarden-cli from {} to {}",
+        current_version, latest_version
+    );
+    Ok(())
+}
+
+async fn fetch_latest_release() -> Result<GitHubRelease> {
+    let url = format!(
+        "https://api.github.com/repos/{}/{}/releases/latest",
+        GITHUB_OWNER, GITHUB_REPO
+    );
+    let client = reqwest::Client::new();
+    let release = client
+        .get(url)
+        .header(reqwest::header::USER_AGENT, "vaultwarden-cli")
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<GitHubRelease>()
+        .await?;
+    Ok(release)
+}
+
+fn parse_release_version(tag_name: &str) -> Result<Version> {
+    let normalized = tag_name.strip_prefix('v').unwrap_or(tag_name);
+    Version::parse(normalized).with_context(|| format!("Invalid release tag '{}'", tag_name))
+}
+
+fn target_triplet_and_archive() -> (&'static str, &'static str) {
+    if cfg!(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")) {
+        ("x86_64-unknown-linux-gnu", "tar.gz")
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64", target_env = "musl")) {
+        ("x86_64-unknown-linux-musl", "tar.gz")
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        ("aarch64-unknown-linux-gnu", "tar.gz")
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        ("x86_64-apple-darwin", "tar.gz")
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        ("aarch64-apple-darwin", "tar.gz")
+    } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        ("x86_64-pc-windows-msvc", "zip")
+    } else if cfg!(all(target_os = "windows", target_arch = "aarch64")) {
+        ("aarch64-pc-windows-msvc", "zip")
+    } else {
+        panic!("unsupported target platform for self-update");
+    }
+}
+
+fn binary_name() -> &'static str {
+    env!("CARGO_PKG_NAME")
+}
+
+async fn download_file(url: &str, dest: &Path) -> Result<()> {
+    let client = reqwest::Client::new();
+    let bytes = client
+        .get(url)
+        .header(reqwest::header::USER_AGENT, "vaultwarden-cli")
+        .send()
+        .await?
+        .error_for_status()?
+        .bytes()
+        .await?;
+    tokio::fs::write(dest, bytes).await?;
+    Ok(())
+}
+
+fn extract_release_asset(archive_path: &Path, output_path: &Path) -> Result<()> {
+    if archive_path.extension().and_then(|s| s.to_str()) == Some("zip") {
+        extract_zip(archive_path, output_path)
+    } else {
+        extract_tar_gz(archive_path, output_path)
+    }
+}
+
+fn extract_tar_gz(archive_path: &Path, output_path: &Path) -> Result<()> {
+    let file = fs::File::open(archive_path)?;
+    let decompressed = GzDecoder::new(file);
+    let mut archive = Archive::new(decompressed);
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?;
+        if path.file_name().and_then(|s| s.to_str()) == Some(binary_name()) {
+            entry.unpack(output_path)?;
+            return Ok(());
+        }
+    }
+    anyhow::bail!("Binary not found in release archive");
+}
+
+fn extract_zip(archive_path: &Path, output_path: &Path) -> Result<()> {
+    let file = fs::File::open(archive_path)?;
+    let mut archive = ZipArchive::new(file)?;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        let name = entry.name().to_string();
+        if Path::new(&name).file_name().and_then(|s| s.to_str()) == Some(binary_name()) {
+            let mut output = fs::File::create(output_path)?;
+            io::copy(&mut entry, &mut output)?;
+            return Ok(());
+        }
+    }
+    anyhow::bail!("Binary not found in release archive");
+}
+
+fn install_binary(new_binary: &Path) -> Result<()> {
+    let current_exe = std::env::current_exe().context("Failed to resolve current executable path")?;
+    let current_dir = current_exe
+        .parent()
+        .context("Failed to determine executable directory")?;
+    let temp_path = current_dir.join(format!("{}.new", binary_name()));
+
+    fs::copy(new_binary, &temp_path).context("Failed to stage updated binary")?;
+    set_executable_permissions(&temp_path)?;
+    fs::rename(&temp_path, &current_exe).context("Failed to replace current binary")?;
+    Ok(())
+}
+
+fn set_executable_permissions(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms)?;
+    }
     Ok(())
 }
 
