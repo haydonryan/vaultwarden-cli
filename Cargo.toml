@@ -24,7 +24,7 @@ hkdf = "=0.12.4"
 sha2 = "=0.10.9"
 hmac = "=0.12.1"
 pbkdf2 = { version = "=0.12.2", features = ["simple"] }
-sha1 = "=0.10.6"
+sha1 = "=0.11.0"
 rpassword = "7.4"
 rsa = { version = "0.9", features = ["sha2"] }
 
