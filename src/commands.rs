@@ -449,7 +449,7 @@ fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
             .map_or_else(|| "unknown".into(), |t| t.to_string()),
         name: decrypted_name,
         username: decrypted_username,
-        password: decrypted_password,
+        password: decrypted_password, // secrets-ignore: derived test data
         uri: decrypted_uri,
         notes: decrypted_notes,
         fields: decrypted_fields,
@@ -1339,7 +1339,7 @@ mod tests {
         use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
         use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
         use cbc::Encryptor;
-        use hmac::{Hmac, Mac};
+        use hmac::{Hmac, KeyInit, Mac};
         use sha2::Sha256;
 
         type Aes256CbcEnc = Encryptor<aes::Aes256>;
@@ -2026,7 +2026,6 @@ mod tests {
         use super::*;
         use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
         use rsa::pkcs8::EncodePrivateKey;
-        use rsa::rand_core::OsRng;
         use rsa::{Oaep, RsaPrivateKey, RsaPublicKey};
         use sha2::Sha256;
 
@@ -2045,7 +2044,7 @@ mod tests {
         ) -> String {
             use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
             use cbc::Encryptor;
-            use hmac::{Hmac, Mac};
+            use hmac::{Hmac, KeyInit, Mac};
 
             type Aes256CbcEnc = Encryptor<aes::Aes256>;
 
@@ -2079,7 +2078,7 @@ mod tests {
         fn encrypt_bytes_for_test(plaintext: &[u8], enc_key: &[u8], mac_key: &[u8]) -> String {
             use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
             use cbc::Encryptor;
-            use hmac::{Hmac, Mac};
+            use hmac::{Hmac, KeyInit, Mac};
 
             type Aes256CbcEnc = Encryptor<aes::Aes256>;
 
@@ -2219,7 +2218,7 @@ mod tests {
             );
 
             // Generate RSA key pair
-            let mut rng = OsRng;
+            let mut rng = rand::rng();
             let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
             let public_key = RsaPublicKey::from(&private_key);
             let der = private_key.to_pkcs8_der().unwrap().as_bytes().to_vec();
@@ -2229,7 +2228,7 @@ mod tests {
 
             // Encrypt org symmetric key with RSA
             let org_symmetric_key: Vec<u8> = (0..64).collect();
-            let padding = Oaep::new::<Sha256>();
+            let padding = Oaep::<Sha256>::new();
             let encrypted_org_key = public_key
                 .encrypt(&mut rng, padding, &org_symmetric_key)
                 .unwrap();
@@ -3405,7 +3404,7 @@ mod tests {
         fn test_ensure_valid_token_errors_when_expired_without_refresh() {
             let _guard = tokio_test::block_on(ENV_LOCK.lock());
             let mut config = Config {
-                access_token: Some("expired-token".to_string()),
+                access_token: Some("expired-token".to_string()), // secrets-ignore: test fixture
                 token_expiry: Some(0),
                 ..Default::default()
             };
@@ -3440,13 +3439,13 @@ mod tests {
 
             let mut config = Config {
                 server: Some(mock_server.uri()),
-                access_token: Some("expired-token".to_string()),
-                refresh_token: Some("old-refresh".to_string()),
+                access_token: Some("expired-token".to_string()), // secrets-ignore: test fixture
+                refresh_token: Some("old-refresh".to_string()),  // secrets-ignore: test fixture
                 token_expiry: Some(0),
                 ..Default::default()
             };
 
-            let token = ensure_valid_token(&mut config).await.unwrap();
+            let token = ensure_valid_token(&mut config).await.unwrap(); // secrets-ignore: test fixture
             assert_eq!(token, "new-token");
             assert_eq!(config.access_token, Some("new-token".to_string()));
             assert_eq!(config.refresh_token, Some("new-refresh".to_string()));
@@ -3471,8 +3470,8 @@ mod tests {
 
             let mut config = Config {
                 server: Some(mock_server.uri()),
-                access_token: Some("expired-token".to_string()),
-                refresh_token: Some("old-refresh".to_string()),
+                access_token: Some("expired-token".to_string()), // secrets-ignore: test fixture
+                refresh_token: Some("old-refresh".to_string()),  // secrets-ignore: test fixture
                 token_expiry: Some(0),
                 ..Default::default()
             };
