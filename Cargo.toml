@@ -23,7 +23,7 @@ cbc = "0.1"
 hkdf = "=0.13.0"
 sha2 = "=0.11.0"
 hmac = "=0.13.0"
-pbkdf2 = { version = "=0.13.0-rc.10", features = ["sha2"] }
+pbkdf2 = { version = "=0.13.0", features = ["sha2"] }
 sha1 = "=0.11.0"
 rpassword = "7.4"
 rsa = { version = "0.10.0-rc.17", features = ["sha2"] }
