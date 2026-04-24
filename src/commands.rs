@@ -1320,7 +1320,7 @@ mod tests {
     mod filter_resolution_tests {
         use super::*;
         use crate::models::{Collection, Organization, Profile};
-        use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+        use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
         use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
         use cbc::Encryptor;
         use hmac::{Hmac, KeyInit, Mac};
@@ -1347,7 +1347,7 @@ mod tests {
 
             let ciphertext = Aes256CbcEnc::new_from_slices(&keys.enc_key, &iv)
                 .unwrap()
-                .encrypt_padded_mut::<Pkcs7>(&mut buf, msg_len)
+                .encrypt_padded::<Pkcs7>(&mut buf, msg_len)
                 .unwrap()
                 .to_vec();
 
@@ -2026,7 +2026,7 @@ mod tests {
             email: &str,
             iterations: u32,
         ) -> String {
-            use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+            use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
             use cbc::Encryptor;
             use hmac::{Hmac, KeyInit, Mac};
 
@@ -2042,7 +2042,7 @@ mod tests {
 
             let ciphertext = Aes256CbcEnc::new_from_slices(&stretched.enc_key, &iv)
                 .unwrap()
-                .encrypt_padded_mut::<Pkcs7>(&mut buf, msg_len)
+                .encrypt_padded::<Pkcs7>(&mut buf, msg_len)
                 .unwrap()
                 .to_vec();
 
@@ -2060,7 +2060,7 @@ mod tests {
         }
 
         fn encrypt_bytes_for_test(plaintext: &[u8], enc_key: &[u8], mac_key: &[u8]) -> String {
-            use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+            use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
             use cbc::Encryptor;
             use hmac::{Hmac, KeyInit, Mac};
 
@@ -2073,7 +2073,7 @@ mod tests {
 
             let ciphertext = Aes256CbcEnc::new_from_slices(enc_key, &iv)
                 .unwrap()
-                .encrypt_padded_mut::<Pkcs7>(&mut buf, msg_len)
+                .encrypt_padded::<Pkcs7>(&mut buf, msg_len)
                 .unwrap()
                 .to_vec();
 

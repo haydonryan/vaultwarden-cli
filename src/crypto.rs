@@ -1,4 +1,4 @@
-use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
+use aes::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::Pkcs7};
 use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use hkdf::Hkdf;
@@ -156,7 +156,7 @@ impl CryptoKeys {
         let mut buf = ciphertext.clone();
         let decrypted = Aes256CbcDec::new_from_slices(&self.enc_key, &iv)
             .map_err(|e| anyhow::anyhow!("AES init failed: {}", e))?
-            .decrypt_padded_mut::<Pkcs7>(&mut buf)
+            .decrypt_padded::<Pkcs7>(&mut buf)
             .map_err(|e| anyhow::anyhow!("AES decrypt failed: {}", e))?;
 
         Ok(decrypted.to_vec())
@@ -517,7 +517,7 @@ pub(crate) mod tests {
 
     pub(crate) mod test_helpers {
         use super::*;
-        use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+        use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
         use hmac::{Hmac, KeyInit, Mac};
         use sha2::Sha256;
 
@@ -531,7 +531,7 @@ pub(crate) mod tests {
 
             let ciphertext = Aes256CbcEnc::new_from_slices(enc_key, &iv)
                 .unwrap()
-                .encrypt_padded_mut::<Pkcs7>(&mut buf, msg_len)
+                .encrypt_padded::<Pkcs7>(&mut buf, msg_len)
                 .unwrap()
                 .to_vec();
 

@@ -159,6 +159,15 @@ jobs:
         with:
           command: check all
 
+  merge-ready:
+    name: Merge Ready
+    runs-on: ubuntu-latest
+    needs: [check, test, Lint, Security]
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Confirm required CI jobs passed
+        run: echo "Required CI jobs passed."
+
   detect-release-tag:
     name: Detect Release Tag
     runs-on: ubuntu-latest

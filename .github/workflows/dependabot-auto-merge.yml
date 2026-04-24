@@ -70,12 +70,41 @@ jobs:
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
+          head_sha=$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')
+
+          merge_ready_json=$(gh api \
+            "repos/${GH_REPO}/commits/${head_sha}/check-runs" \
+            -H "Accept: application/vnd.github+json" \
+            --jq '[.check_runs[] | select(.name == "Merge Ready")] | sort_by(.started_at) | last')
+
+          if [ -z "$merge_ready_json" ] || [ "$merge_ready_json" = "null" ]; then
+            echo "Merge Ready check has not reported for this PR yet." >&2
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          merge_ready_status=$(printf '%s' "$merge_ready_json" | jq -r '.status')
+          merge_ready_conclusion=$(printf '%s' "$merge_ready_json" | jq -r '.conclusion')
+
+          if [ "$merge_ready_status" != "completed" ]; then
+            echo "Merge Ready check is still in progress." >&2
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$merge_ready_conclusion" != "success" ]; then
+            echo "Merge Ready check concluded with ${merge_ready_conclusion}." >&2
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           if checks_output="$(gh pr checks "$PR_NUMBER" --required 2>&1)"; then
             echo "passed=true" >> "$GITHUB_OUTPUT"
           elif echo "$checks_output" | grep -q "no required checks reported"; then
-            echo "No required checks configured for this PR; treating as pass for automerge gating."
+            echo "No branch protection required checks reported; relying on Merge Ready gate." >&2
             echo "passed=true" >> "$GITHUB_OUTPUT"
           else
+            echo "$checks_output" >&2
             echo "passed=false" >> "$GITHUB_OUTPUT"
           fi
 
