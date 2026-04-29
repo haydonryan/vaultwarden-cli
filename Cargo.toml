@@ -25,7 +25,7 @@ sha2 = "=0.11.0"
 hmac = "=0.13.0"
 pbkdf2 = { version = "=0.13.0", features = ["sha2"] }
 sha1 = "=0.11.0"
-rpassword = "7.4"
+rpassword = "7.5"
 rsa = { version = "0.10.0-rc.18", features = ["sha2"] }
 
 [dev-dependencies]
