@@ -200,7 +200,9 @@ pub fn get_client_secret(client_id: &str) -> Result<String> {
 }
 
 pub fn delete_client_secret(client_id: &str) -> Result<()> {
-    drop(keyring_entry(client_id)?.delete_credential()); // Ignore errors if not found
+    if let Ok(entry) = keyring_entry(client_id) {
+        drop(entry.delete_credential()); // Ignore errors if not found
+    }
     Ok(())
 }
 
