@@ -149,7 +149,7 @@ impl CryptoKeys {
             hmac.update(&ciphertext);
 
             hmac.verify_slice(&mac)
-                .map_err(|_| anyhow::anyhow!("MAC verification failed"))?;
+                .map_err(|err| anyhow::anyhow!("MAC verification failed: {err}"))?;
         }
 
         // Decrypt

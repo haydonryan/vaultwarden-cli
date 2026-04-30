@@ -49,3 +49,13 @@ publish = false
 tag-name = "v{{version}}"
 tag-message = "release: v{{version}}"
 pre-release-commit-message = "release: v{{version}}"
+
+[lints.clippy]
+dbg_macro = "deny"
+get_unwrap = "deny"
+let_underscore_must_use = "deny"
+map_err_ignore = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+unused_result_ok = "deny"

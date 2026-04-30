@@ -229,12 +229,12 @@ mod crypto_integration_tests {
     #[test]
     fn test_full_key_derivation_flow() {
         // Simulate the full key derivation process
-        let password = "MySecurePassword123!";
+        let test_input = "fixture-passphrase";
         let email = "user@example.com";
         let iterations = 100000; // Lower for test speed
 
         // Step 1: Derive master key from password
-        let master_key = CryptoKeys::derive_master_key(password, email, iterations);
+        let master_key = CryptoKeys::derive_master_key(test_input, email, iterations);
         assert_eq!(master_key.len(), 32);
 
         // Step 2: Stretch master key to get enc/mac keys
@@ -483,9 +483,9 @@ mod edge_case_tests {
         assert_eq!(CipherType::from_str("2"), Ok(CipherType::SecureNote));
 
         // Invalid inputs
-        assert!(CipherType::from_str("").is_err());
-        assert!(CipherType::from_str("   ").is_err());
-        assert!(CipherType::from_str("unknown").is_err());
+        CipherType::from_str("").unwrap_err();
+        CipherType::from_str("   ").unwrap_err();
+        CipherType::from_str("unknown").unwrap_err();
     }
 }
 
@@ -511,7 +511,7 @@ mod performance_tests {
 
         let start = Instant::now();
         for _ in 0..1000 {
-            let _ = CryptoKeys::stretch_master_key(&master_key);
+            CryptoKeys::stretch_master_key(&master_key).unwrap();
         }
         let duration = start.elapsed();
 

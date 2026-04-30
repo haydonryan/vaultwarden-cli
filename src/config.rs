@@ -54,7 +54,9 @@ impl Config {
                 serde_json::from_str(&content).context("Failed to parse config")?;
 
             // Try to load saved keys
-            config.load_saved_keys().ok();
+            if let Err(_err) = config.load_saved_keys() {
+                // Saved keys are optional; ignore missing or invalid persisted state here.
+            }
 
             Ok(config)
         } else {
@@ -198,7 +200,7 @@ pub fn get_client_secret(client_id: &str) -> Result<String> {
 }
 
 pub fn delete_client_secret(client_id: &str) -> Result<()> {
-    let _ = keyring_entry(client_id)?.delete_credential(); // Ignore errors if not found
+    drop(keyring_entry(client_id)?.delete_credential()); // Ignore errors if not found
     Ok(())
 }
 
@@ -573,7 +575,7 @@ mod tests {
 
             assert_eq!(loaded_saved.org_keys.len(), 2);
 
-            let org1_data = loaded_saved.org_keys.get("org-1").unwrap();
+            let org1_data = &loaded_saved.org_keys["org-1"];
             let org1_enc = BASE64.decode(&org1_data.enc_key).unwrap();
             assert_eq!(org1_enc, vec![0x11u8; 32]);
         }
