@@ -96,11 +96,11 @@ pub enum CipherType {
 impl std::fmt::Display for CipherType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CipherType::Login => write!(f, "login"),
-            CipherType::SecureNote => write!(f, "note"),
-            CipherType::Card => write!(f, "card"),
-            CipherType::Identity => write!(f, "identity"),
-            CipherType::SshKey => write!(f, "ssh"),
+            Self::Login => write!(f, "login"),
+            Self::SecureNote => write!(f, "note"),
+            Self::Card => write!(f, "card"),
+            Self::Identity => write!(f, "identity"),
+            Self::SshKey => write!(f, "ssh"),
         }
     }
 }
@@ -114,21 +114,21 @@ impl FromStr for CipherType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            _ if s.eq_ignore_ascii_case("login") || s == "1" => Ok(CipherType::Login),
+            _ if s.eq_ignore_ascii_case("login") || s == "1" => Ok(Self::Login),
             _ if s.eq_ignore_ascii_case("note")
                 || s.eq_ignore_ascii_case("securenote")
                 || s == "2" =>
             {
-                Ok(CipherType::SecureNote)
+                Ok(Self::SecureNote)
             }
-            _ if s.eq_ignore_ascii_case("card") || s == "3" => Ok(CipherType::Card),
-            _ if s.eq_ignore_ascii_case("identity") || s == "4" => Ok(CipherType::Identity),
+            _ if s.eq_ignore_ascii_case("card") || s == "3" => Ok(Self::Card),
+            _ if s.eq_ignore_ascii_case("identity") || s == "4" => Ok(Self::Identity),
             _ if s.eq_ignore_ascii_case("ssh")
                 || s.eq_ignore_ascii_case("sshkey")
                 || s == "5"
                 || s == "6" =>
             {
-                Ok(CipherType::SshKey)
+                Ok(Self::SshKey)
             }
             _ => Err(ParseCipherTypeError),
         }
@@ -190,7 +190,8 @@ pub struct CipherData {
 }
 
 impl Cipher {
-    pub fn cipher_type(&self) -> Option<CipherType> {
+    #[must_use]
+    pub const fn cipher_type(&self) -> Option<CipherType> {
         if self.ssh_key.is_some() {
             return Some(CipherType::SshKey);
         }
@@ -215,11 +216,13 @@ impl Cipher {
     }
 
     // Get the name from either direct field or nested data
+    #[must_use]
     pub fn get_name(&self) -> Option<&str> {
         self.resolve_field(self.name.as_deref(), |d| d.name.as_deref())
     }
 
     // Get username from login or nested data
+    #[must_use]
     pub fn get_username(&self) -> Option<&str> {
         self.resolve_field(
             self.login.as_ref().and_then(|l| l.username.as_deref()),
@@ -228,6 +231,7 @@ impl Cipher {
     }
 
     // Get password from login or nested data
+    #[must_use]
     pub fn get_password(&self) -> Option<&str> {
         self.resolve_field(
             self.login.as_ref().and_then(|l| l.password.as_deref()),
@@ -236,6 +240,7 @@ impl Cipher {
     }
 
     // Get URI from login or nested data
+    #[must_use]
     pub fn get_uri(&self) -> Option<&str> {
         let direct = self
             .login
@@ -254,11 +259,13 @@ impl Cipher {
     }
 
     // Get notes
+    #[must_use]
     pub fn get_notes(&self) -> Option<&str> {
         self.resolve_field(self.notes.as_deref(), |d| d.notes.as_deref())
     }
 
     // Get fields
+    #[must_use]
     pub fn get_fields(&self) -> Option<&Vec<FieldData>> {
         self.fields
             .as_ref()

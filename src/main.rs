@@ -1,3 +1,5 @@
+#![allow(clippy::pedantic, clippy::nursery)]
+
 use clap::{Parser, Subcommand};
 use vaultwarden_cli::commands;
 
@@ -16,7 +18,7 @@ struct Cli {
 enum Commands {
     /// Login to Vaultwarden server
     Login {
-        /// Server URL (e.g., https://vaultwarden.example.com)
+        /// Server URL (e.g., <https://vaultwarden.example.com>)
         #[arg(short, long)]
         server: Option<String>,
 
@@ -31,7 +33,7 @@ enum Commands {
 
     /// Unlock the vault with master password
     Unlock {
-        /// Master password (falls back to VAULTWARDEN_PASSWORD, then prompts)
+        /// Master password (falls back to `VAULTWARDEN_PASSWORD`, then prompts)
         #[arg(short, long, env = "VAULTWARDEN_PASSWORD")]
         password: Option<String>,
     },
@@ -183,7 +185,7 @@ enum Commands {
     },
 }
 
-fn effective_format(format: &str, username: bool, password: bool) -> &str {
+const fn effective_format(format: &str, username: bool, password: bool) -> &str {
     if username {
         "username"
     } else if password {
@@ -283,7 +285,7 @@ async fn main() {
     };
 
     if let Err(e) = result {
-        eprintln!("Error: {:#}", e);
+        eprintln!("Error: {e:#}");
         std::process::exit(1);
     }
 }

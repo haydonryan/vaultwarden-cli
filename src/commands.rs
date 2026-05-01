@@ -41,7 +41,7 @@ pub async fn login(
     let api = ApiClient::new(&server)?;
 
     // Check server is reachable
-    println!("Connecting to {}...", server);
+    println!("Connecting to {server}...");
     if !api.check_server().await? {
         anyhow::bail!("Server is not reachable");
     }
@@ -79,10 +79,7 @@ pub async fn login(
     // Best-effort secure storage: some environments (headless/minimal Linux) don't provide
     // an activatable secret service over D-Bus.
     if let Err(err) = config::store_client_secret(&client_id, &client_secret) {
-        eprintln!(
-            "Warning: Could not store client secret in system keyring: {}",
-            err
-        );
+        eprintln!("Warning: Could not store client secret in system keyring: {err}");
         eprintln!(
             "You can keep using this session. If you need to login again later, pass --client-secret."
         );
@@ -91,7 +88,7 @@ pub async fn login(
     println!("Login successful!");
     let org_count = config.org_keys.len();
     if org_count > 0 {
-        println!("Found {} organization(s).", org_count);
+        println!("Found {org_count} organization(s).");
     }
     println!("Run 'vaultwarden-cli unlock' to unlock the vault with your master password.");
     Ok(())
@@ -118,13 +115,12 @@ pub async fn unlock(password: Option<String>) -> Result<()> {
     let iterations = config.kdf_iterations.unwrap_or(600000);
 
     // Get password - either from argument or prompt
-    let password = match password {
-        Some(p) => p,
-        None => {
-            print!("Master password: ");
-            io::stdout().flush()?;
-            rpassword::read_password()?
-        }
+    let password = if let Some(p) = password {
+        p
+    } else {
+        print!("Master password: ");
+        io::stdout().flush()?;
+        rpassword::read_password()?
     };
 
     println!("Deriving key...");
@@ -150,13 +146,13 @@ pub async fn unlock(password: Option<String>) -> Result<()> {
                             config.org_crypto_keys.insert(org_id.clone(), org_keys);
                         }
                         Err(e) => {
-                            eprintln!("Warning: Failed to decrypt org {} key: {}", org_id, e);
+                            eprintln!("Warning: Failed to decrypt org {org_id} key: {e}");
                         }
                     }
                 }
             }
             Err(e) => {
-                eprintln!("Warning: Failed to decrypt private key: {}", e);
+                eprintln!("Warning: Failed to decrypt private key: {e}");
             }
         }
     }
@@ -167,10 +163,7 @@ pub async fn unlock(password: Option<String>) -> Result<()> {
 
     let org_count = config.org_crypto_keys.len();
     if org_count > 0 {
-        println!(
-            "Vault unlocked successfully! ({} organization keys decrypted)",
-            org_count
-        );
+        println!("Vault unlocked successfully! ({org_count} organization keys decrypted)");
     } else {
         println!("Vault unlocked successfully!");
     }
@@ -212,13 +205,13 @@ pub async fn status() -> Result<()> {
 
     println!("Status: Logged in");
     if let Some(server) = &config.server {
-        println!("Server: {}", server);
+        println!("Server: {server}");
     }
     if let Some(client_id) = &config.client_id {
-        println!("Client ID: {}", client_id);
+        println!("Client ID: {client_id}");
     }
     if let Some(email) = &config.email {
-        println!("Email: {}", email);
+        println!("Email: {email}");
     }
 
     // Check token expiry
@@ -228,7 +221,7 @@ pub async fn status() -> Result<()> {
             let remaining = expiry - now;
             let hours = remaining / 3600;
             let minutes = (remaining % 3600) / 60;
-            println!("Token expires in: {}h {}m", hours, minutes);
+            println!("Token expires in: {hours}h {minutes}m");
         } else {
             println!("Token: Expired (will refresh on next request)");
         }
@@ -271,9 +264,8 @@ async fn ensure_valid_token(config: &mut Config) -> Result<String> {
                     anyhow::bail!("Token expired and refresh failed. Please login again.");
                 }
             }
-        } else {
-            anyhow::bail!("Token expired. Please login again.");
         }
+        anyhow::bail!("Token expired. Please login again.");
     }
 
     Ok(access_token)
@@ -376,17 +368,13 @@ fn find_cipher_output(
 }
 
 fn get_cipher_keys<'a>(config: &'a Config, cipher: &Cipher) -> Result<&'a CryptoKeys> {
-    match config.get_keys_for_cipher(cipher.organization_id.as_deref()) {
-        Some(keys) => Ok(keys),
-        None => {
-            if let Some(org_id) = &cipher.organization_id {
-                anyhow::bail!(
-                    "Organization key not available for org {}. Try re-logging in.",
-                    org_id
-                );
-            }
-            anyhow::bail!("No decryption keys available");
+    if let Some(keys) = config.get_keys_for_cipher(cipher.organization_id.as_deref()) {
+        Ok(keys)
+    } else {
+        if let Some(org_id) = &cipher.organization_id {
+            anyhow::bail!("Organization key not available for org {org_id}. Try re-logging in.");
         }
+        anyhow::bail!("No decryption keys available");
     }
 }
 
@@ -467,7 +455,7 @@ fn resolve_org_id(profile: &crate::models::Profile, org_filter: &str) -> Result<
                 .is_some_and(|n| n.eq_ignore_ascii_case(org_filter))
     });
     Ok(matched
-        .with_context(|| format!("Organization '{}' not found", org_filter))?
+        .with_context(|| format!("Organization '{org_filter}' not found"))?
         .id
         .clone())
 }
@@ -501,7 +489,7 @@ fn resolve_collection_id(
         }
     }
 
-    anyhow::bail!("Collection '{}' not found", collection_filter)
+    anyhow::bail!("Collection '{collection_filter}' not found")
 }
 
 fn output_matches_search(output: &CipherOutput, search_lower: &str) -> bool {
@@ -558,10 +546,7 @@ pub async fn list(
         if let Ok(cipher_type) = CipherType::from_str(type_str) {
             ciphers.retain(|c| c.cipher_type() == Some(cipher_type));
         } else {
-            anyhow::bail!(
-                "Invalid type filter: {}. Use: login, note, card, identity, ssh",
-                type_str
-            );
+            anyhow::bail!("Invalid type filter: {type_str}. Use: login, note, card, identity, ssh");
         }
     }
 
@@ -598,7 +583,7 @@ pub async fn list(
     }
 
     for line in format_list_output(&outputs, json_output)? {
-        println!("{}", line);
+        println!("{line}");
     }
 
     Ok(())
@@ -667,12 +652,11 @@ pub async fn get(
                 o.name.to_lowercase() == item_lower
                     || o.uri
                         .as_ref()
-                        .map(|u| u.to_lowercase().contains(&item_lower))
-                        .unwrap_or(false)
+                        .is_some_and(|u| u.to_lowercase().contains(&item_lower))
             },
             matches,
         )
-        .context(format!("Item '{}' not found", item))?
+        .context(format!("Item '{item}' not found"))?
     };
 
     print_cipher_output(&output, format)
@@ -699,8 +683,7 @@ pub async fn get_by_uri(
         |o| {
             o.uri
                 .as_ref()
-                .map(|u| u.to_lowercase().contains(&uri_lower))
-                .unwrap_or(false)
+                .is_some_and(|u| u.to_lowercase().contains(&uri_lower))
         },
         |c| {
             cipher_matches_filters(
@@ -711,7 +694,7 @@ pub async fn get_by_uri(
             )
         },
     )
-    .context(format!("No item found with URI containing '{}'", uri))?;
+    .context(format!("No item found with URI containing '{uri}'"))?;
 
     print_cipher_output(&output, format)
 }
@@ -751,7 +734,7 @@ fn resolve_component(output: &CipherOutput, component: &str) -> Result<String> {
             {
                 return Ok(field.value.clone());
             }
-            anyhow::bail!("Item has no component '{}'", component);
+            anyhow::bail!("Item has no component '{component}'");
         }
     }
 }
@@ -766,7 +749,7 @@ fn track_missing_placeholder(
 ) -> String {
     unmatched.push(full.to_string());
     if !skip_missing {
-        missing.push(format!("{}: {}", placeholder, error));
+        missing.push(format!("{placeholder}: {error}"));
     }
     full.to_string()
 }
@@ -787,7 +770,7 @@ pub async fn interpolate(file: &str, output_file: Option<&str>, skip_missing: bo
     }
 
     let input =
-        fs::read_to_string(file).with_context(|| format!("Failed to read file '{}'", file))?;
+        fs::read_to_string(file).with_context(|| format!("Failed to read file '{file}'"))?;
     static PLACEHOLDER_RE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\(\(([^\s()]+)\)\)").expect("valid regex"));
     let mut missing: Vec<String> = Vec::new();
@@ -813,7 +796,7 @@ pub async fn interpolate(file: &str, output_file: Option<&str>, skip_missing: bo
                     },
                     None => track_missing_placeholder(
                         placeholder,
-                        &format!("item '{}' not found", raw_name),
+                        &format!("item '{raw_name}' not found"),
                         &full_placeholder,
                         skip_missing,
                         &mut missing,
@@ -839,7 +822,7 @@ pub async fn interpolate(file: &str, output_file: Option<&str>, skip_missing: bo
     if skip_missing
         && let Some(warning) = format_unmatched_placeholder_warning(&unmatched_placeholders)
     {
-        eprintln!("{}", warning);
+        eprintln!("{warning}");
     }
 
     write_interpolated_output(&output, output_file)?;
@@ -859,13 +842,12 @@ fn format_unmatched_placeholder_warning(placeholders: &[String]) -> Option<Strin
 }
 
 fn write_interpolated_output(output: &str, output_file: Option<&str>) -> Result<()> {
-    match output_file {
-        Some(path) => fs::write(path, output)
-            .with_context(|| format!("Failed to write interpolated output to '{}'", path)),
-        None => {
-            print!("{}", output);
-            Ok(())
-        }
+    if let Some(path) = output_file {
+        fs::write(path, output)
+            .with_context(|| format!("Failed to write interpolated output to '{path}'"))
+    } else {
+        print!("{output}");
+        Ok(())
     }
 }
 
@@ -873,22 +855,22 @@ fn cipher_to_env_vars(output: &CipherOutput) -> Vec<(String, String)> {
     let prefix = sanitize_env_name(&output.name);
     let mut vars: Vec<(String, String)> = Vec::new();
     if let Some(v) = &output.uri {
-        vars.push((format!("{}_URI", prefix), v.clone()));
+        vars.push((format!("{prefix}_URI"), v.clone()));
     }
     if let Some(v) = &output.username {
-        vars.push((format!("{}_USERNAME", prefix), v.clone()));
+        vars.push((format!("{prefix}_USERNAME"), v.clone()));
     }
     if let Some(v) = &output.password {
-        vars.push((format!("{}_PASSWORD", prefix), v.clone()));
+        vars.push((format!("{prefix}_PASSWORD"), v.clone()));
     }
     if let Some(v) = &output.ssh_public_key {
-        vars.push((format!("{}_SSH_PUBLIC_KEY", prefix), v.clone()));
+        vars.push((format!("{prefix}_SSH_PUBLIC_KEY"), v.clone()));
     }
     if let Some(v) = &output.ssh_private_key {
-        vars.push((format!("{}_SSH_PRIVATE_KEY", prefix), v.clone()));
+        vars.push((format!("{prefix}_SSH_PRIVATE_KEY"), v.clone()));
     }
     if let Some(v) = &output.ssh_fingerprint {
-        vars.push((format!("{}_SSH_FINGERPRINT", prefix), v.clone()));
+        vars.push((format!("{prefix}_SSH_FINGERPRINT"), v.clone()));
     }
     if let Some(fields) = &output.fields {
         for field in fields {
@@ -904,8 +886,8 @@ fn cipher_to_env_vars(output: &CipherOutput) -> Vec<(String, String)> {
 fn get_field_string(field: &Option<String>, name: &str) -> Result<String> {
     field
         .as_deref()
-        .with_context(|| format!("Item has no {}", name))
-        .map(|s| s.to_string())
+        .with_context(|| format!("Item has no {name}"))
+        .map(std::string::ToString::to_string)
 }
 
 fn format_cipher_output(output: &CipherOutput, format: &str) -> Result<String> {
@@ -921,10 +903,7 @@ fn format_cipher_output(output: &CipherOutput, format: &str) -> Result<String> {
         "value" | "password" => get_field_string(&output.password, "password"),
         "username" => get_field_string(&output.username, "username"),
         _ => {
-            anyhow::bail!(
-                "Unknown format: {}. Use: json, env, value, username",
-                format
-            );
+            anyhow::bail!("Unknown format: {format}. Use: json, env, value, username");
         }
     }
 }
@@ -932,8 +911,8 @@ fn format_cipher_output(output: &CipherOutput, format: &str) -> Result<String> {
 fn print_cipher_output(output: &CipherOutput, format: &str) -> Result<()> {
     let text = format_cipher_output(output, format)?;
     match format {
-        "json" => println!("{}", text),
-        _ => print!("{}", text),
+        "json" => println!("{text}"),
+        _ => print!("{text}"),
     }
     Ok(())
 }
@@ -990,12 +969,11 @@ pub async fn run_with_secrets(
                 user_keys
                     .decrypt_to_string(&f.name)
                     .ok()
-                    .map(|n| n.eq_ignore_ascii_case(folder))
-                    .unwrap_or(false)
+                    .is_some_and(|n| n.eq_ignore_ascii_case(folder))
             });
             Some(
                 matched
-                    .with_context(|| format!("Folder '{}' not found", folder))?
+                    .with_context(|| format!("Folder '{folder}' not found"))?
                     .id
                     .clone(),
             )
@@ -1043,7 +1021,7 @@ pub async fn run_with_secrets(
             |o| o.name.to_lowercase() == item_lower,
             matches_filters,
         )
-        .context(format!("Item '{}' not found", name_or_id))
+        .context(format!("Item '{name_or_id}' not found"))
     };
 
     let outputs: Vec<CipherOutput> = if search_by_uri {
@@ -1058,12 +1036,11 @@ pub async fn run_with_secrets(
                 |o| {
                     o.uri
                         .as_ref()
-                        .map(|u| u.to_lowercase().contains(&uri_lower))
-                        .unwrap_or(false)
+                        .is_some_and(|u| u.to_lowercase().contains(&uri_lower))
                 },
                 matches_filters,
             )
-            .context(format!("No item found with URI containing '{}'", uri))?,
+            .context(format!("No item found with URI containing '{uri}'"))?,
         ]
     } else if !requested_items.is_empty() {
         requested_items
@@ -1099,7 +1076,7 @@ pub async fn run_with_secrets(
     if info_only {
         println!("Environment variables that would be injected:");
         for (name, _) in &env_vars {
-            println!("  {}", name);
+            println!("  {name}");
         }
         return Ok(());
     }
@@ -3477,7 +3454,7 @@ mod tests {
             Cipher {
                 id: "test".to_string(),
                 r#type: 1,
-                organization_id: org_id.map(|s| s.to_string()),
+                organization_id: org_id.map(std::string::ToString::to_string),
                 name: None,
                 notes: None,
                 folder_id: None,
@@ -3675,7 +3652,7 @@ mod tests {
                     "GITHUB_PASSWORD".to_string(),
                     "GITHUB_API_TOKEN".to_string(),
                     "GITHUB_REGION".to_string(),
-                    "".to_string(),
+                    String::new(),
                     "MY_NOTE_USERNAME".to_string(),
                 ]
             );

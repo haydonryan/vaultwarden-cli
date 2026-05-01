@@ -49,8 +49,8 @@ impl Config {
         let path = Self::config_path()?;
         if path.exists() {
             let content = fs::read_to_string(&path)
-                .with_context(|| format!("Failed to read config from {:?}", path))?;
-            let mut config: Config =
+                .with_context(|| format!("Failed to read config from {path:?}"))?;
+            let mut config: Self =
                 serde_json::from_str(&content).context("Failed to parse config")?;
 
             // Try to load saved keys
@@ -68,11 +68,10 @@ impl Config {
         let path = Self::config_path()?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create config directory {:?}", parent))?;
+                .with_context(|| format!("Failed to create config directory {parent:?}"))?;
         }
         let content = serde_json::to_string_pretty(self)?;
-        fs::write(&path, content)
-            .with_context(|| format!("Failed to write config to {:?}", path))?;
+        fs::write(&path, content).with_context(|| format!("Failed to write config to {path:?}"))?;
         Ok(())
     }
 
@@ -149,6 +148,7 @@ impl Config {
         self.save()
     }
 
+    #[must_use]
     pub fn get_keys_for_cipher(&self, org_id: Option<&str>) -> Option<&CryptoKeys> {
         if let Some(org_id) = org_id {
             self.org_crypto_keys.get(org_id)
@@ -157,14 +157,17 @@ impl Config {
         }
     }
 
-    pub fn is_logged_in(&self) -> bool {
+    #[must_use]
+    pub const fn is_logged_in(&self) -> bool {
         self.access_token.is_some() && self.server.is_some()
     }
 
-    pub fn is_unlocked(&self) -> bool {
+    #[must_use]
+    pub const fn is_unlocked(&self) -> bool {
         self.crypto_keys.is_some()
     }
 
+    #[must_use]
     pub fn get_server(&self) -> Option<&str> {
         self.server.as_deref()
     }

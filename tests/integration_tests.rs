@@ -1,3 +1,5 @@
+#![allow(clippy::let_underscore_must_use, clippy::pedantic, clippy::nursery)]
+
 //! Integration tests for vaultwarden-cli
 //!
 //! These tests verify the interaction between modules and simulate

@@ -1,3 +1,5 @@
+#![allow(clippy::pedantic, clippy::nursery)]
+
 mod support;
 
 use support::{TestContext, env_lock};

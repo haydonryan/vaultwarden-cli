@@ -18,6 +18,7 @@ pub struct CryptoKeys {
 
 impl CryptoKeys {
     /// Derive the master key from password and email using PBKDF2
+    #[must_use]
     pub fn derive_master_key(password: &str, email: &str, iterations: u32) -> Vec<u8> {
         let email_lower = email.to_lowercase();
         let mut master_key = vec![0u8; 32];
@@ -36,15 +37,15 @@ impl CryptoKeys {
     pub fn stretch_master_key(master_key: &[u8]) -> Result<Self> {
         // Use the master key directly as PRK (skip extract step)
         let hk = Hkdf::<Sha256>::from_prk(master_key)
-            .map_err(|e| anyhow::anyhow!("HKDF PRK init failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("HKDF PRK init failed: {e}"))?;
 
         let mut enc_key = [0u8; 32];
         hk.expand(b"enc", &mut enc_key)
-            .map_err(|e| anyhow::anyhow!("HKDF expand failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("HKDF expand failed: {e}"))?;
 
         let mut mac_key = [0u8; 32];
         hk.expand(b"mac", &mut mac_key)
-            .map_err(|e| anyhow::anyhow!("HKDF expand failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("HKDF expand failed: {e}"))?;
 
         Ok(Self {
             enc_key: enc_key.to_vec(),
@@ -80,11 +81,11 @@ impl CryptoKeys {
         match enc_type {
             4 => private_key
                 .decrypt(Oaep::<Sha1>::new(), &ciphertext)
-                .map_err(|e| anyhow::anyhow!("RSA-OAEP decryption failed: {}", e)),
+                .map_err(|e| anyhow::anyhow!("RSA-OAEP decryption failed: {e}")),
             6 => private_key
                 .decrypt(Oaep::<Sha256>::new(), &ciphertext)
-                .map_err(|e| anyhow::anyhow!("RSA-OAEP decryption failed: {}", e)),
-            _ => anyhow::bail!("Unsupported RSA encryption type: {}", enc_type),
+                .map_err(|e| anyhow::anyhow!("RSA-OAEP decryption failed: {e}")),
+            _ => anyhow::bail!("Unsupported RSA encryption type: {enc_type}"),
         }
     }
 
@@ -92,7 +93,7 @@ impl CryptoKeys {
     pub fn decrypt_private_key(&self, encrypted_private_key: &str) -> Result<RsaPrivateKey> {
         let decrypted_der = self.decrypt(encrypted_private_key)?;
         RsaPrivateKey::from_pkcs8_der(&decrypted_der)
-            .map_err(|e| anyhow::anyhow!("Failed to parse RSA private key: {}", e))
+            .map_err(|e| anyhow::anyhow!("Failed to parse RSA private key: {e}"))
     }
 
     /// Decrypt an organization key using RSA
@@ -125,7 +126,7 @@ impl CryptoKeys {
 
         // Type 2 = AES-256-CBC with HMAC-SHA256
         if enc_type != 2 {
-            anyhow::bail!("Unsupported encryption type: {}", enc_type);
+            anyhow::bail!("Unsupported encryption type: {enc_type}");
         }
 
         let parts: Vec<&str> = data.split('|').collect();
@@ -144,7 +145,7 @@ impl CryptoKeys {
 
             // Calculate expected MAC
             let mut hmac = Hmac::<Sha256>::new_from_slice(&self.mac_key)
-                .map_err(|e| anyhow::anyhow!("HMAC init failed: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("HMAC init failed: {e}"))?;
             hmac.update(&iv);
             hmac.update(&ciphertext);
 
@@ -153,11 +154,11 @@ impl CryptoKeys {
         }
 
         // Decrypt
-        let mut buf = ciphertext.clone();
+        let mut buf = ciphertext;
         let decrypted = Aes256CbcDec::new_from_slices(&self.enc_key, &iv)
-            .map_err(|e| anyhow::anyhow!("AES init failed: {}", e))?
+            .map_err(|e| anyhow::anyhow!("AES init failed: {e}"))?
             .decrypt_padded::<Pkcs7>(&mut buf)
-            .map_err(|e| anyhow::anyhow!("AES decrypt failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("AES decrypt failed: {e}"))?;
 
         Ok(decrypted.to_vec())
     }
@@ -515,7 +516,7 @@ pub(crate) mod tests {
         assert_eq!(keys.mac_key, vec![0x43u8; 32]);
     }
 
-    pub(crate) mod test_helpers {
+    pub mod test_helpers {
         use super::*;
         use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
         use hmac::{Hmac, KeyInit, Mac};

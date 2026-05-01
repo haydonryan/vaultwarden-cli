@@ -1,3 +1,5 @@
+#![allow(clippy::pedantic, clippy::nursery)]
+
 mod support;
 
 use predicates::prelude::*;
@@ -319,6 +321,64 @@ async fn run_with_implicit_name_injects_matching_item() {
         .success()
         .stdout(predicate::str::contains("ALPHA_USERNAME"))
         .stdout(predicate::str::contains("ALPHA_PASSWORD"));
+}
+
+#[tokio::test]
+async fn run_injects_env_vars_into_child_process() {
+    let ctx = TestContext::new();
+    let keys = test_crypto_keys();
+    let mock_server = MockServer::start().await;
+
+    let sync_response = serde_json::json!({
+        "Ciphers": [
+            {
+                "Id": "cipher-1",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Alpha", &keys),
+                "Login": {
+                    "Username": encrypt_string_for_test("alice", &keys),
+                    "Password": encrypt_string_for_test("alpha-secret", &keys)
+                },
+                "CollectionIds": []
+            }
+        ],
+        "Folders": [],
+        "Collections": [],
+        "Profile": {
+            "Id": "user-1",
+            "Email": "user@example.com",
+            "Organizations": []
+        }
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/api/sync"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    ctx.write_config(&Config {
+        server: Some(mock_server.uri()),
+        access_token: Some("access-token".to_string()),
+        token_expiry: Some(i64::MAX),
+        ..Default::default()
+    })
+    .unwrap();
+    ctx.write_saved_user_keys(&keys).unwrap();
+
+    ctx.binary()
+        .arg("run")
+        .arg("Alpha")
+        .arg("--")
+        .arg("printenv")
+        .arg("ALPHA_USERNAME")
+        .arg("ALPHA_PASSWORD")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("alice"))
+        .stdout(predicate::str::contains("alpha-secret"));
 }
 
 #[tokio::test]

@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(dead_code, clippy::pedantic, clippy::nursery)]
 
 use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
 use anyhow::{Context, Result};
@@ -301,7 +301,7 @@ pub fn field(name: &str, value: &str, hidden: bool) -> FieldData {
     FieldData {
         name: Some(name.to_string()),
         value: Some(value.to_string()),
-        r#type: if hidden { 1 } else { 0 },
+        r#type: u8::from(hidden),
     }
 }
 

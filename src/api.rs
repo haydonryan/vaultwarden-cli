@@ -116,12 +116,12 @@ impl ApiClient {
             .form(params)
             .send()
             .await
-            .with_context(|| format!("Failed to send {} request", operation))?;
+            .with_context(|| format!("Failed to send {operation} request"))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("{} failed ({}): {}", error_prefix, status, body);
+            anyhow::bail!("{error_prefix} failed ({status}): {body}");
         }
 
         response
@@ -145,12 +145,12 @@ impl ApiClient {
             .bearer_auth(access_token)
             .send()
             .await
-            .with_context(|| format!("Failed to send {} request", operation))?;
+            .with_context(|| format!("Failed to send {operation} request"))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("{} failed ({}): {}", error_prefix, status, body);
+            anyhow::bail!("{error_prefix} failed ({status}): {body}");
         }
 
         response
