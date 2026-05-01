@@ -44,10 +44,16 @@ The binary will be at `target/release/vaultwarden-cli`.
 
 ## Development
 
-Enable the repo's pre-commit hook to run formatting, clippy, and tests before each commit:
+Enable the repo's pre-commit hook to run `just pre-commit` before each commit:
 
 ```bash
 git config core.hooksPath .githooks
+```
+
+You can run the same suite manually with:
+
+```bash
+just pre-commit
 ```
 
 ## Usage
@@ -154,6 +160,9 @@ vaultwarden-cli run --name "My Login, API Token" -- ./deploy.sh
 # Run a bash script directly
 vaultwarden-cli run --name "My Login" -- bash ./scripts/rotate-keys.sh
 
+# If you need shell expansion or positional parameters, invoke a shell explicitly
+vaultwarden-cli run --name "My Login" -- bash -lc 'docker compose up "$1"' -- "$1"
+
 # Filter by organisation and/or folder instead of (or in addition to) a name
 vaultwarden-cli run --org "Acme Corp" --folder "Production" -- ./deploy.sh
 
@@ -168,6 +177,9 @@ vaultwarden-cli run-uri github.com --info
 Environment variables are named `{ITEM_NAME}_{FIELD}` where:
 - `{ITEM_NAME}` is the item name converted to uppercase with non-alphanumeric chars replaced by underscores
 - `{FIELD}` is one of: `URI`, `USERNAME`, `PASSWORD`, or custom field names
+
+`vaultwarden-cli run` executes the command directly. Shell features like `$1`, globbing, pipes,
+and variable expansion only work if you explicitly run a shell such as `bash -lc '...'`.
 
 ### Interpolating YAML
 
