@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use directories::ProjectDirs;
+use keyring_core::Entry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -186,8 +187,8 @@ struct SavedKeys {
     org_keys: HashMap<String, KeyData>,
 }
 
-fn keyring_entry(client_id: &str) -> Result<keyring::Entry> {
-    Ok(keyring::Entry::new("vaultwarden-cli", client_id)?)
+fn keyring_entry(client_id: &str) -> Result<Entry> {
+    Ok(Entry::new("vaultwarden-cli", client_id)?)
 }
 
 // Store client secret securely using keyring
