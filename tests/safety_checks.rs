@@ -304,6 +304,8 @@ mod mac_integrity_rejection {
 
     #[test]
     fn rejects_ciphertext_without_mac_by_default() {
+        // Hold the lock so mutations to the process-wide flag are serialised.
+        let _guard = env_lock();
         // Ensure the global flag is reset (tests run in parallel)
         vaultwarden_cli::crypto::set_allow_insecure_mac(false);
 
@@ -350,6 +352,8 @@ mod mac_integrity_rejection {
 
     #[test]
     fn allows_ciphertext_without_mac_with_global_flag() {
+        // Hold the lock so mutations to the process-wide flag are serialised.
+        let _guard = env_lock();
         // Set the global flag
         vaultwarden_cli::crypto::set_allow_insecure_mac(true);
 

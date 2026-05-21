@@ -2,11 +2,15 @@
 # Run live integration tests against a real Vaultwarden instance.
 #
 # Usage:
-#   ./scripts/test-live.sh [cargo test args...]
+#   ./scripts/test-live.sh [test binary args...]
+#
+# Extra arguments are passed after `--` to the test binary (not to cargo),
+# so they are test-harness args: filter names, --nocapture, --ignored, etc.
 #
 # Example:
 #   ./scripts/test-live.sh                          # run all live tests
-#   ./scripts/test-live.sh session::login           # run one test
+#   ./scripts/test-live.sh session::login           # run one test by filter
+#   ./scripts/test-live.sh -- --nocapture           # pass harness flag
 #
 # The script starts Vaultwarden via Docker Compose, waits for it to be ready,
 # runs the live_tests binary, and tears everything down on exit.
@@ -46,5 +50,5 @@ export VAULTWARDEN_LIVE_ADMIN_TOKEN="$ADMIN_TOKEN"
 echo "→ Running live integration tests..."
 cd "$REPO_ROOT"
 # Run tests single-threaded to avoid overwhelming the test server.
-# Pass any extra arguments through to cargo test.
+# Any extra arguments are passed to the test binary (after --).
 cargo test --test live_tests -- --test-threads=1 --nocapture "$@"
