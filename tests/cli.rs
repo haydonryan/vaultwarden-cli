@@ -10,6 +10,7 @@ fn login_reads_client_credentials_from_environment() {
     let ctx = TestContext::new();
 
     ctx.binary()
+        .arg("--allow-insecure-http")
         .arg("login")
         .arg("--server")
         .arg("http://127.0.0.1:9")

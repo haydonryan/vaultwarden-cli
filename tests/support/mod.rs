@@ -78,13 +78,38 @@ impl TestContext {
         self.config_dir().join("keys.json")
     }
 
+    pub fn tokens_path(&self) -> PathBuf {
+        self.config_dir().join("tokens.json")
+    }
+
     pub fn write_config(&self, config: &Config) -> Result<()> {
         if let Some(parent) = self.config_path().parent() {
             fs::create_dir_all(parent)?;
         }
         let content = serde_json::to_string_pretty(config)?;
         fs::write(self.config_path(), content)?;
+
+        // Tokens are excluded from config.json during serialization via
+        // #[serde(skip_serializing, default)], though legacy configs may still
+        // deserialize token fields, so tests must write tokens.json separately
+        // for the binary to find them.
+        if let Some(access_token) = &config.access_token {
+            let saved = serde_json::json!({
+                "access_token": access_token,
+                "refresh_token": config.refresh_token,
+                "token_expiry": config.token_expiry,
+            });
+            fs::write(self.tokens_path(), serde_json::to_string(&saved)?)?;
+        }
+
         Ok(())
+    }
+
+    /// Create the config directory without writing any files.
+    /// Useful when a test needs the directory to exist for a file-fallback path
+    /// to succeed, but does not want to write a config file itself.
+    pub fn create_config_dir(&self) {
+        fs::create_dir_all(self.config_dir()).expect("create config dir");
     }
 
     pub fn write_raw_config(&self, content: &str) -> Result<()> {

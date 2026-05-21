@@ -5,17 +5,169 @@ use keyring_core::Entry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+#[cfg(unix)]
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use crate::crypto::CryptoKeys;
+
+// ── Warning capture (for testability) ───────────────────────────────────────
+//
+// In production `emit_warning` writes directly to stderr via `eprintln!`.
+// Tests can activate capture mode by calling `capture_warnings()`, which
+// returns a RAII `WarnCapture` guard.  While the guard is live, all calls to
+// `emit_warning` accumulate into an in-memory buffer instead of printing.
+// When the guard is dropped, capture mode is deactivated.
+//
+// The static uses `Mutex<Option<_>>` so the same code path is exercised in
+// both modes; there is no `#[cfg(test)]` split, which means this works
+// correctly from integration tests in `tests/` (which compile the crate
+// without the `test` cfg flag).
+
+static WARN_CAPTURE: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
+
+/// Emit a warning.  In normal operation this prints to stderr.  While a
+/// [`WarnCapture`] guard is active the message is recorded in its buffer
+/// instead so that tests can assert on warning output.
+fn emit_warning(msg: &str) {
+    let mut guard = WARN_CAPTURE.lock().expect("WARN_CAPTURE poisoned");
+    if let Some(ref mut buf) = *guard {
+        buf.push(msg.to_string());
+    } else {
+        eprintln!("{msg}");
+    }
+}
+
+/// Activate warning capture mode and return a RAII guard.
+///
+/// While the returned [`WarnCapture`] is live, calls to [`emit_warning`]
+/// accumulate into an internal buffer rather than printing to stderr.  Call
+/// [`WarnCapture::drain`] to retrieve and clear the accumulated messages.
+/// Dropping the guard restores normal stderr output.
+///
+/// Because capture is process-wide (not thread-local), callers must ensure
+/// mutual exclusion — in tests, hold the `env_lock()` for the guard's
+/// lifetime so parallel tests cannot interfere.
+pub fn capture_warnings() -> WarnCapture {
+    *WARN_CAPTURE.lock().expect("WARN_CAPTURE poisoned") = Some(Vec::new());
+    WarnCapture { _private: () }
+}
+
+/// RAII guard returned by [`capture_warnings`].  Deactivates capture on drop.
+pub struct WarnCapture {
+    _private: (),
+}
+
+impl WarnCapture {
+    /// Drain and return all warnings collected since capture was activated
+    /// (or since the last `drain` call).
+    pub fn drain(&self) -> Vec<String> {
+        WARN_CAPTURE
+            .lock()
+            .expect("WARN_CAPTURE poisoned")
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+}
+
+impl Drop for WarnCapture {
+    fn drop(&mut self) {
+        *WARN_CAPTURE.lock().expect("WARN_CAPTURE poisoned") = None;
+    }
+}
+
+// ── Secure file write ────────────────────────────────────────────────────────
+
+/// Write `content` to `path` with owner-only (0o600) permissions,
+/// eliminating the TOCTOU race that exists in the naive `fs::write` + `chmod` pattern.
+///
+/// ## Why the naive pattern is unsafe
+///
+/// `std::fs::write` opens the file with `O_CREAT | O_WRONLY | O_TRUNC` and the
+/// process umask (typically `0o022`), which produces an initial mode of `0o644`.
+/// A subsequent `fs::set_permissions(path, 0o600)` operates on the *path*, not
+/// the file descriptor, so any process that polls the directory between the two
+/// syscalls can read the file while it still has world-readable permissions.
+///
+/// ## How this is fixed
+///
+/// On Unix this function uses a three-step approach:
+///
+/// 1. **`open(path, O_CREAT|O_WRONLY|O_TRUNC, 0o600)`** — creates the file
+///    with mode `0o600 & ~umask`. Since the umask only removes bits and the
+///    group/other bits in `0o600` are already zero, the result is at most `0o600`
+///    (never more permissive).
+/// 2. **`fchmod(fd, 0o600)`** via `File::set_permissions` — operates on the
+///    open file descriptor, not the path. This is not subject to TOCTOU and
+///    guarantees exactly `0o600` regardless of the umask, before any data is
+///    written.
+/// 3. **`write_all(content)`** — data is written only after permissions are
+///    locked. Even the brief window between steps 1 and 2 is safe because the
+///    file is empty.
+///
+/// On non-Unix platforms this falls back to `fs::write` (permission model
+/// differs; the TOCTOU concern is Unix-specific).
+pub fn write_secure(path: &std::path::Path, content: impl AsRef<[u8]>) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // map_err (not with_context) embeds the OS error text into a single
+        // message so that err.to_string() surfaces "No such file or directory"
+        // rather than only the context wrapper.  with_context would hide the
+        // underlying io::Error behind a chain layer that Display does not show.
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600) // initial creation mode (umask applied by kernel)
+            .open(path)
+            .map_err(|e| anyhow::anyhow!("Failed to open {}: {e}", path.display()))?;
+        // fchmod via fd — not path — ensures exactly 0o600 before any data lands
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|e| anyhow::anyhow!("Failed to set permissions on {}: {e}", path.display()))?;
+        file.write_all(content.as_ref())
+            .map_err(|e| anyhow::anyhow!("Failed to write {}: {e}", path.display()))?;
+        return Ok(());
+    }
+    #[allow(unreachable_code)]
+    fs::write(path, content).map_err(|e| anyhow::anyhow!("Failed to write {}: {e}", path.display()))
+}
+
+/// Set owner-only permissions (0o700) on a directory.
+///
+/// Directories cannot use the fd-based approach in [`write_secure`] because
+/// `mkdir` has no equivalent atomic fd + `fchmod` primitive in the standard
+/// library. A briefly world-traversable directory (before this call narrows it)
+/// reveals directory structure but not file *contents*, so the risk is lower
+/// than for secret-bearing files. On non-Unix platforms this is a no-op.
+fn set_secure_dir_permissions(path: &std::path::Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("Failed to set secure permissions on {path:?}"))?;
+    }
+    #[allow(unreachable_code)]
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub server: Option<String>,
     pub client_id: Option<String>,
     pub email: Option<String>,
+    // Tokens are stored in the OS keyring (or tokens.json fallback) rather
+    // than config.json.  We skip *serialization* only so that pre-existing
+    // config.json files that still contain these fields are transparently read
+    // and can be migrated into keyring/tokens.json storage on the next save.
+    // Use save_tokens() / load_saved_tokens() to persist between sessions.
+    #[serde(skip_serializing, default)]
     pub access_token: Option<String>,
+    #[serde(skip_serializing, default)]
     pub refresh_token: Option<String>,
+    #[serde(skip_serializing, default)]
     pub token_expiry: Option<i64>,
     pub encrypted_key: Option<String>,
     pub encrypted_private_key: Option<String>,
@@ -46,6 +198,10 @@ impl Config {
         Ok(Self::config_dir()?.join("keys.json"))
     }
 
+    pub fn tokens_path() -> Result<PathBuf> {
+        Ok(Self::config_dir()?.join("tokens.json"))
+    }
+
     pub fn load() -> Result<Self> {
         let path = Self::config_path()?;
         if path.exists() {
@@ -59,6 +215,9 @@ impl Config {
                 // Saved keys are optional; ignore missing or invalid persisted state here.
             }
 
+            // Try to load saved tokens (non-fatal: user must re-login if missing)
+            if let Err(_err) = config.load_saved_tokens() {}
+
             Ok(config)
         } else {
             Ok(Self::default())
@@ -70,9 +229,18 @@ impl Config {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create config directory {parent:?}"))?;
+            set_secure_dir_permissions(parent)?;
         }
         let content = serde_json::to_string_pretty(self)?;
-        fs::write(&path, content).with_context(|| format!("Failed to write config to {path:?}"))?;
+        // write_secure opens with O_CREAT+mode(0o600) then fchmod via fd before
+        // writing, eliminating the TOCTOU race of fs::write + set_permissions.
+        write_secure(&path, content.as_bytes())?;
+        // Persist tokens to keyring/file whenever config is saved.
+        // Tokens use #[serde(skip_serializing, default)]: not written to config.json,
+        // but read back from legacy configs for migration into keyring/tokens.json.
+        if self.access_token.is_some() {
+            self.save_tokens()?;
+        }
         Ok(())
     }
 
@@ -91,10 +259,10 @@ impl Config {
     }
 
     pub fn save_keys(&self) -> Result<()> {
-        let path = Self::keys_path()?;
-
+        // Store keys in the OS keyring instead of a plaintext file.
+        // Fall back to file if keyring is unavailable (with warning).
         let user_keys = self.crypto_keys.as_ref().map(Self::keys_to_key_data);
-        let org_keys = self
+        let org_keys: HashMap<String, KeyData> = self
             .org_crypto_keys
             .iter()
             .map(|(id, keys)| (id.clone(), Self::keys_to_key_data(keys)))
@@ -105,12 +273,83 @@ impl Config {
             org_keys,
         };
         let content = serde_json::to_string(&saved)?;
-        fs::write(&path, content)?;
 
+        // Stage 1: determine whether we can even attempt the keyring.
+        //
+        // `client_id` is used as the keyring account name.  If it is absent
+        // (e.g. incomplete login, manually edited config) we cannot construct
+        // a stable keyring key and must fall back to file storage.  This is
+        // a security degradation, so we warn explicitly rather than silently
+        // downgrading.
+        let keyring_entry = match &self.client_id {
+            None => {
+                emit_warning(
+                    "Warning: client_id is not set — cannot use the system keyring. \
+                     Keys will be stored in a file instead (less secure). \
+                     This may indicate an incomplete login or a corrupt config.",
+                );
+                None
+            }
+            Some(client_id) => match keyring_entry_for_keys(client_id) {
+                Ok(entry) => Some(entry),
+                Err(err) => {
+                    emit_warning(&format!(
+                        "Warning: Could not create keyring entry: {err}. \
+                         Falling back to file-based key storage (less secure).",
+                    ));
+                    None
+                }
+            },
+        };
+
+        // Stage 2: write to the keyring if we have an entry; otherwise file.
+        if let Some(entry) = keyring_entry {
+            match entry.set_password(&content) {
+                Ok(()) => {
+                    // Remove legacy keys.json if it exists
+                    let path = Self::keys_path()?;
+                    if path.exists() {
+                        drop(fs::remove_file(&path));
+                    }
+                    return Ok(());
+                }
+                Err(err) => {
+                    emit_warning(&format!(
+                        "Warning: Could not store keys in system keyring: {err}. \
+                         Falling back to file-based key storage (less secure).",
+                    ));
+                }
+            }
+        }
+
+        // File fallback — reached from all three keyring failure paths:
+        //   • client_id is None
+        //   • keyring entry creation failed
+        //   • keyring set_password failed
+        // write_secure uses fchmod-via-fd to avoid the TOCTOU race.
+        let path = Self::keys_path()?;
+        write_secure(&path, content.as_bytes())?;
         Ok(())
     }
 
     pub fn load_saved_keys(&mut self) -> Result<()> {
+        // Try OS keyring first
+        if let Some(client_id) = &self.client_id
+            && let Ok(entry) = keyring_entry_for_keys(client_id)
+            && let Ok(content) = entry.get_password()
+        {
+            let saved: SavedKeys = serde_json::from_str(&content)?;
+            if let Some(keys_data) = saved.user_keys {
+                self.crypto_keys = Some(Self::key_data_to_keys(keys_data)?);
+            }
+            for (id, keys_data) in saved.org_keys {
+                self.org_crypto_keys
+                    .insert(id, Self::key_data_to_keys(keys_data)?);
+            }
+            return Ok(());
+        }
+
+        // Fallback: read from file (legacy)
         let path = Self::keys_path()?;
         if path.exists() {
             let content = fs::read_to_string(&path)?;
@@ -129,7 +368,116 @@ impl Config {
     }
 
     pub fn delete_saved_keys(&self) -> Result<()> {
+        // Delete from OS keyring
+        if let Some(client_id) = &self.client_id
+            && let Ok(entry) = keyring_entry_for_keys(client_id)
+        {
+            drop(entry.delete_credential()); // Ignore errors if not found
+        }
+
+        // Also remove legacy keys.json if it exists
         let path = Self::keys_path()?;
+        if path.exists() {
+            fs::remove_file(&path)?;
+        }
+        Ok(())
+    }
+
+    pub fn save_tokens(&self) -> Result<()> {
+        let access_token = match &self.access_token {
+            None => return Ok(()), // nothing to persist
+            Some(t) => t.clone(),
+        };
+        let saved = SavedTokens {
+            access_token,
+            refresh_token: self.refresh_token.clone(),
+            token_expiry: self.token_expiry,
+        };
+        let content = serde_json::to_string(&saved)?;
+
+        // Stage 1: determine whether we can attempt the keyring.
+        // `client_id` is used as the keyring account discriminator.
+        let keyring_entry = match &self.client_id {
+            None => {
+                emit_warning(
+                    "Warning: client_id is not set — tokens will be stored in a \
+                     file instead of the system keyring (less secure).",
+                );
+                None
+            }
+            Some(client_id) => match keyring_entry_for_tokens(client_id) {
+                Ok(entry) => Some(entry),
+                Err(err) => {
+                    emit_warning(&format!(
+                        "Warning: Could not create keyring entry for tokens: {err}. \
+                         Falling back to file-based token storage (less secure).",
+                    ));
+                    None
+                }
+            },
+        };
+
+        // Stage 2: write to keyring if available; otherwise file.
+        if let Some(entry) = keyring_entry {
+            match entry.set_password(&content) {
+                Ok(()) => {
+                    // Remove tokens.json if it exists (keyring is now authoritative)
+                    let path = Self::tokens_path()?;
+                    if path.exists() {
+                        drop(fs::remove_file(&path));
+                    }
+                    return Ok(());
+                }
+                Err(err) => {
+                    emit_warning(&format!(
+                        "Warning: Could not store tokens in system keyring: {err}. \
+                         Falling back to file-based token storage (less secure).",
+                    ));
+                }
+            }
+        }
+
+        // File fallback — write_secure uses fchmod-via-fd to avoid the TOCTOU race.
+        let path = Self::tokens_path()?;
+        write_secure(&path, content.as_bytes())?;
+        Ok(())
+    }
+
+    pub fn load_saved_tokens(&mut self) -> Result<()> {
+        // Try OS keyring first
+        if let Some(client_id) = &self.client_id
+            && let Ok(entry) = keyring_entry_for_tokens(client_id)
+            && let Ok(content) = entry.get_password()
+        {
+            let saved: SavedTokens = serde_json::from_str(&content)?;
+            self.access_token = Some(saved.access_token);
+            self.refresh_token = saved.refresh_token;
+            self.token_expiry = saved.token_expiry;
+            return Ok(());
+        }
+
+        // Fallback: read from file
+        let path = Self::tokens_path()?;
+        if path.exists() {
+            let content = fs::read_to_string(&path)?;
+            let saved: SavedTokens = serde_json::from_str(&content)?;
+            self.access_token = Some(saved.access_token);
+            self.refresh_token = saved.refresh_token;
+            self.token_expiry = saved.token_expiry;
+        }
+        Ok(())
+    }
+
+    pub fn delete_saved_tokens(&self) -> Result<()> {
+        // Delete from OS keyring
+        if let Some(client_id) = &self.client_id
+            && let Ok(entry) = keyring_entry_for_tokens(client_id)
+        {
+            drop(entry.delete_credential()); // Ignore errors if not found
+        }
+
+        // Also remove tokens.json if it exists
+        let path = Self::tokens_path()?;
         if path.exists() {
             fs::remove_file(&path)?;
         }
@@ -146,6 +494,7 @@ impl Config {
         self.encrypted_private_key = None;
         self.org_keys.clear();
         self.delete_saved_keys()?;
+        self.delete_saved_tokens()?;
         self.save()
     }
 
@@ -180,6 +529,13 @@ struct KeyData {
     mac_key: String,
 }
 
+#[derive(Serialize, Deserialize)]
+struct SavedTokens {
+    access_token: String,
+    refresh_token: Option<String>,
+    token_expiry: Option<i64>,
+}
+
 #[derive(Serialize, Deserialize, Default)]
 struct SavedKeys {
     user_keys: Option<KeyData>,
@@ -189,6 +545,17 @@ struct SavedKeys {
 
 fn keyring_entry(client_id: &str) -> Result<Entry> {
     Ok(Entry::new("vaultwarden-cli", client_id)?)
+}
+
+fn keyring_entry_for_keys(client_id: &str) -> Result<Entry> {
+    Ok(Entry::new("vaultwarden-cli", &format!("{client_id}:keys"))?)
+}
+
+fn keyring_entry_for_tokens(client_id: &str) -> Result<Entry> {
+    Ok(Entry::new(
+        "vaultwarden-cli",
+        &format!("{client_id}:tokens"),
+    )?)
 }
 
 // Store client secret securely using keyring
@@ -393,11 +760,17 @@ mod tests {
 
         #[test]
         fn test_config_deserialization() {
+            // access_token, refresh_token, and token_expiry use
+            // #[serde(skip_serializing, default)]: they are NOT written to
+            // config.json but ARE read back from legacy configs that still
+            // contain them.  This lets upgrade code detect and migrate old
+            // tokens into keyring / tokens.json storage.
             let json = r#"{
                 "server": "https://vault.example.com",
                 "client_id": "user.client-123",
                 "email": "user@example.com",
                 "access_token": "test-token",
+                "refresh_token": "test-refresh",
                 "token_expiry": 1234567890,
                 "kdf_iterations": 600000
             }"#;
@@ -406,10 +779,47 @@ mod tests {
             assert_eq!(config.server, Some("https://vault.example.com".to_string()));
             assert_eq!(config.client_id, Some("user.client-123".to_string()));
             assert_eq!(config.email, Some("user@example.com".to_string()));
-            assert_eq!(config.token_expiry, Some(1234567890));
             assert_eq!(config.kdf_iterations, Some(600000));
-            // crypto_keys should be None after deserialization
+            // Legacy token values present in JSON are deserialized so callers
+            // can detect and migrate them into keyring / tokens.json.
+            assert_eq!(config.access_token, Some("test-token".to_string()));
+            assert_eq!(config.refresh_token, Some("test-refresh".to_string()));
+            assert_eq!(config.token_expiry, Some(1234567890));
+            // Pure in-memory fields are never present in JSON.
             assert!(config.crypto_keys.is_none());
+        }
+
+        #[test]
+        fn test_config_serialization_excludes_tokens() {
+            // Tokens held in memory must NOT be written back to config.json;
+            // they are persisted separately via keyring / tokens.json.
+            let config = Config {
+                server: Some("https://vault.example.com".to_string()),
+                access_token: Some("secret-access".to_string()),
+                refresh_token: Some("secret-refresh".to_string()),
+                token_expiry: Some(9999999999),
+                ..Default::default()
+            };
+
+            let json = serde_json::to_string(&config).unwrap();
+
+            assert!(
+                !json.contains("access_token"),
+                "access_token must not appear in config.json"
+            );
+            assert!(
+                !json.contains("refresh_token"),
+                "refresh_token must not appear in config.json"
+            );
+            assert!(
+                !json.contains("token_expiry"),
+                "token_expiry must not appear in config.json"
+            );
+            assert!(
+                !json.contains("secret-access"),
+                "token value must not appear in config.json"
+            );
+            assert!(json.contains("vault.example.com"));
         }
 
         #[test]

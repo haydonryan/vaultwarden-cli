@@ -20,10 +20,24 @@ use crate::config::{self, Config};
 use crate::crypto::CryptoKeys;
 use crate::models::{Cipher, CipherOutput, CipherType, FieldOutput};
 
+/// Options controlling connection behaviour for commands that talk to Vaultwarden.
+///
+/// The [`Default`] implementation preserves the original secure-only behaviour
+/// (HTTPS required). Callers that only need to set one field can use struct-update
+/// syntax: `CommandOptions { allow_insecure_http: true }`.
+#[derive(Debug, Default, Clone)]
+pub struct CommandOptions {
+    /// Permit `http://` server URLs. Has the same effect as
+    /// `VAULTWARDEN_ALLOW_HTTP=1` but takes precedence over it.
+    /// Defaults to `false`.
+    pub allow_insecure_http: bool,
+}
+
 pub async fn login(
     server: Option<String>,
     client_id: Option<String>,
     client_secret: Option<String>,
+    opts: &CommandOptions,
 ) -> Result<()> {
     let mut config = Config::load()?;
 
@@ -38,7 +52,7 @@ pub async fn login(
         .or_else(|| config::get_client_secret(&client_id).ok())
         .context("Client secret is required. Use --client-secret.")?;
 
-    let api = ApiClient::new(&server)?;
+    let api = ApiClient::new_with_flags(&server, opts.allow_insecure_http)?;
 
     // Check server is reachable
     println!("Connecting to {server}...");
@@ -94,7 +108,7 @@ pub async fn login(
     Ok(())
 }
 
-pub async fn unlock(password: Option<String>) -> Result<()> {
+pub async fn unlock(password: Option<String>, opts: &CommandOptions) -> Result<()> {
     let mut config = Config::load()?;
 
     if !config.is_logged_in() {
@@ -102,7 +116,7 @@ pub async fn unlock(password: Option<String>) -> Result<()> {
     }
 
     // Ensure token is still valid before prompting for password
-    ensure_valid_token(&mut config).await?;
+    ensure_valid_token(&mut config, opts.allow_insecure_http).await?;
 
     let email = config
         .email
@@ -236,7 +250,7 @@ pub async fn status() -> Result<()> {
     Ok(())
 }
 
-async fn ensure_valid_token(config: &mut Config) -> Result<String> {
+async fn ensure_valid_token(config: &mut Config, allow_insecure_http: bool) -> Result<String> {
     let access_token = config
         .access_token
         .clone()
@@ -250,7 +264,7 @@ async fn ensure_valid_token(config: &mut Config) -> Result<String> {
     {
         // Token expired or expiring soon, try to refresh
         if let Some(refresh_token) = &config.refresh_token {
-            let api = ApiClient::from_config(config)?;
+            let api = ApiClient::from_config_with_flags(config, allow_insecure_http)?;
             match api.refresh_token(refresh_token).await {
                 Ok(token_response) => {
                     let new_expiry = now + token_response.expires_in;
@@ -283,11 +297,11 @@ struct SyncContext {
     sync_response: crate::models::SyncResponse,
 }
 
-async fn load_sync_context() -> Result<SyncContext> {
+async fn load_sync_context(allow_insecure_http: bool) -> Result<SyncContext> {
     let mut config = Config::load()?;
-    let access_token = ensure_valid_token(&mut config).await?;
+    let access_token = ensure_valid_token(&mut config, allow_insecure_http).await?;
     ensure_unlocked(&config)?;
-    let api = ApiClient::from_config(&config)?;
+    let api = ApiClient::from_config_with_flags(&config, allow_insecure_http)?;
     let mut sync_response = api.sync(&access_token).await?;
     if let Ok(cipher_list) = api.ciphers(&access_token).await {
         sync_response.ciphers = cipher_list.data;
@@ -518,8 +532,9 @@ pub async fn list(
     org_filter: Option<String>,
     collection_filter: Option<String>,
     json_output: bool,
+    opts: &CommandOptions,
 ) -> Result<()> {
-    let ctx = load_sync_context().await?;
+    let ctx = load_sync_context(opts.allow_insecure_http).await?;
     let (org_id_filter, collection_id_filter) = resolve_org_and_collection_filters(
         &ctx.sync_response,
         &ctx.config,
@@ -616,8 +631,9 @@ pub async fn get(
     format: &str,
     org_filter: Option<String>,
     collection_filter: Option<String>,
+    opts: &CommandOptions,
 ) -> Result<()> {
-    let ctx = load_sync_context().await?;
+    let ctx = load_sync_context(opts.allow_insecure_http).await?;
     let (org_id_filter, collection_id_filter) = resolve_org_and_collection_filters(
         &ctx.sync_response,
         &ctx.config,
@@ -667,8 +683,9 @@ pub async fn get_by_uri(
     format: &str,
     org_filter: Option<String>,
     collection_filter: Option<String>,
+    opts: &CommandOptions,
 ) -> Result<()> {
-    let ctx = load_sync_context().await?;
+    let ctx = load_sync_context(opts.allow_insecure_http).await?;
     let (org_id_filter, collection_id_filter) = resolve_org_and_collection_filters(
         &ctx.sync_response,
         &ctx.config,
@@ -714,6 +731,7 @@ fn resolve_component(output: &CipherOutput, component: &str) -> Result<String> {
         "username" => output.username.clone().context("Item has no username"),
         "password" => output.password.clone().context("Item has no password"),
         "uri" => output.uri.clone().context("Item has no uri"),
+        "notes" | "note" => output.notes.clone().context("Item has no notes"),
         "ssh_public_key" | "public_key" | "publickey" => output
             .ssh_public_key
             .clone()
@@ -754,8 +772,13 @@ fn track_missing_placeholder(
     full.to_string()
 }
 
-pub async fn interpolate(file: &str, output_file: Option<&str>, skip_missing: bool) -> Result<()> {
-    let ctx = load_sync_context().await?;
+pub async fn interpolate(
+    file: &str,
+    output_file: Option<&str>,
+    skip_missing: bool,
+    opts: &CommandOptions,
+) -> Result<()> {
+    let ctx = load_sync_context(opts.allow_insecure_http).await?;
     let mut by_name: HashMap<String, CipherOutput> = HashMap::new();
 
     for cipher in &ctx.sync_response.ciphers {
@@ -843,8 +866,19 @@ fn format_unmatched_placeholder_warning(placeholders: &[String]) -> Option<Strin
 
 fn write_interpolated_output(output: &str, output_file: Option<&str>) -> Result<()> {
     if let Some(path) = output_file {
-        fs::write(path, output)
-            .with_context(|| format!("Failed to write interpolated output to '{path}'"))
+        let path = std::path::Path::new(path);
+        // Use write_secure instead of fs::write + set_permissions to avoid the
+        // TOCTOU race: fs::write creates the file at umask mode (typically 0o644)
+        // before a separate chmod call narrows it, leaving a brief window where
+        // the secret-bearing file is world-readable. write_secure uses fchmod on
+        // the open file descriptor before writing any data, closing that window.
+        crate::config::write_secure(path, output.as_bytes()).with_context(|| {
+            format!(
+                "Failed to write interpolated output to '{}'",
+                path.display()
+            )
+        })?;
+        Ok(())
     } else {
         print!("{output}");
         Ok(())
@@ -935,6 +969,7 @@ fn escape_value(value: &str) -> String {
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_with_secrets(
     requested_items: &[String],
     search_by_uri: bool,
@@ -943,6 +978,7 @@ pub async fn run_with_secrets(
     collection_filter: Option<&str>,
     info_only: bool,
     command: &[String],
+    opts: &CommandOptions,
 ) -> Result<()> {
     if !search_by_uri
         && requested_items.is_empty()
@@ -954,7 +990,7 @@ pub async fn run_with_secrets(
             "At least one of --name, --org, --folder, or --collection must be specified."
         );
     }
-    let ctx = load_sync_context().await?;
+    let ctx = load_sync_context(opts.allow_insecure_http).await?;
 
     let org_id_filter = org_filter
         .map(|org| resolve_org_id(&ctx.sync_response.profile, org))
@@ -1086,13 +1122,26 @@ pub async fn run_with_secrets(
         anyhow::bail!("No command specified. Use -- followed by the command to run.");
     }
 
-    // Spawn the command with injected environment variables
+    // Spawn the command, inheriting the parent environment but stripping any
+    // Vaultwarden credential variables so they are not visible to the child.
+    // This is safer than env_clear() which breaks on Windows/macOS where child
+    // processes rely on platform-specific variables (SYSTEMROOT, PATHEXT, etc.).
     let mut cmd = Command::new(&command[0]);
     if command.len() > 1 {
         cmd.args(&command[1..]);
     }
 
-    // Inject secrets into environment
+    // Strip *all* VAULTWARDEN_* and BITWARDEN_* variables from the child
+    // environment to prevent credential leakage, regardless of the specific
+    // variable name.  Other inherited env vars (PATH, HOME, LANG, …) are kept
+    // so the child process works correctly on all platforms.
+    let vars_to_remove: Vec<String> = std::env::vars()
+        .map(|(k, _)| k)
+        .filter(|k| k.starts_with("VAULTWARDEN_") || k.starts_with("BITWARDEN_"))
+        .collect();
+    for name in vars_to_remove {
+        cmd.env_remove(&name);
+    }
     for (name, value) in &env_vars {
         cmd.env(name, value);
     }
@@ -1828,6 +1877,9 @@ mod tests {
                 Some(mock_server.uri()),
                 Some("test-client".to_string()),
                 Some("test-secret".to_string()),
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
             )
             .await;
 
@@ -1868,6 +1920,9 @@ mod tests {
                 Some(mock_server.uri()),
                 Some("test-client".to_string()),
                 Some("test-secret".to_string()),
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
             )
             .await;
 
@@ -1908,6 +1963,9 @@ mod tests {
                 Some(mock_server.uri()),
                 Some("test-client".to_string()),
                 Some("bad-secret".to_string()),
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
             )
             .await;
 
@@ -1971,7 +2029,15 @@ mod tests {
                 .mount(&mock_server)
                 .await;
 
-            let result = login(None, None, Some("new-secret".to_string())).await;
+            let result = login(
+                None,
+                None,
+                Some("new-secret".to_string()),
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
+            )
+            .await;
 
             assert!(result.is_ok());
 
@@ -2073,7 +2139,7 @@ mod tests {
             let temp_dir = tempfile::TempDir::new().unwrap();
             set_temp_config_dir(&temp_dir);
 
-            let result = unlock(Some("password".to_string())).await;
+            let result = unlock(Some("password".to_string()), &Default::default()).await;
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("Not logged in"));
         }
@@ -2109,7 +2175,7 @@ mod tests {
             };
             config.save().unwrap();
 
-            let result = unlock(Some("master-password".to_string())).await;
+            let result = unlock(Some("master-password".to_string()), &Default::default()).await;
             assert!(result.is_ok());
 
             let loaded = Config::load().unwrap();
@@ -2148,7 +2214,7 @@ mod tests {
             };
             config.save().unwrap();
 
-            let result = unlock(Some("wrong-password".to_string())).await;
+            let result = unlock(Some("wrong-password".to_string()), &Default::default()).await;
             assert!(result.is_err());
             assert!(
                 result
@@ -2210,7 +2276,7 @@ mod tests {
                 .insert("org-1".to_string(), encrypted_org_key_str);
             config.save().unwrap();
 
-            let result = unlock(Some("master-password".to_string())).await;
+            let result = unlock(Some("master-password".to_string()), &Default::default()).await;
             assert!(result.is_ok());
 
             let loaded = Config::load().unwrap();
@@ -2518,7 +2584,15 @@ mod tests {
             )
             .unwrap();
 
-            let result = interpolate(input_path.to_str().unwrap(), None, false).await;
+            let result = interpolate(
+                input_path.to_str().unwrap(),
+                None,
+                false,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
+            )
+            .await;
             assert!(result.is_ok());
         }
 
@@ -2563,6 +2637,9 @@ mod tests {
                 input_path.to_str().unwrap(),
                 Some(output_path.to_str().unwrap()),
                 false,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
             )
             .await;
             assert!(result.is_ok());
@@ -2607,7 +2684,15 @@ mod tests {
             let input_path = temp_dir.path().join("input.yml");
             std::fs::write(&input_path, "missing: ((Unknown.item))\n").unwrap();
 
-            let result = interpolate(input_path.to_str().unwrap(), None, false).await;
+            let result = interpolate(
+                input_path.to_str().unwrap(),
+                None,
+                false,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
+            )
+            .await;
             assert!(result.is_err());
             assert!(
                 result
@@ -2658,6 +2743,9 @@ mod tests {
                 input_path.to_str().unwrap(),
                 Some(output_path.to_str().unwrap()),
                 true,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
             )
             .await;
             assert!(result.is_ok());
@@ -2784,7 +2872,17 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = list(None, None, None, None, false).await;
+            let result = list(
+                None,
+                None,
+                None,
+                None,
+                false,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
+            )
+            .await;
             assert!(result.is_ok());
         }
 
@@ -2831,7 +2929,17 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = list(Some("login".to_string()), None, None, None, false).await;
+            let result = list(
+                Some("login".to_string()),
+                None,
+                None,
+                None,
+                false,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
+            )
+            .await;
             assert!(result.is_ok());
         }
 
@@ -2878,7 +2986,17 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = list(None, Some("hub".to_string()), None, None, false).await;
+            let result = list(
+                None,
+                Some("hub".to_string()),
+                None,
+                None,
+                false,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
+            )
+            .await;
             assert!(result.is_ok());
         }
 
@@ -2924,7 +3042,17 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = list(Some("note".to_string()), None, None, None, false).await;
+            let result = list(
+                Some("note".to_string()),
+                None,
+                None,
+                None,
+                false,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
+            )
+            .await;
             assert!(result.is_ok());
         }
 
@@ -2968,7 +3096,17 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = list(Some("invalid".to_string()), None, None, None, false).await;
+            let result = list(
+                Some("invalid".to_string()),
+                None,
+                None,
+                None,
+                false,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
+            )
+            .await;
             assert!(result.is_err());
             assert!(
                 result
@@ -3078,7 +3216,16 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = get("cipher-1", "json", None, None).await;
+            let result = get(
+                "cipher-1",
+                "json",
+                None,
+                None,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
+            )
+            .await;
             assert!(result.is_ok());
         }
 
@@ -3124,7 +3271,16 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = get("github", "json", None, None).await;
+            let result = get(
+                "github",
+                "json",
+                None,
+                None,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
+            )
+            .await;
             assert!(result.is_ok());
         }
 
@@ -3168,7 +3324,16 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = get("missing", "json", None, None).await;
+            let result = get(
+                "missing",
+                "json",
+                None,
+                None,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
+            )
+            .await;
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("not found"));
         }
@@ -3273,7 +3438,16 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = get_by_uri("github.com", "json", None, None).await;
+            let result = get_by_uri(
+                "github.com",
+                "json",
+                None,
+                None,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
+            )
+            .await;
             assert!(result.is_ok());
         }
 
@@ -3317,7 +3491,16 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = get_by_uri("missing.com", "json", None, None).await;
+            let result = get_by_uri(
+                "missing.com",
+                "json",
+                None,
+                None,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
+            )
+            .await;
             assert!(result.is_err());
             assert!(
                 result
@@ -3345,7 +3528,7 @@ mod tests {
         fn test_ensure_valid_token_errors_when_not_logged_in() {
             let _guard = tokio_test::block_on(ENV_LOCK.lock());
             let mut config = Config::default();
-            let err = tokio_test::block_on(ensure_valid_token(&mut config)).unwrap_err();
+            let err = tokio_test::block_on(ensure_valid_token(&mut config, true)).unwrap_err();
             assert!(err.to_string().contains("Not logged in"));
         }
 
@@ -3357,7 +3540,7 @@ mod tests {
                 token_expiry: Some(i64::MAX),
                 ..Default::default()
             };
-            let token = tokio_test::block_on(ensure_valid_token(&mut config)).unwrap();
+            let token = tokio_test::block_on(ensure_valid_token(&mut config, true)).unwrap();
             assert_eq!(token, "valid-token");
         }
 
@@ -3369,7 +3552,7 @@ mod tests {
                 token_expiry: Some(0),
                 ..Default::default()
             };
-            let err = tokio_test::block_on(ensure_valid_token(&mut config)).unwrap_err();
+            let err = tokio_test::block_on(ensure_valid_token(&mut config, true)).unwrap_err();
             assert!(
                 err.to_string()
                     .contains("Token expired. Please login again.")
@@ -3406,7 +3589,7 @@ mod tests {
                 ..Default::default()
             };
 
-            let token = ensure_valid_token(&mut config).await.unwrap(); // secrets-ignore: test fixture
+            let token = ensure_valid_token(&mut config, true).await.unwrap(); // secrets-ignore: test fixture
             assert_eq!(token, "new-token");
             assert_eq!(config.access_token, Some("new-token".to_string()));
             assert_eq!(config.refresh_token, Some("new-refresh".to_string()));
@@ -3437,7 +3620,7 @@ mod tests {
                 ..Default::default()
             };
 
-            let err = ensure_valid_token(&mut config).await.unwrap_err();
+            let err = ensure_valid_token(&mut config, true).await.unwrap_err();
             assert!(
                 err.to_string()
                     .contains("Token expired and refresh failed. Please login again.")
