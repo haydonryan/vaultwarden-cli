@@ -303,13 +303,42 @@ async fn load_sync_context(allow_insecure_http: bool) -> Result<SyncContext> {
     ensure_unlocked(&config)?;
     let api = ApiClient::from_config_with_flags(&config, allow_insecure_http)?;
     let mut sync_response = api.sync(&access_token).await?;
-    if let Ok(cipher_list) = api.ciphers(&access_token).await {
-        sync_response.ciphers = cipher_list.data;
+    match api.ciphers(&access_token).await {
+        Ok(cipher_list) => {
+            sync_response.ciphers =
+                merge_sync_and_ciphers_endpoint(sync_response.ciphers, cipher_list.data);
+        }
+        Err(err) => {
+            eprintln!("Warning: Could not load /api/ciphers; using /api/sync ciphers only: {err}");
+        }
     }
     Ok(SyncContext {
         config,
         sync_response,
     })
+}
+
+fn merge_sync_and_ciphers_endpoint(
+    sync_ciphers: Vec<Cipher>,
+    ciphers_endpoint_ciphers: Vec<Cipher>,
+) -> Vec<Cipher> {
+    // /api/sync carries the full vault context. Keep its entries authoritative for
+    // duplicate IDs, then append ciphers only returned by /api/ciphers.
+    let mut seen_ids = BTreeSet::new();
+    let mut merged = Vec::with_capacity(sync_ciphers.len() + ciphers_endpoint_ciphers.len());
+
+    for cipher in sync_ciphers {
+        seen_ids.insert(cipher.id.clone());
+        merged.push(cipher);
+    }
+
+    for cipher in ciphers_endpoint_ciphers {
+        if seen_ids.insert(cipher.id.clone()) {
+            merged.push(cipher);
+        }
+    }
+
+    merged
 }
 
 fn resolve_org_and_collection_filters(
@@ -1165,6 +1194,72 @@ mod tests {
     use tokio::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::const_new(());
+
+    mod sync_context_tests {
+        use super::*;
+
+        fn cipher(id: &str, name: &str) -> Cipher {
+            Cipher {
+                id: id.to_string(),
+                r#type: 1,
+                organization_id: None,
+                name: Some(name.to_string()),
+                notes: None,
+                folder_id: None,
+                login: None,
+                card: None,
+                identity: None,
+                secure_note: None,
+                ssh_key: None,
+                collection_ids: Vec::new(),
+                fields: None,
+                data: None,
+            }
+        }
+
+        #[test]
+        fn merge_appends_ciphers_endpoint_only_items_after_sync_items() {
+            let merged = merge_sync_and_ciphers_endpoint(
+                vec![cipher("sync-a", "Sync A")],
+                vec![
+                    cipher("ciphers-b", "Ciphers B"),
+                    cipher("ciphers-c", "Ciphers C"),
+                ],
+            );
+
+            let ids: Vec<_> = merged.iter().map(|cipher| cipher.id.as_str()).collect();
+            assert_eq!(ids, ["sync-a", "ciphers-b", "ciphers-c"]);
+        }
+
+        #[test]
+        fn merge_keeps_sync_cipher_when_both_endpoints_return_same_id() {
+            let merged = merge_sync_and_ciphers_endpoint(
+                vec![
+                    cipher("same-id", "Sync Name"),
+                    cipher("sync-only", "Sync Only"),
+                ],
+                vec![
+                    cipher("same-id", "Ciphers Name"),
+                    cipher("ciphers-only", "Ciphers Only"),
+                ],
+            );
+
+            let ids: Vec<_> = merged.iter().map(|cipher| cipher.id.as_str()).collect();
+            assert_eq!(ids, ["same-id", "sync-only", "ciphers-only"]);
+            assert_eq!(merged[0].name.as_deref(), Some("Sync Name"));
+        }
+
+        #[test]
+        fn merge_with_no_ciphers_endpoint_items_returns_sync_items() {
+            let merged = merge_sync_and_ciphers_endpoint(
+                vec![cipher("sync-a", "Sync A"), cipher("sync-b", "Sync B")],
+                Vec::new(),
+            );
+
+            let ids: Vec<_> = merged.iter().map(|cipher| cipher.id.as_str()).collect();
+            assert_eq!(ids, ["sync-a", "sync-b"]);
+        }
+    }
 
     // Tests for sanitize_env_name
     mod sanitize_env_name_tests {

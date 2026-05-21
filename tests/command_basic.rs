@@ -925,3 +925,65 @@ async fn list_with_type_filter_uses_ciphers_endpoint_when_sync_omits_ssh_items()
         .stdout(predicate::str::contains("ALPHA_LOGIN_USERNAME").not())
         .stdout(predicate::str::contains("No items found.").not());
 }
+
+#[tokio::test]
+async fn list_falls_back_to_sync_ciphers_when_ciphers_endpoint_fails() {
+    let ctx = TestContext::new();
+    let keys = test_crypto_keys();
+    let mock_server = MockServer::start().await;
+
+    let sync_response = serde_json::json!({
+        "Ciphers": [
+            {
+                "Id": "cipher-login",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Alpha Login", &keys),
+                "Login": {
+                    "Username": encrypt_string_for_test("alice", &keys)
+                }
+            }
+        ],
+        "Folders": [],
+        "Collections": [],
+        "Profile": {
+            "Id": "user-1",
+            "Email": "user@example.com",
+            "Organizations": []
+        }
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/api/sync"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/ciphers"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    ctx.write_config(&Config {
+        server: Some(mock_server.uri()),
+        access_token: Some("access-token".to_string()),
+        token_expiry: Some(i64::MAX),
+        ..Default::default()
+    })
+    .unwrap();
+    ctx.write_saved_user_keys(&keys).unwrap();
+
+    ctx.binary()
+        .arg("list")
+        .arg("--json")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"name\": \"Alpha Login\""))
+        .stderr(predicate::str::contains(
+            "Warning: Could not load /api/ciphers; using /api/sync ciphers only",
+        ));
+}
