@@ -390,9 +390,11 @@ mod interpolation_output_permissions {
 
         let output_path = ctx.root().join("output.yaml");
 
-        // Write a file using the same pattern as write_interpolated_output
-        std::fs::write(&output_path, "test: secret-data").unwrap();
-        std::fs::set_permissions(&output_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        // Call write_secure directly — this is the same function that
+        // write_interpolated_output uses, so this test exercises the real
+        // code path rather than a manually-chmod'd file.
+        vaultwarden_cli::config::write_secure(&output_path, b"secret: data")
+            .expect("write_secure should succeed");
 
         let mode = std::fs::metadata(&output_path)
             .expect("output file should exist")

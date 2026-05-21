@@ -20,11 +20,24 @@ use crate::config::{self, Config};
 use crate::crypto::CryptoKeys;
 use crate::models::{Cipher, CipherOutput, CipherType, FieldOutput};
 
+/// Options controlling connection behaviour for commands that talk to Vaultwarden.
+///
+/// The [`Default`] implementation preserves the original secure-only behaviour
+/// (HTTPS required). Callers that only need to set one field can use struct-update
+/// syntax: `CommandOptions { allow_insecure_http: true, ..Default::default() }`.
+#[derive(Debug, Default, Clone)]
+pub struct CommandOptions {
+    /// Permit `http://` server URLs. Has the same effect as
+    /// `VAULTWARDEN_ALLOW_HTTP=1` but takes precedence over it.
+    /// Defaults to `false`.
+    pub allow_insecure_http: bool,
+}
+
 pub async fn login(
     server: Option<String>,
     client_id: Option<String>,
     client_secret: Option<String>,
-    allow_insecure_http: bool,
+    opts: &CommandOptions,
 ) -> Result<()> {
     let mut config = Config::load()?;
 
@@ -39,7 +52,7 @@ pub async fn login(
         .or_else(|| config::get_client_secret(&client_id).ok())
         .context("Client secret is required. Use --client-secret.")?;
 
-    let api = ApiClient::new_with_flags(&server, allow_insecure_http)?;
+    let api = ApiClient::new_with_flags(&server, opts.allow_insecure_http)?;
 
     // Check server is reachable
     println!("Connecting to {server}...");
@@ -95,7 +108,7 @@ pub async fn login(
     Ok(())
 }
 
-pub async fn unlock(password: Option<String>, allow_insecure_http: bool) -> Result<()> {
+pub async fn unlock(password: Option<String>, opts: &CommandOptions) -> Result<()> {
     let mut config = Config::load()?;
 
     if !config.is_logged_in() {
@@ -103,7 +116,7 @@ pub async fn unlock(password: Option<String>, allow_insecure_http: bool) -> Resu
     }
 
     // Ensure token is still valid before prompting for password
-    ensure_valid_token(&mut config, allow_insecure_http).await?;
+    ensure_valid_token(&mut config, opts.allow_insecure_http).await?;
 
     let email = config
         .email
@@ -519,9 +532,9 @@ pub async fn list(
     org_filter: Option<String>,
     collection_filter: Option<String>,
     json_output: bool,
-    allow_insecure_http: bool,
+    opts: &CommandOptions,
 ) -> Result<()> {
-    let ctx = load_sync_context(allow_insecure_http).await?;
+    let ctx = load_sync_context(opts.allow_insecure_http).await?;
     let (org_id_filter, collection_id_filter) = resolve_org_and_collection_filters(
         &ctx.sync_response,
         &ctx.config,
@@ -618,9 +631,9 @@ pub async fn get(
     format: &str,
     org_filter: Option<String>,
     collection_filter: Option<String>,
-    allow_insecure_http: bool,
+    opts: &CommandOptions,
 ) -> Result<()> {
-    let ctx = load_sync_context(allow_insecure_http).await?;
+    let ctx = load_sync_context(opts.allow_insecure_http).await?;
     let (org_id_filter, collection_id_filter) = resolve_org_and_collection_filters(
         &ctx.sync_response,
         &ctx.config,
@@ -670,9 +683,9 @@ pub async fn get_by_uri(
     format: &str,
     org_filter: Option<String>,
     collection_filter: Option<String>,
-    allow_insecure_http: bool,
+    opts: &CommandOptions,
 ) -> Result<()> {
-    let ctx = load_sync_context(allow_insecure_http).await?;
+    let ctx = load_sync_context(opts.allow_insecure_http).await?;
     let (org_id_filter, collection_id_filter) = resolve_org_and_collection_filters(
         &ctx.sync_response,
         &ctx.config,
@@ -759,8 +772,8 @@ fn track_missing_placeholder(
     full.to_string()
 }
 
-pub async fn interpolate(file: &str, output_file: Option<&str>, skip_missing: bool, allow_insecure_http: bool) -> Result<()> {
-    let ctx = load_sync_context(allow_insecure_http).await?;
+pub async fn interpolate(file: &str, output_file: Option<&str>, skip_missing: bool, opts: &CommandOptions) -> Result<()> {
+    let ctx = load_sync_context(opts.allow_insecure_http).await?;
     let mut by_name: HashMap<String, CipherOutput> = HashMap::new();
 
     for cipher in &ctx.sync_response.ciphers {
@@ -956,7 +969,7 @@ pub async fn run_with_secrets(
     collection_filter: Option<&str>,
     info_only: bool,
     command: &[String],
-    allow_insecure_http: bool,
+    opts: &CommandOptions,
 ) -> Result<()> {
     if !search_by_uri
         && requested_items.is_empty()
@@ -968,7 +981,7 @@ pub async fn run_with_secrets(
             "At least one of --name, --org, --folder, or --collection must be specified."
         );
     }
-    let ctx = load_sync_context(allow_insecure_http).await?;
+    let ctx = load_sync_context(opts.allow_insecure_http).await?;
 
     let org_id_filter = org_filter
         .map(|org| resolve_org_id(&ctx.sync_response.profile, org))
@@ -1100,21 +1113,28 @@ pub async fn run_with_secrets(
         anyhow::bail!("No command specified. Use -- followed by the command to run.");
     }
 
-    // Spawn the command with a clean environment containing only essential
-    // system variables plus the injected vault secrets. This prevents the
-    // child from inheriting VAULTWARDEN_PASSWORD, VAULTWARDEN_CLIENT_SECRET,
-    // or other sensitive env vars from the parent process.
+    // Spawn the command, inheriting the parent environment but stripping any
+    // Vaultwarden credential variables so they are not visible to the child.
+    // This is safer than env_clear() which breaks on Windows/macOS where child
+    // processes rely on platform-specific variables (SYSTEMROOT, PATHEXT, etc.).
     let mut cmd = Command::new(&command[0]);
     if command.len() > 1 {
         cmd.args(&command[1..]);
     }
 
-    // Clear inherited environment and set only essential + vault vars
-    cmd.env_clear();
-    for essential in ["PATH", "HOME", "USER", "TERM", "LANG", "LC_ALL", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME"] {
-        if let Ok(val) = std::env::var(essential) {
-            cmd.env(essential, val);
-        }
+    // Remove known-sensitive variables rather than clearing everything.
+    // This avoids breaking child processes that depend on inherited env vars
+    // while still preventing credential leakage.
+    for sensitive in [
+        "VAULTWARDEN_PASSWORD",
+        "VAULTWARDEN_CLIENT_SECRET",
+        "VAULTWARDEN_MASTER_PASSWORD",
+        "VAULTWARDEN_ACCESS_TOKEN",
+        "VAULTWARDEN_REFRESH_TOKEN",
+        "BITWARDEN_PASSWORD",
+        "BITWARDEN_CLIENT_SECRET",
+    ] {
+        cmd.env_remove(sensitive);
     }
     for (name, value) in &env_vars {
         cmd.env(name, value);
@@ -1851,7 +1871,7 @@ mod tests {
                 Some(mock_server.uri()),
                 Some("test-client".to_string()),
                 Some("test-secret".to_string()),
-                true,
+                &CommandOptions { allow_insecure_http: true, ..Default::default() },
             )
             .await;
 
@@ -1892,7 +1912,7 @@ mod tests {
                 Some(mock_server.uri()),
                 Some("test-client".to_string()),
                 Some("test-secret".to_string()),
-                true,
+                &CommandOptions { allow_insecure_http: true, ..Default::default() },
             )
             .await;
 
@@ -1933,7 +1953,7 @@ mod tests {
                 Some(mock_server.uri()),
                 Some("test-client".to_string()),
                 Some("bad-secret".to_string()),
-                true,
+                &CommandOptions { allow_insecure_http: true, ..Default::default() },
             )
             .await;
 
@@ -1997,7 +2017,7 @@ mod tests {
                 .mount(&mock_server)
                 .await;
 
-            let result = login(None, None, Some("new-secret".to_string()), true).await;
+            let result = login(None, None, Some("new-secret".to_string()), &CommandOptions { allow_insecure_http: true, ..Default::default() }).await;
 
             assert!(result.is_ok());
 
@@ -2099,7 +2119,7 @@ mod tests {
             let temp_dir = tempfile::TempDir::new().unwrap();
             set_temp_config_dir(&temp_dir);
 
-            let result = unlock(Some("password".to_string()), false).await;
+            let result = unlock(Some("password".to_string()), &Default::default()).await;
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("Not logged in"));
         }
@@ -2135,7 +2155,7 @@ mod tests {
             };
             config.save().unwrap();
 
-            let result = unlock(Some("master-password".to_string()), false).await;
+            let result = unlock(Some("master-password".to_string()), &Default::default()).await;
             assert!(result.is_ok());
 
             let loaded = Config::load().unwrap();
@@ -2174,7 +2194,7 @@ mod tests {
             };
             config.save().unwrap();
 
-            let result = unlock(Some("wrong-password".to_string()), false).await;
+            let result = unlock(Some("wrong-password".to_string()), &Default::default()).await;
             assert!(result.is_err());
             assert!(
                 result
@@ -2236,7 +2256,7 @@ mod tests {
                 .insert("org-1".to_string(), encrypted_org_key_str);
             config.save().unwrap();
 
-            let result = unlock(Some("master-password".to_string()), false).await;
+            let result = unlock(Some("master-password".to_string()), &Default::default()).await;
             assert!(result.is_ok());
 
             let loaded = Config::load().unwrap();
@@ -2544,7 +2564,7 @@ mod tests {
             )
             .unwrap();
 
-            let result = interpolate(input_path.to_str().unwrap(), None, false, true).await;
+            let result = interpolate(input_path.to_str().unwrap(), None, false, &CommandOptions { allow_insecure_http: true, ..Default::default() }).await;
             assert!(result.is_ok());
         }
 
@@ -2589,7 +2609,7 @@ mod tests {
                 input_path.to_str().unwrap(),
                 Some(output_path.to_str().unwrap()),
                 false,
-                true,
+                &CommandOptions { allow_insecure_http: true, ..Default::default() },
             )
             .await;
             assert!(result.is_ok());
@@ -2634,7 +2654,7 @@ mod tests {
             let input_path = temp_dir.path().join("input.yml");
             std::fs::write(&input_path, "missing: ((Unknown.item))\n").unwrap();
 
-            let result = interpolate(input_path.to_str().unwrap(), None, false, true).await;
+            let result = interpolate(input_path.to_str().unwrap(), None, false, &CommandOptions { allow_insecure_http: true, ..Default::default() }).await;
             assert!(result.is_err());
             assert!(
                 result
@@ -2685,7 +2705,7 @@ mod tests {
                 input_path.to_str().unwrap(),
                 Some(output_path.to_str().unwrap()),
                 true,
-                true,
+                &CommandOptions { allow_insecure_http: true, ..Default::default() },
             )
             .await;
             assert!(result.is_ok());
@@ -2812,7 +2832,7 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = list(None, None, None, None, false, true).await;
+            let result = list(None, None, None, None, false, &CommandOptions { allow_insecure_http: true, ..Default::default() }).await;
             assert!(result.is_ok());
         }
 
@@ -2859,7 +2879,7 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = list(Some("login".to_string()), None, None, None, false, true).await;
+            let result = list(Some("login".to_string()), None, None, None, false, &CommandOptions { allow_insecure_http: true, ..Default::default() }).await;
             assert!(result.is_ok());
         }
 
@@ -2906,7 +2926,7 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = list(None, Some("hub".to_string()), None, None, false, true).await;
+            let result = list(None, Some("hub".to_string()), None, None, false, &CommandOptions { allow_insecure_http: true, ..Default::default() }).await;
             assert!(result.is_ok());
         }
 
@@ -2952,7 +2972,7 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = list(Some("note".to_string()), None, None, None, false, true).await;
+            let result = list(Some("note".to_string()), None, None, None, false, &CommandOptions { allow_insecure_http: true, ..Default::default() }).await;
             assert!(result.is_ok());
         }
 
@@ -2996,7 +3016,7 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = list(Some("invalid".to_string()), None, None, None, false, true).await;
+            let result = list(Some("invalid".to_string()), None, None, None, false, &CommandOptions { allow_insecure_http: true, ..Default::default() }).await;
             assert!(result.is_err());
             assert!(
                 result
@@ -3106,7 +3126,7 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = get("cipher-1", "json", None, None, true).await;
+            let result = get("cipher-1", "json", None, None, &CommandOptions { allow_insecure_http: true, ..Default::default() }).await;
             assert!(result.is_ok());
         }
 
@@ -3152,7 +3172,7 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = get("github", "json", None, None, true).await;
+            let result = get("github", "json", None, None, &CommandOptions { allow_insecure_http: true, ..Default::default() }).await;
             assert!(result.is_ok());
         }
 
@@ -3196,7 +3216,7 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = get("missing", "json", None, None, true).await;
+            let result = get("missing", "json", None, None, &CommandOptions { allow_insecure_http: true, ..Default::default() }).await;
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("not found"));
         }
@@ -3301,7 +3321,7 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = get_by_uri("github.com", "json", None, None, true).await;
+            let result = get_by_uri("github.com", "json", None, None, &CommandOptions { allow_insecure_http: true, ..Default::default() }).await;
             assert!(result.is_ok());
         }
 
@@ -3345,7 +3365,7 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = get_by_uri("missing.com", "json", None, None, true).await;
+            let result = get_by_uri("missing.com", "json", None, None, &CommandOptions { allow_insecure_http: true, ..Default::default() }).await;
             assert!(result.is_err());
             assert!(
                 result

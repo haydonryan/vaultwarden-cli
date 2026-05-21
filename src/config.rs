@@ -81,7 +81,7 @@ impl Drop for WarnCapture {
 
 // ── Secure file write ────────────────────────────────────────────────────────
 
-/// Write `content` to `path` atomically with owner-only (0o600) permissions,
+/// Write `content` to `path` with owner-only (0o600) permissions,
 /// eliminating the TOCTOU race that exists in the naive `fs::write` + `chmod` pattern.
 ///
 /// ## Why the naive pattern is unsafe
@@ -110,7 +110,7 @@ impl Drop for WarnCapture {
 ///
 /// On non-Unix platforms this falls back to `fs::write` (permission model
 /// differs; the TOCTOU concern is Unix-specific).
-pub(crate) fn write_secure(path: &std::path::Path, content: impl AsRef<[u8]>) -> Result<()> {
+pub fn write_secure(path: &std::path::Path, content: impl AsRef<[u8]>) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;

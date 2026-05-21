@@ -326,7 +326,7 @@ impl LiveTestEnv {
                 "kdf_iterations": kdf_iterations,
                 "org_keys": {},
             }),
-            0o644,
+            0o600,
         )?;
 
         // ── tokens.json ──────────────────────────────────────────────────

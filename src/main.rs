@@ -212,15 +212,17 @@ async fn main() {
     // Propagate global security flags to library code
     vaultwarden_cli::crypto::set_allow_insecure_mac(cli.allow_insecure_mac);
 
-    let allow_insecure_http = cli.allow_insecure_http;
+    let opts = commands::CommandOptions {
+        allow_insecure_http: cli.allow_insecure_http,
+    };
 
     let result = match cli.command {
         Commands::Login {
             server,
             client_id,
             client_secret,
-        } => commands::login(server, client_id, client_secret, allow_insecure_http).await,
-        Commands::Unlock { password } => commands::unlock(password, allow_insecure_http).await,
+        } => commands::login(server, client_id, client_secret, &opts).await,
+        Commands::Unlock { password } => commands::unlock(password, &opts).await,
         Commands::Lock => commands::lock().await,
         Commands::Logout => commands::logout().await,
         Commands::List {
@@ -229,7 +231,7 @@ async fn main() {
             org,
             collection,
             json,
-        } => commands::list(r#type, search, org, collection, json, allow_insecure_http).await,
+        } => commands::list(r#type, search, org, collection, json, &opts).await,
         Commands::Get {
             item,
             format,
@@ -243,7 +245,7 @@ async fn main() {
                 effective_format(&format, username, password),
                 org,
                 collection,
-                allow_insecure_http,
+                &opts,
             )
             .await
         }
@@ -260,7 +262,7 @@ async fn main() {
                 effective_format(&format, username, password),
                 org,
                 collection,
-                allow_insecure_http,
+                &opts,
             )
             .await
         }
@@ -287,19 +289,19 @@ async fn main() {
                 collection.as_deref(),
                 info,
                 &command,
-                allow_insecure_http,
+                &opts,
             )
             .await
         }
         Commands::RunUri { uri, info, command } => {
-            commands::run_with_secrets(&[uri], true, None, None, None, info, &command, allow_insecure_http).await
+            commands::run_with_secrets(&[uri], true, None, None, None, info, &command, &opts).await
         }
         Commands::Status => commands::status().await,
         Commands::Interpolate {
             file,
             output,
             skip_missing,
-        } => commands::interpolate(&file, output.as_deref(), skip_missing, allow_insecure_http).await,
+        } => commands::interpolate(&file, output.as_deref(), skip_missing, &opts).await,
     };
 
     if let Err(e) = result {

@@ -47,5 +47,4 @@ echo "→ Running live integration tests..."
 cd "$REPO_ROOT"
 # Run tests single-threaded to avoid overwhelming the test server.
 # Pass any extra arguments through to cargo test.
-source /home/n/.cargo/env 2>/dev/null || true
-HOME=/home/n cargo test --test live_tests -- --test-threads=1 --nocapture "$@"
+cargo test --test live_tests -- --test-threads=1 --nocapture "$@"

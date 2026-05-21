@@ -3,7 +3,7 @@
 # Run via scripts/test-live.sh; do not use this file for production.
 services:
   vaultwarden:
-    image: vaultwarden/server:latest
+    image: vaultwarden/server:1.36.0
     ports:
       - "18222:80"
     environment:
