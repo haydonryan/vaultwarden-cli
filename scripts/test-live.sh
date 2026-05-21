@@ -4,13 +4,14 @@
 # Usage:
 #   ./scripts/test-live.sh [test binary args...]
 #
-# Extra arguments are passed after `--` to the test binary (not to cargo),
-# so they are test-harness args: filter names, --nocapture, --ignored, etc.
+# Any extra arguments are passed directly to the test binary as test-harness
+# args. This script inserts the `cargo test ... --` separator internally, so
+# pass filters/flags directly here (for example: --ignored).
 #
 # Example:
-#   ./scripts/test-live.sh                          # run all live tests
-#   ./scripts/test-live.sh session::login           # run one test by filter
-#   ./scripts/test-live.sh -- --nocapture           # pass harness flag
+#   ./scripts/test-live.sh                # run all live tests
+#   ./scripts/test-live.sh session::login # run one test by filter
+#   ./scripts/test-live.sh --ignored      # run ignored live tests
 #
 # The script starts Vaultwarden via Docker Compose, waits for it to be ready,
 # runs the live_tests binary, and tears everything down on exit.
