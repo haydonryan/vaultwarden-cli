@@ -1,9 +1,7 @@
 //! Live tests: login, logout, lock, unlock, status.
 #![allow(dead_code, clippy::pedantic, clippy::nursery)]
 
-use crate::live_env::{
-    LiveTestEnv, TEST_PASSWORD, FIXTURE_LOGIN_NAME,
-};
+use crate::live_env::{FIXTURE_LOGIN_NAME, LiveTestEnv, TEST_PASSWORD};
 use predicates::prelude::*;
 
 // ── status ────────────────────────────────────────────────────────────────
@@ -115,7 +113,7 @@ async fn login_with_unreachable_server_fails() {
             "--allow-insecure-http",
             "login",
             "--server",
-            "http://127.0.0.1:19",   // no server listening here
+            "http://127.0.0.1:19", // no server listening here
             "--client-id",
             &env.client_id,
             "--client-secret",

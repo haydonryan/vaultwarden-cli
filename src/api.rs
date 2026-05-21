@@ -38,7 +38,9 @@ impl ApiClient {
                      To permit http:// URLs, use --allow-insecure-http or set VAULTWARDEN_ALLOW_HTTP=1."
                 );
             }
-            eprintln!("Warning: Using insecure HTTP connection. Secrets will be sent unencrypted. Use https:// in production.");
+            eprintln!(
+                "Warning: Using insecure HTTP connection. Secrets will be sent unencrypted. Use https:// in production."
+            );
         }
 
         let client = Client::builder()

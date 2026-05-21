@@ -2,8 +2,8 @@
 #![allow(dead_code, clippy::pedantic, clippy::nursery)]
 
 use crate::live_env::{
-    LiveTestEnv, FIXTURE_CARD_NAME, FIXTURE_LOGIN2_NAME, FIXTURE_LOGIN_NAME,
-    FIXTURE_LOGIN_USERNAME, FIXTURE_NOTE_NAME, FIXTURE_SSH_NAME,
+    FIXTURE_CARD_NAME, FIXTURE_LOGIN_NAME, FIXTURE_LOGIN_USERNAME, FIXTURE_LOGIN2_NAME,
+    FIXTURE_NOTE_NAME, FIXTURE_SSH_NAME, LiveTestEnv,
 };
 use predicates::prelude::*;
 
@@ -46,7 +46,10 @@ async fn list_type_login_shows_only_logins() {
     );
     for item in items {
         let cipher_type = item["type"].as_str().unwrap_or("");
-        assert_eq!(cipher_type, "login", "non-login item slipped through: {item}");
+        assert_eq!(
+            cipher_type, "login",
+            "non-login item slipped through: {item}"
+        );
     }
 }
 
@@ -194,8 +197,8 @@ async fn list_json_output_is_valid_json_array() {
     let output = env.binary().args(["list", "--json"]).output().unwrap();
     assert!(output.status.success());
 
-    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .expect("list --json must produce valid JSON");
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("list --json must produce valid JSON");
     assert!(
         parsed.is_array(),
         "list --json must be a JSON array, got: {parsed}"

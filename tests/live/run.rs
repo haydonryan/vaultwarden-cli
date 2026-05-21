@@ -2,9 +2,9 @@
 #![allow(dead_code, clippy::pedantic, clippy::nursery)]
 
 use crate::live_env::{
-    LiveTestEnv, FIXTURE_LOGIN2_NAME, FIXTURE_LOGIN2_PASSWORD, FIXTURE_LOGIN2_USERNAME,
     FIXTURE_LOGIN_FIELD_API_KEY_VALUE, FIXTURE_LOGIN_NAME, FIXTURE_LOGIN_PASSWORD,
-    FIXTURE_LOGIN_USERNAME,
+    FIXTURE_LOGIN_USERNAME, FIXTURE_LOGIN2_NAME, FIXTURE_LOGIN2_PASSWORD, FIXTURE_LOGIN2_USERNAME,
+    LiveTestEnv,
 };
 use predicates::prelude::*;
 
@@ -34,15 +34,21 @@ async fn run_injects_vault_vars_into_child_env() {
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(
-        stdout.contains(&format!("{LIVE_TEST_LOGIN_PREFIX}_USERNAME={FIXTURE_LOGIN_USERNAME}")),
+        stdout.contains(&format!(
+            "{LIVE_TEST_LOGIN_PREFIX}_USERNAME={FIXTURE_LOGIN_USERNAME}"
+        )),
         "USERNAME not injected: {stdout}"
     );
     assert!(
-        stdout.contains(&format!("{LIVE_TEST_LOGIN_PREFIX}_PASSWORD={FIXTURE_LOGIN_PASSWORD}")),
+        stdout.contains(&format!(
+            "{LIVE_TEST_LOGIN_PREFIX}_PASSWORD={FIXTURE_LOGIN_PASSWORD}"
+        )),
         "PASSWORD not injected: {stdout}"
     );
     assert!(
-        stdout.contains(&format!("{LIVE_TEST_LOGIN_PREFIX}_API_KEY={FIXTURE_LOGIN_FIELD_API_KEY_VALUE}")),
+        stdout.contains(&format!(
+            "{LIVE_TEST_LOGIN_PREFIX}_API_KEY={FIXTURE_LOGIN_FIELD_API_KEY_VALUE}"
+        )),
         "API_KEY custom field not injected: {stdout}"
     );
 }
@@ -62,7 +68,9 @@ async fn run_with_name_flag() {
         .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains(&format!("{LIVE_TEST_LOGIN_PREFIX}_PASSWORD={FIXTURE_LOGIN_PASSWORD}")));
+    assert!(stdout.contains(&format!(
+        "{LIVE_TEST_LOGIN_PREFIX}_PASSWORD={FIXTURE_LOGIN_PASSWORD}"
+    )));
 }
 
 // ── comma-separated names ─────────────────────────────────────────────────
@@ -84,11 +92,15 @@ async fn run_comma_separated_names_injects_all() {
 
     // Both items must appear.
     assert!(
-        stdout.contains(&format!("{LIVE_TEST_LOGIN_PREFIX}_PASSWORD={FIXTURE_LOGIN_PASSWORD}")),
+        stdout.contains(&format!(
+            "{LIVE_TEST_LOGIN_PREFIX}_PASSWORD={FIXTURE_LOGIN_PASSWORD}"
+        )),
         "first item not injected: {stdout}"
     );
     assert!(
-        stdout.contains(&format!("{LIVE_TEST_LOGIN2_PREFIX}_PASSWORD={FIXTURE_LOGIN2_PASSWORD}")),
+        stdout.contains(&format!(
+            "{LIVE_TEST_LOGIN2_PREFIX}_PASSWORD={FIXTURE_LOGIN2_PASSWORD}"
+        )),
         "second item not injected: {stdout}"
     );
 }
@@ -215,7 +227,9 @@ async fn run_uri_injects_vars_for_matching_item() {
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(
-        stdout.contains(&format!("{LIVE_TEST_LOGIN_PREFIX}_PASSWORD={FIXTURE_LOGIN_PASSWORD}")),
+        stdout.contains(&format!(
+            "{LIVE_TEST_LOGIN_PREFIX}_PASSWORD={FIXTURE_LOGIN_PASSWORD}"
+        )),
         "URI-matched item not injected: {stdout}"
     );
 }

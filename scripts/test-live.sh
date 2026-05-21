@@ -17,7 +17,7 @@
 # runs the live_tests binary, and tears everything down on exit.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." >/dev/null && pwd -P)"
 COMPOSE_FILE="$REPO_ROOT/docker-compose.live-test.yml"
 SERVICE_URL="http://localhost:18222"
 ADMIN_TOKEN="live-test-admin-token"

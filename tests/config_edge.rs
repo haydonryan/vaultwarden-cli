@@ -107,7 +107,9 @@ fn config_save_keys_warns_when_client_id_is_none() {
     };
 
     let _capture = config::capture_warnings();
-    config.save_keys().expect("save_keys should succeed via file fallback");
+    config
+        .save_keys()
+        .expect("save_keys should succeed via file fallback");
     let warnings = _capture.drain();
 
     assert!(
@@ -298,7 +300,10 @@ fn config_clear_removes_tokens() {
     };
     config.save().unwrap(); // persists tokens to tokens.json (no keyring in tests)
 
-    assert!(ctx.tokens_path().exists(), "tokens.json should exist after save");
+    assert!(
+        ctx.tokens_path().exists(),
+        "tokens.json should exist after save"
+    );
 
     config.clear().unwrap();
 

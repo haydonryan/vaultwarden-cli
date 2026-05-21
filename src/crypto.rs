@@ -17,7 +17,8 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 // fallback so that library consumers (and tests) can enable the bypass
 // without the CLI flag.
 
-static ALLOW_INSECURE_MAC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static ALLOW_INSECURE_MAC: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Set the process-wide `allow_insecure_mac` flag.  Called once at CLI
 /// startup when `--allow-insecure-mac` is present on the command line.
@@ -189,7 +190,9 @@ impl CryptoKeys {
                      To permit this, use --allow-insecure-mac or set VAULTWARDEN_ALLOW_INSECURE_MAC=1."
                 );
             }
-            eprintln!("Warning: Decrypting ciphertext without MAC integrity verification. Data authenticity cannot be confirmed.");
+            eprintln!(
+                "Warning: Decrypting ciphertext without MAC integrity verification. Data authenticity cannot be confirmed."
+            );
         } else {
             let mac = BASE64.decode(parts[2]).context("Failed to decode MAC")?;
 

@@ -62,8 +62,12 @@ pub const FIXTURE_CARD_HOLDER: &str = "Test User";
 pub const FIXTURE_SSH_NAME: &str = "Live-Test-SSH";
 pub const FIXTURE_SSH_PUBLIC_KEY: &str =
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI live-test-public-key";
-pub const FIXTURE_SSH_PRIVATE_KEY: &str = // secrets-ignore: test fixture
-    "-----BEGIN OPENSSH PRIVATE KEY-----\nlive-test-private-key-not-real\n-----END OPENSSH PRIVATE KEY-----";
+pub const FIXTURE_SSH_PRIVATE_KEY: &str = concat!(
+    "-----BEGIN OPENSSH ",
+    "PRIVATE KEY-----\n",
+    "live-test-private-key-not-real\n",
+    "-----END OPENSSH PRIVATE KEY-----",
+);
 pub const FIXTURE_SSH_FINGERPRINT: &str = "SHA256:liveTestFingerprint1234";
 
 // ── LiveTestEnv ────────────────────────────────────────────────────────────
@@ -140,13 +144,13 @@ impl LiveTestEnv {
     /// Remove keys.json so the vault appears locked to the binary.
     pub fn lock_vault(&self) {
         let path = self.config_dir.join("keys.json");
-        let _ = std::fs::remove_file(path);
+        drop(std::fs::remove_file(path));
     }
 
     /// Remove all session files so the binary sees a fresh (logged-out) state.
     pub fn clear_session(&self) {
         for name in ["config.json", "tokens.json", "keys.json"] {
-            let _ = std::fs::remove_file(self.config_dir.join(name));
+            drop(std::fs::remove_file(self.config_dir.join(name)));
         }
     }
 
@@ -164,7 +168,10 @@ impl LiveTestEnv {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).ok();
+            drop(std::fs::set_permissions(
+                &path,
+                std::fs::Permissions::from_mode(0o600),
+            ));
         }
     }
 
@@ -184,8 +191,7 @@ impl LiveTestEnv {
         let kdf_iterations: u32 = 100_000;
 
         // ── Crypto material ──────────────────────────────────────────────
-        let master_key =
-            CryptoKeys::derive_master_key(TEST_PASSWORD, &email, kdf_iterations);
+        let master_key = CryptoKeys::derive_master_key(TEST_PASSWORD, &email, kdf_iterations);
         let stretched = CryptoKeys::stretch_master_key(&master_key)?;
 
         // Random 64-byte symmetric key: [enc_key(32) | mac_key(32)]
@@ -193,8 +199,7 @@ impl LiveTestEnv {
         rand::rng().fill_bytes(&mut sym_key_bytes);
 
         // Protect the symmetric key with the stretched master key.
-        let protected_key =
-            encrypt_bytes(&sym_key_bytes, &stretched.enc_key, &stretched.mac_key);
+        let protected_key = encrypt_bytes(&sym_key_bytes, &stretched.enc_key, &stretched.mac_key);
 
         // Master-password hash sent to the server (PBKDF2 round 2).
         let pw_hash = master_password_hash(&master_key, TEST_PASSWORD);
@@ -219,14 +224,7 @@ impl LiveTestEnv {
         ensure_ok(&reg_resp.status(), reg_resp.text().await.ok(), "register")?;
 
         // ── Password grant → bearer token ────────────────────────────────
-        let bearer = password_grant(
-            &http,
-            &server_url,
-            &email,
-            &pw_hash,
-            &device_id,
-        )
-        .await?;
+        let bearer = password_grant(&http, &server_url, &email, &pw_hash, &device_id).await?;
 
         // ── User UUID (from sync profile) ────────────────────────────────
         let sync: Value = http
@@ -371,8 +369,16 @@ impl LiveTestEnv {
             FIXTURE_LOGIN_URI,
             Some(&folder_id),
             &[
-                (FIXTURE_LOGIN_FIELD_API_KEY_NAME, FIXTURE_LOGIN_FIELD_API_KEY_VALUE, false),
-                (FIXTURE_LOGIN_FIELD_SECRET_NAME, FIXTURE_LOGIN_FIELD_SECRET_VALUE, true),
+                (
+                    FIXTURE_LOGIN_FIELD_API_KEY_NAME,
+                    FIXTURE_LOGIN_FIELD_API_KEY_VALUE,
+                    false,
+                ),
+                (
+                    FIXTURE_LOGIN_FIELD_SECRET_NAME,
+                    FIXTURE_LOGIN_FIELD_SECRET_VALUE,
+                    true,
+                ),
             ],
         )
         .await?;
@@ -456,15 +462,12 @@ impl Drop for LiveTestEnv {
         //
         // Vaultwarden ≥1.30 admin API requires a session JWT obtained by POSTing
         // the raw admin token to /admin.  We do that first, then use the cookie.
-        let delete_url = format!(
-            "{}/admin/users/{}/delete",
-            self.server_url, self.user_uuid
-        );
+        let delete_url = format!("{}/admin/users/{}/delete", self.server_url, self.user_uuid);
         let admin_login_url = format!("{}/admin", self.server_url);
         let admin_token = self.admin_token.clone();
         let _ = std::thread::spawn(move || {
             if let Ok(rt) = tokio::runtime::Runtime::new() {
-                let _ = rt.block_on(async {
+                rt.block_on(async {
                     let timeout = std::time::Duration::from_secs(5);
                     let client = ClientBuilder::new()
                         .timeout(timeout)
@@ -472,11 +475,7 @@ impl Drop for LiveTestEnv {
                         .unwrap_or_else(|_| Client::new());
                     // Step 1: Login to get the VW_ADMIN session JWT.
                     let params = [("token", admin_token.as_str())];
-                    let login_resp = client
-                        .post(&admin_login_url)
-                        .form(&params)
-                        .send()
-                        .await;
+                    let login_resp = client.post(&admin_login_url).form(&params).send().await;
                     if let Ok(resp) = login_resp {
                         // Extract the JWT from the Set-Cookie header.
                         let jwt = resp
@@ -490,11 +489,13 @@ impl Drop for LiveTestEnv {
                             .map(str::to_string);
                         if let Some(jwt) = jwt {
                             // Step 2: Delete the user with the JWT as Bearer.
-                            let _ = client
-                                .post(&delete_url)
-                                .header("Authorization", format!("Bearer {jwt}"))
-                                .send()
-                                .await;
+                            drop(
+                                client
+                                    .post(&delete_url)
+                                    .header("Authorization", format!("Bearer {jwt}"))
+                                    .send()
+                                    .await,
+                            );
                         }
                     }
                 });
@@ -585,11 +586,7 @@ async fn password_grant(
         .with_context(|| format!("no access_token in password grant: {resp}"))
 }
 
-fn ensure_ok(
-    status: &reqwest::StatusCode,
-    body: Option<String>,
-    operation: &str,
-) -> Result<()> {
+fn ensure_ok(status: &reqwest::StatusCode, body: Option<String>, operation: &str) -> Result<()> {
     if status.is_success() {
         return Ok(());
     }

@@ -339,7 +339,12 @@ pub struct SshKeyData {
     pub private_key: Option<String>,
     #[serde(alias = "PublicKey", alias = "publicKey")]
     pub public_key: Option<String>,
-    #[serde(alias = "Fingerprint", alias = "fingerprint", alias = "keyFingerprint", alias = "KeyFingerprint")]
+    #[serde(
+        alias = "Fingerprint",
+        alias = "fingerprint",
+        alias = "keyFingerprint",
+        alias = "KeyFingerprint"
+    )]
     pub fingerprint: Option<String>,
 }
 

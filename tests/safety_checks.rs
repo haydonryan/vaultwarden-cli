@@ -179,11 +179,11 @@ mod key_zeroization {
             "Debug output must redact key bytes, got: {debug}"
         );
         assert!(
-            !debug.contains("222"),  // 0xDE == 222
+            !debug.contains("222"), // 0xDE == 222
             "enc_key bytes must not appear in Debug output, got: {debug}"
         );
         assert!(
-            !debug.contains("173"),  // 0xAD == 173
+            !debug.contains("173"), // 0xAD == 173
             "mac_key bytes must not appear in Debug output, got: {debug}"
         );
     }

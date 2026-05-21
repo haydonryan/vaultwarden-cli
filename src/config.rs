@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 #[cfg(unix)]
+use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-#[cfg(unix)]
-use std::io::Write;
 
 use crate::crypto::CryptoKeys;
 
@@ -133,8 +133,7 @@ pub fn write_secure(path: &std::path::Path, content: impl AsRef<[u8]>) -> Result
         return Ok(());
     }
     #[allow(unreachable_code)]
-    fs::write(path, content)
-        .map_err(|e| anyhow::anyhow!("Failed to write {}: {e}", path.display()))
+    fs::write(path, content).map_err(|e| anyhow::anyhow!("Failed to write {}: {e}", path.display()))
 }
 
 /// Set owner-only permissions (0o700) on a directory.
@@ -553,7 +552,10 @@ fn keyring_entry_for_keys(client_id: &str) -> Result<Entry> {
 }
 
 fn keyring_entry_for_tokens(client_id: &str) -> Result<Entry> {
-    Ok(Entry::new("vaultwarden-cli", &format!("{client_id}:tokens"))?)
+    Ok(Entry::new(
+        "vaultwarden-cli",
+        &format!("{client_id}:tokens"),
+    )?)
 }
 
 // Store client secret securely using keyring
@@ -801,10 +803,22 @@ mod tests {
 
             let json = serde_json::to_string(&config).unwrap();
 
-            assert!(!json.contains("access_token"), "access_token must not appear in config.json");
-            assert!(!json.contains("refresh_token"), "refresh_token must not appear in config.json");
-            assert!(!json.contains("token_expiry"), "token_expiry must not appear in config.json");
-            assert!(!json.contains("secret-access"), "token value must not appear in config.json");
+            assert!(
+                !json.contains("access_token"),
+                "access_token must not appear in config.json"
+            );
+            assert!(
+                !json.contains("refresh_token"),
+                "refresh_token must not appear in config.json"
+            );
+            assert!(
+                !json.contains("token_expiry"),
+                "token_expiry must not appear in config.json"
+            );
+            assert!(
+                !json.contains("secret-access"),
+                "token value must not appear in config.json"
+            );
             assert!(json.contains("vault.example.com"));
         }
 

@@ -5,9 +5,9 @@
 #![allow(dead_code, clippy::pedantic, clippy::nursery)]
 
 use crate::live_env::{
-    LiveTestEnv, FIXTURE_LOGIN_FIELD_API_KEY_VALUE, FIXTURE_LOGIN_FIELD_SECRET_VALUE,
-    FIXTURE_LOGIN_NAME, FIXTURE_LOGIN_PASSWORD, FIXTURE_LOGIN_URI, FIXTURE_LOGIN_USERNAME,
-    FIXTURE_NOTE_CONTENT, FIXTURE_NOTE_NAME, FIXTURE_SSH_NAME, FIXTURE_SSH_PUBLIC_KEY,
+    FIXTURE_LOGIN_FIELD_API_KEY_VALUE, FIXTURE_LOGIN_FIELD_SECRET_VALUE, FIXTURE_LOGIN_NAME,
+    FIXTURE_LOGIN_PASSWORD, FIXTURE_LOGIN_URI, FIXTURE_LOGIN_USERNAME, FIXTURE_NOTE_CONTENT,
+    FIXTURE_NOTE_NAME, FIXTURE_SSH_NAME, FIXTURE_SSH_PUBLIC_KEY, LiveTestEnv,
 };
 use predicates::prelude::*;
 use std::io::Write;
@@ -169,9 +169,8 @@ async fn interpolate_multiple_placeholders_in_one_template() {
         return;
     };
 
-    let template = format!(
-        "u=(({FIXTURE_LOGIN_NAME}.username)) p=(({FIXTURE_LOGIN_NAME}.password))"
-    );
+    let template =
+        format!("u=(({FIXTURE_LOGIN_NAME}.username)) p=(({FIXTURE_LOGIN_NAME}.password))");
     let (_f, path) = write_template(&template);
 
     let output = env
