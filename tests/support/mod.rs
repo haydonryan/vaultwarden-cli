@@ -89,8 +89,10 @@ impl TestContext {
         let content = serde_json::to_string_pretty(config)?;
         fs::write(self.config_path(), content)?;
 
-        // Tokens are excluded from config.json via #[serde(skip)] and must be
-        // written to tokens.json separately so the binary can find them.
+        // Tokens are excluded from config.json during serialization via
+        // #[serde(skip_serializing, default)], though legacy configs may still
+        // deserialize token fields, so tests must write tokens.json separately
+        // for the binary to find them.
         if let Some(access_token) = &config.access_token {
             let saved = serde_json::json!({
                 "access_token": access_token,
