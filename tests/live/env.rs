@@ -17,7 +17,7 @@ use cbc::Encryptor;
 use hmac::{Hmac, KeyInit, Mac};
 use pbkdf2::pbkdf2_hmac;
 use rand::Rng;
-use reqwest::Client;
+use reqwest::{Client, ClientBuilder};
 use serde_json::{Value, json};
 use sha2::Sha256;
 use std::path::PathBuf;
@@ -465,9 +465,14 @@ impl Drop for LiveTestEnv {
         let _ = std::thread::spawn(move || {
             if let Ok(rt) = tokio::runtime::Runtime::new() {
                 let _ = rt.block_on(async {
+                    let timeout = std::time::Duration::from_secs(5);
+                    let client = ClientBuilder::new()
+                        .timeout(timeout)
+                        .build()
+                        .unwrap_or_else(|_| Client::new());
                     // Step 1: Login to get the VW_ADMIN session JWT.
                     let params = [("token", admin_token.as_str())];
-                    let login_resp = Client::new()
+                    let login_resp = client
                         .post(&admin_login_url)
                         .form(&params)
                         .send()
@@ -485,7 +490,7 @@ impl Drop for LiveTestEnv {
                             .map(str::to_string);
                         if let Some(jwt) = jwt {
                             // Step 2: Delete the user with the JWT as Bearer.
-                            let _ = Client::new()
+                            let _ = client
                                 .post(&delete_url)
                                 .header("Authorization", format!("Bearer {jwt}"))
                                 .send()
@@ -494,8 +499,9 @@ impl Drop for LiveTestEnv {
                     }
                 });
             }
-        })
-        .join();
+        });
+        // Do not join — teardown is best-effort; we don't want Drop to block
+        // the test runner if Vaultwarden is slow or already gone.
     }
 }
 

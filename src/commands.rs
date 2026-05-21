@@ -1122,19 +1122,16 @@ pub async fn run_with_secrets(
         cmd.args(&command[1..]);
     }
 
-    // Remove known-sensitive variables rather than clearing everything.
-    // This avoids breaking child processes that depend on inherited env vars
-    // while still preventing credential leakage.
-    for sensitive in [
-        "VAULTWARDEN_PASSWORD",
-        "VAULTWARDEN_CLIENT_SECRET",
-        "VAULTWARDEN_MASTER_PASSWORD",
-        "VAULTWARDEN_ACCESS_TOKEN",
-        "VAULTWARDEN_REFRESH_TOKEN",
-        "BITWARDEN_PASSWORD",
-        "BITWARDEN_CLIENT_SECRET",
-    ] {
-        cmd.env_remove(sensitive);
+    // Strip *all* VAULTWARDEN_* and BITWARDEN_* variables from the child
+    // environment to prevent credential leakage, regardless of the specific
+    // variable name.  Other inherited env vars (PATH, HOME, LANG, …) are kept
+    // so the child process works correctly on all platforms.
+    let vars_to_remove: Vec<String> = std::env::vars()
+        .map(|(k, _)| k)
+        .filter(|k| k.starts_with("VAULTWARDEN_") || k.starts_with("BITWARDEN_"))
+        .collect();
+    for name in vars_to_remove {
+        cmd.env_remove(&name);
     }
     for (name, value) in &env_vars {
         cmd.env(name, value);
