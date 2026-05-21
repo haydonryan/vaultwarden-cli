@@ -160,13 +160,15 @@ pub struct Config {
     pub client_id: Option<String>,
     pub email: Option<String>,
     // Tokens are stored in the OS keyring (or tokens.json fallback) rather
-    // than config.json, so they are excluded from serde serialization entirely.
+    // than config.json.  We skip *serialization* only so that pre-existing
+    // config.json files that still contain these fields are transparently read
+    // and can be migrated into keyring/tokens.json storage on the next save.
     // Use save_tokens() / load_saved_tokens() to persist between sessions.
-    #[serde(skip)]
+    #[serde(skip_serializing, default)]
     pub access_token: Option<String>,
-    #[serde(skip)]
+    #[serde(skip_serializing, default)]
     pub refresh_token: Option<String>,
-    #[serde(skip)]
+    #[serde(skip_serializing, default)]
     pub token_expiry: Option<i64>,
     pub encrypted_key: Option<String>,
     pub encrypted_private_key: Option<String>,
@@ -235,7 +237,8 @@ impl Config {
         // writing, eliminating the TOCTOU race of fs::write + set_permissions.
         write_secure(&path, content.as_bytes())?;
         // Persist tokens to keyring/file whenever config is saved.
-        // Tokens are excluded from config.json via #[serde(skip)].
+        // Tokens use #[serde(skip_serializing, default)]: not written to config.json,
+        // but read back from legacy configs for migration into keyring/tokens.json.
         if self.access_token.is_some() {
             self.save_tokens()?;
         }
@@ -755,15 +758,17 @@ mod tests {
 
         #[test]
         fn test_config_deserialization() {
-            // access_token, refresh_token, and token_expiry are #[serde(skip)]
-            // and are not stored in config.json; they live in the keyring /
-            // tokens.json. Legacy JSON that happens to contain these fields is
-            // silently ignored on deserialization.
+            // access_token, refresh_token, and token_expiry use
+            // #[serde(skip_serializing, default)]: they are NOT written to
+            // config.json but ARE read back from legacy configs that still
+            // contain them.  This lets upgrade code detect and migrate old
+            // tokens into keyring / tokens.json storage.
             let json = r#"{
                 "server": "https://vault.example.com",
                 "client_id": "user.client-123",
                 "email": "user@example.com",
                 "access_token": "test-token",
+                "refresh_token": "test-refresh",
                 "token_expiry": 1234567890,
                 "kdf_iterations": 600000
             }"#;
@@ -772,13 +777,35 @@ mod tests {
             assert_eq!(config.server, Some("https://vault.example.com".to_string()));
             assert_eq!(config.client_id, Some("user.client-123".to_string()));
             assert_eq!(config.email, Some("user@example.com".to_string()));
-            // token fields are excluded from serde — legacy values in config.json
-            // are silently ignored; tokens are loaded separately from the keyring.
-            assert!(config.access_token.is_none());
-            assert!(config.token_expiry.is_none());
             assert_eq!(config.kdf_iterations, Some(600000));
-            // crypto_keys should be None after deserialization
+            // Legacy token values present in JSON are deserialized so callers
+            // can detect and migrate them into keyring / tokens.json.
+            assert_eq!(config.access_token, Some("test-token".to_string()));
+            assert_eq!(config.refresh_token, Some("test-refresh".to_string()));
+            assert_eq!(config.token_expiry, Some(1234567890));
+            // Pure in-memory fields are never present in JSON.
             assert!(config.crypto_keys.is_none());
+        }
+
+        #[test]
+        fn test_config_serialization_excludes_tokens() {
+            // Tokens held in memory must NOT be written back to config.json;
+            // they are persisted separately via keyring / tokens.json.
+            let config = Config {
+                server: Some("https://vault.example.com".to_string()),
+                access_token: Some("secret-access".to_string()),
+                refresh_token: Some("secret-refresh".to_string()),
+                token_expiry: Some(9999999999),
+                ..Default::default()
+            };
+
+            let json = serde_json::to_string(&config).unwrap();
+
+            assert!(!json.contains("access_token"), "access_token must not appear in config.json");
+            assert!(!json.contains("refresh_token"), "refresh_token must not appear in config.json");
+            assert!(!json.contains("token_expiry"), "token_expiry must not appear in config.json");
+            assert!(!json.contains("secret-access"), "token value must not appear in config.json");
+            assert!(json.contains("vault.example.com"));
         }
 
         #[test]
