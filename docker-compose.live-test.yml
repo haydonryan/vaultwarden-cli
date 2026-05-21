@@ -1,0 +1,27 @@
+# Docker Compose for live integration tests.
+# Uses volatile in-memory storage so the DB is wiped on container restart.
+# Run via scripts/test-live.sh; do not use this file for production.
+services:
+  vaultwarden:
+    image: vaultwarden/server:latest
+    ports:
+      - "18222:80"
+    environment:
+      SIGNUPS_ALLOWED: "true"
+      ADMIN_TOKEN: "live-test-admin-token"
+      # Volatile storage: the whole SQLite DB is kept in /dev/shm (RAM).
+      # Data is lost on every container restart, which is exactly what we want
+      # for throwaway test environments.
+      I_REALLY_WANT_VOLATILE_STORAGE: "true"
+      LOG_LEVEL: "warn"
+      # Disable rate limiting so the 71 parallel provisioning calls don't hit
+      # "Too many login requests".
+      LOGIN_RATELIMIT_SECONDS: "1"
+      LOGIN_RATELIMIT_MAX_BURST: "1000"
+      ADMIN_RATELIMIT_SECONDS: "1"
+      ADMIN_RATELIMIT_MAX_BURST: "1000"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:80/alive"]
+      interval: 2s
+      timeout: 5s
+      retries: 30

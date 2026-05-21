@@ -20,7 +20,7 @@ async fn api_client_new_trims_trailing_slash_for_requests() {
         .mount(&mock_server)
         .await;
 
-    let client = ApiClient::new(&format!("{}/", mock_server.uri())).unwrap();
+    let client = ApiClient::new_with_flags(&format!("{}/", mock_server.uri()), true).unwrap();
 
     let is_alive = client.check_server().await.unwrap();
     assert!(is_alive);
@@ -53,7 +53,7 @@ async fn api_client_from_config_uses_server_from_config() {
         ..Default::default()
     };
 
-    let client = ApiClient::from_config(&config).unwrap();
+    let client = ApiClient::from_config_with_flags(&config, true).unwrap();
 
     let is_alive = client.check_server().await.unwrap();
     assert!(is_alive);
@@ -92,7 +92,7 @@ async fn api_client_login_sends_expected_form_fields() {
         .mount(&mock_server)
         .await;
 
-    let client = ApiClient::new(&mock_server.uri()).unwrap();
+    let client = ApiClient::new_with_flags(&mock_server.uri(), true).unwrap();
     let token = client.login("test-client", "test-secret").await.unwrap();
 
     assert_eq!(token.access_token, "access-token");
@@ -114,7 +114,7 @@ async fn api_client_login_surfaces_non_success_responses() {
         .mount(&mock_server)
         .await;
 
-    let client = ApiClient::new(&mock_server.uri()).unwrap();
+    let client = ApiClient::new_with_flags(&mock_server.uri(), true).unwrap();
     let err = client
         .login("bad-client", "bad-secret")
         .await
@@ -136,7 +136,7 @@ async fn api_client_login_reports_malformed_json() {
         .mount(&mock_server)
         .await;
 
-    let client = ApiClient::new(&mock_server.uri()).unwrap();
+    let client = ApiClient::new_with_flags(&mock_server.uri(), true).unwrap();
     let err = client
         .login("test-client", "test-secret")
         .await
@@ -164,7 +164,7 @@ async fn api_client_refresh_token_sends_expected_form_fields() {
         .mount(&mock_server)
         .await;
 
-    let client = ApiClient::new(&mock_server.uri()).unwrap();
+    let client = ApiClient::new_with_flags(&mock_server.uri(), true).unwrap();
     let token = client.refresh_token("old-refresh-token").await.unwrap();
 
     assert_eq!(token.access_token, "new-access-token");
@@ -183,7 +183,7 @@ async fn api_client_refresh_token_surfaces_non_success_responses() {
         .mount(&mock_server)
         .await;
 
-    let client = ApiClient::new(&mock_server.uri()).unwrap();
+    let client = ApiClient::new_with_flags(&mock_server.uri(), true).unwrap();
     let err = client
         .refresh_token("expired-refresh-token")
         .await
@@ -205,7 +205,7 @@ async fn api_client_refresh_token_reports_malformed_json() {
         .mount(&mock_server)
         .await;
 
-    let client = ApiClient::new(&mock_server.uri()).unwrap();
+    let client = ApiClient::new_with_flags(&mock_server.uri(), true).unwrap();
     let err = client
         .refresh_token("refresh-token")
         .await
@@ -249,7 +249,7 @@ async fn api_client_sync_sends_bearer_token_and_parses_response() {
         .mount(&mock_server)
         .await;
 
-    let client = ApiClient::new(&mock_server.uri()).unwrap();
+    let client = ApiClient::new_with_flags(&mock_server.uri(), true).unwrap();
     let sync = client.sync("access-token").await.unwrap();
 
     assert_eq!(sync.ciphers.len(), 1);
@@ -267,7 +267,7 @@ async fn api_client_sync_surfaces_non_success_responses() {
         .mount(&mock_server)
         .await;
 
-    let client = ApiClient::new(&mock_server.uri()).unwrap();
+    let client = ApiClient::new_with_flags(&mock_server.uri(), true).unwrap();
     let err = client
         .sync("access-token")
         .await
@@ -289,7 +289,7 @@ async fn api_client_sync_reports_malformed_json() {
         .mount(&mock_server)
         .await;
 
-    let client = ApiClient::new(&mock_server.uri()).unwrap();
+    let client = ApiClient::new_with_flags(&mock_server.uri(), true).unwrap();
     let err = client
         .sync("access-token")
         .await
@@ -325,7 +325,7 @@ async fn api_client_ciphers_sends_bearer_token_and_parses_response() {
         .mount(&mock_server)
         .await;
 
-    let client = ApiClient::new(&mock_server.uri()).unwrap();
+    let client = ApiClient::new_with_flags(&mock_server.uri(), true).unwrap();
     let ciphers = client.ciphers("access-token").await.unwrap();
 
     assert_eq!(ciphers.data.len(), 1);
@@ -345,7 +345,7 @@ async fn api_client_check_server_returns_false_for_non_success_status() {
         .mount(&mock_server)
         .await;
 
-    let client = ApiClient::new(&mock_server.uri()).unwrap();
+    let client = ApiClient::new_with_flags(&mock_server.uri(), true).unwrap();
     let is_alive = client.check_server().await.unwrap();
 
     assert!(!is_alive);
@@ -353,7 +353,7 @@ async fn api_client_check_server_returns_false_for_non_success_status() {
 
 #[tokio::test]
 async fn api_client_check_server_reports_transport_errors() {
-    let client = ApiClient::new("http://127.0.0.1:9").unwrap();
+    let client = ApiClient::new_with_flags("http://127.0.0.1:9", true).unwrap();
 
     let err = client
         .check_server()

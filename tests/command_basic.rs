@@ -186,6 +186,7 @@ async fn run_with_collection_scope_injects_all_matching_items() {
     ctx.write_saved_user_keys(&keys).unwrap();
 
     ctx.binary()
+        .arg("--allow-insecure-http")
         .arg("run")
         .arg("--collection")
         .arg("DZ1")
@@ -254,6 +255,7 @@ async fn run_with_multiple_name_flags_injects_multiple_items() {
     ctx.write_saved_user_keys(&keys).unwrap();
 
     ctx.binary()
+        .arg("--allow-insecure-http")
         .arg("run")
         .arg("--name")
         .arg("Alpha")
@@ -314,6 +316,7 @@ async fn run_with_implicit_name_injects_matching_item() {
     ctx.write_saved_user_keys(&keys).unwrap();
 
     ctx.binary()
+        .arg("--allow-insecure-http")
         .arg("run")
         .arg("Alpha")
         .arg("--info")
@@ -369,6 +372,7 @@ async fn run_injects_env_vars_into_child_process() {
     ctx.write_saved_user_keys(&keys).unwrap();
 
     ctx.binary()
+        .arg("--allow-insecure-http")
         .arg("run")
         .arg("Alpha")
         .arg("--")
@@ -437,6 +441,7 @@ async fn run_with_multiple_implicit_names_injects_multiple_items() {
     ctx.write_saved_user_keys(&keys).unwrap();
 
     ctx.binary()
+        .arg("--allow-insecure-http")
         .arg("run")
         .arg("Alpha")
         .arg("Beta")
@@ -505,6 +510,7 @@ async fn run_with_comma_separated_implicit_names_injects_multiple_items() {
     ctx.write_saved_user_keys(&keys).unwrap();
 
     ctx.binary()
+        .arg("--allow-insecure-http")
         .arg("run")
         .arg("Alpha,Beta")
         .arg("--info")
@@ -569,6 +575,7 @@ async fn interpolate_skip_missing_reports_unmatched_placeholders_on_stderr() {
     ctx.write_saved_user_keys(&keys).unwrap();
 
     ctx.binary()
+        .arg("--allow-insecure-http")
         .arg("interpolate")
         .arg("--file")
         .arg(&input_path)
@@ -641,6 +648,7 @@ async fn list_with_type_filter_shows_only_matching_items() {
     ctx.write_saved_user_keys(&keys).unwrap();
 
     ctx.binary()
+        .arg("--allow-insecure-http")
         .arg("list")
         .arg("--type")
         .arg("login")
@@ -703,6 +711,7 @@ async fn list_with_search_filter_matches_decrypted_data() {
     ctx.write_saved_user_keys(&keys).unwrap();
 
     ctx.binary()
+        .arg("--allow-insecure-http")
         .arg("list")
         .arg("--search")
         .arg("alice")
@@ -762,6 +771,7 @@ async fn list_with_no_filters_shows_all_items() {
     ctx.write_saved_user_keys(&keys).unwrap();
 
     ctx.binary()
+        .arg("--allow-insecure-http")
         .arg("list")
         .assert()
         .success()
@@ -819,6 +829,7 @@ async fn list_with_json_flag_includes_complete_items() {
     ctx.write_saved_user_keys(&keys).unwrap();
 
     ctx.binary()
+        .arg("--allow-insecure-http")
         .arg("list")
         .arg("--json")
         .assert()
@@ -903,6 +914,7 @@ async fn list_with_type_filter_uses_ciphers_endpoint_when_sync_omits_ssh_items()
     ctx.write_saved_user_keys(&keys).unwrap();
 
     ctx.binary()
+        .arg("--allow-insecure-http")
         .arg("list")
         .arg("--type")
         .arg("ssh")

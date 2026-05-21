@@ -1,8 +1,14 @@
 [advisories]
 ignore = [
-    # Marvin Attack: potential key recovery through timing sidechannels in rsa crate.
-    # No patch available. rsa is an indirect dependency; local/non-network use is acceptable.
+    # Marvin Attack: timing side-channel in RSA PKCS#1 v1.5 padding (CVE-2023-49092).
+    # We are already on rsa 0.10.0-rc.18, which IS the constant-time rewrite created
+    # specifically to fix this advisory. The RustSec DB marks no version as patched
+    # because no stable 0.10.0 exists yet — only release candidates. The fix (implicit
+    # rejection + ct-bigint) is being validated by the Marvin toolkit author (tomato42);
+    # a stable release is expected once the sub-nanosecond timing analysis passes.
+    # Revisit: remove this ignore entry once rsa 0.10.0 stable ships.
     # https://rustsec.org/advisories/RUSTSEC-2023-0071
+    # https://github.com/RustCrypto/RSA/issues/626
     "RUSTSEC-2023-0071",
 ]
 

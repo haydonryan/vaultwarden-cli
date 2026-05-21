@@ -10,12 +10,45 @@ pub struct ApiClient {
 
 impl ApiClient {
     pub fn new(base_url: &str) -> Result<Self> {
+        Self::new_with_flags(base_url, false)
+    }
+
+    /// Create a new API client with explicit security flags.
+    ///
+    /// `allow_insecure_http`: if true, permit http:// URLs (CLI flag overrides env var).
+    /// If false, falls back to the `VAULTWARDEN_ALLOW_HTTP` env var.
+    pub fn new_with_flags(base_url: &str, allow_insecure_http: bool) -> Result<Self> {
+        // Validate server URL scheme to prevent SSRF and credential leakage
+        let trimmed = base_url.trim_end_matches('/');
+        if !trimmed.starts_with("https://") && !trimmed.starts_with("http://") {
+            anyhow::bail!(
+                "Invalid server URL: must start with https:// or http://. Got: {base_url}"
+            );
+        }
+        if trimmed.starts_with("http://") {
+            // CLI flag takes precedence; fall back to env var
+            let allow_http = allow_insecure_http
+                || std::env::var("VAULTWARDEN_ALLOW_HTTP")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
+            if !allow_http {
+                anyhow::bail!(
+                    "Insecure server URL rejected: only https:// is allowed in production. \
+                     Got: {base_url}\n\
+                     To permit http:// URLs, use --allow-insecure-http or set VAULTWARDEN_ALLOW_HTTP=1."
+                );
+            }
+            eprintln!("Warning: Using insecure HTTP connection. Secrets will be sent unencrypted. Use https:// in production.");
+        }
+
         let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .connect_timeout(std::time::Duration::from_secs(15))
             .build()
             .context("Failed to create HTTP client")?;
 
         // Normalize base URL (remove trailing slash)
-        let base_url = base_url.trim_end_matches('/').to_string();
+        let base_url = trimmed.to_string();
 
         Ok(Self { client, base_url })
     }
@@ -23,6 +56,12 @@ impl ApiClient {
     pub fn from_config(config: &Config) -> Result<Self> {
         let server = config.get_server().context("No server configured")?;
         Self::new(server)
+    }
+
+    /// Create an API client from config with explicit security flags.
+    pub fn from_config_with_flags(config: &Config, allow_insecure_http: bool) -> Result<Self> {
+        let server = config.get_server().context("No server configured")?;
+        Self::new_with_flags(server, allow_insecure_http)
     }
 
     // OAuth2 token endpoint using client credentials

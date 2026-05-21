@@ -7,13 +7,49 @@ use pbkdf2::pbkdf2_hmac;
 use rsa::{Oaep, RsaPrivateKey, pkcs8::DecodePrivateKey};
 use sha1::Sha1;
 use sha2::Sha256;
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
+// ── Insecure MAC override (process-wide flag) ──────────────────────────────
+//
+// Set once at CLI startup from `--allow-insecure-mac`.  Checked by
+// `CryptoKeys::decrypt()` when ciphertext lacks a MAC integrity tag.
+// The env var `VAULTWARDEN_ALLOW_INSECURE_MAC` is also consulted as a
+// fallback so that library consumers (and tests) can enable the bypass
+// without the CLI flag.
+
+static ALLOW_INSECURE_MAC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Set the process-wide `allow_insecure_mac` flag.  Called once at CLI
+/// startup when `--allow-insecure-mac` is present on the command line.
+pub fn set_allow_insecure_mac(allow: bool) {
+    ALLOW_INSECURE_MAC.store(allow, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Read the process-wide `allow_insecure_mac` flag.
+pub fn allow_insecure_mac() -> bool {
+    ALLOW_INSECURE_MAC.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct CryptoKeys {
     pub enc_key: Vec<u8>,
     pub mac_key: Vec<u8>,
+}
+
+/// Redacted Debug implementation — key bytes are never printed.
+///
+/// The derived `Debug` would dump `enc_key` and `mac_key` as byte vectors,
+/// leaking raw key material into log output and panic messages.  This manual
+/// impl replaces those fields with the string `"[REDACTED]"`.
+impl std::fmt::Debug for CryptoKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CryptoKeys")
+            .field("enc_key", &"[REDACTED]")
+            .field("mac_key", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl CryptoKeys {
@@ -139,8 +175,22 @@ impl CryptoKeys {
             .decode(parts[1])
             .context("Failed to decode ciphertext")?;
 
-        // Verify MAC if present
-        if parts.len() >= 3 {
+        // Verify MAC — reject ciphertext that lacks integrity protection
+        if parts.len() < 3 {
+            // CLI flag takes precedence; fall back to env var
+            let allow_insecure = allow_insecure_mac()
+                || std::env::var("VAULTWARDEN_ALLOW_INSECURE_MAC")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
+            if !allow_insecure {
+                anyhow::bail!(
+                    "Encrypted string is missing MAC (integrity tag). \
+                     Refusing to decrypt unauthenticated ciphertext.\n\
+                     To permit this, use --allow-insecure-mac or set VAULTWARDEN_ALLOW_INSECURE_MAC=1."
+                );
+            }
+            eprintln!("Warning: Decrypting ciphertext without MAC integrity verification. Data authenticity cannot be confirmed.");
+        } else {
             let mac = BASE64.decode(parts[2]).context("Failed to decode MAC")?;
 
             // Calculate expected MAC
