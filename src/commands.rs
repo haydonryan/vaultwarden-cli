@@ -15,6 +15,15 @@ fn unix_now() -> i64 {
         .as_secs() as i64
 }
 
+fn token_expiry_from_lifetime(now: i64, expires_in: i64) -> Result<i64> {
+    if expires_in <= 0 {
+        anyhow::bail!("Server returned invalid token lifetime: expires_in must be positive");
+    }
+
+    now.checked_add(expires_in)
+        .context("Server returned invalid token lifetime: expires_in is too large")
+}
+
 use crate::api::ApiClient;
 use crate::config::{self, Config};
 use crate::crypto::CryptoKeys;
@@ -65,7 +74,7 @@ pub async fn login(
     let token_response = api.login(&client_id, &client_secret).await?;
 
     // Calculate token expiry
-    let expiry = unix_now() + token_response.expires_in;
+    let expiry = token_expiry_from_lifetime(unix_now(), token_response.expires_in)?;
 
     // Save configuration
     config.server = Some(server);
@@ -267,7 +276,7 @@ async fn ensure_valid_token(config: &mut Config, allow_insecure_http: bool) -> R
             let api = ApiClient::from_config_with_flags(config, allow_insecure_http)?;
             match api.refresh_token(refresh_token).await {
                 Ok(token_response) => {
-                    let new_expiry = now + token_response.expires_in;
+                    let new_expiry = token_expiry_from_lifetime(now, token_response.expires_in)?;
                     config.access_token = Some(token_response.access_token.clone());
                     config.refresh_token = token_response.refresh_token;
                     config.token_expiry = Some(new_expiry);
@@ -1905,24 +1914,19 @@ mod tests {
             }
         }
 
-        #[tokio::test]
-        async fn test_login_success_with_provided_credentials() {
-            let _guard = ENV_LOCK.lock().await;
-            let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
-
-            let mock_server = MockServer::start().await;
-
+        async fn mount_reachable_server(mock_server: &MockServer) {
             Mock::given(method("GET"))
                 .and(path("/alive"))
                 .respond_with(ResponseTemplate::new(200))
                 .expect(1)
-                .mount(&mock_server)
+                .mount(mock_server)
                 .await;
+        }
 
+        async fn mount_login_token_response(mock_server: &MockServer, expires_in: i64) {
             let token_response = serde_json::json!({
                 "access_token": "access-123",
-                "expires_in": 3600,
+                "expires_in": expires_in,
                 "token_type": "Bearer",
                 "refresh_token": "refresh-123",
                 "scope": "api",
@@ -1939,8 +1943,20 @@ mod tests {
                 .and(body_string_contains("client_secret=test-secret"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(&token_response))
                 .expect(1)
-                .mount(&mock_server)
+                .mount(mock_server)
                 .await;
+        }
+
+        #[tokio::test]
+        async fn test_login_success_with_provided_credentials() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+
+            mount_reachable_server(&mock_server).await;
+            mount_login_token_response(&mock_server, 3600).await;
 
             let sync_response = serde_json::json!({
                 "ciphers": [],
@@ -1968,6 +1984,7 @@ mod tests {
                 .mount(&mock_server)
                 .await;
 
+            let before_login = unix_now();
             let result = login(
                 Some(mock_server.uri()),
                 Some("test-client".to_string()),
@@ -1993,7 +2010,51 @@ mod tests {
             );
             assert_eq!(config.kdf_iterations, Some(600000));
             assert_eq!(config.org_keys.get("org-1"), Some(&"2.org-key".to_string()));
-            assert!(config.token_expiry.unwrap() > 0);
+            let token_expiry = config.token_expiry.unwrap();
+            assert!(token_expiry >= before_login + 3600);
+            assert!(token_expiry <= unix_now() + 3600);
+        }
+
+        async fn assert_login_rejects_invalid_expires_in(expires_in: i64) {
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            mount_reachable_server(&mock_server).await;
+            mount_login_token_response(&mock_server, expires_in).await;
+
+            let result = login(
+                Some(mock_server.uri()),
+                Some("test-client".to_string()),
+                Some("test-secret".to_string()),
+                &CommandOptions {
+                    allow_insecure_http: true,
+                },
+            )
+            .await;
+
+            assert!(result.is_err());
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "Server returned invalid token lifetime: expires_in must be positive"
+            );
+
+            let config = Config::load().unwrap();
+            assert!(config.access_token.is_none());
+            assert!(config.refresh_token.is_none());
+            assert!(config.token_expiry.is_none());
+        }
+
+        #[tokio::test]
+        async fn test_login_rejects_zero_expires_in() {
+            let _guard = ENV_LOCK.lock().await;
+            assert_login_rejects_invalid_expires_in(0).await;
+        }
+
+        #[tokio::test]
+        async fn test_login_rejects_negative_expires_in() {
+            let _guard = ENV_LOCK.lock().await;
+            assert_login_rejects_invalid_expires_in(-60).await;
         }
 
         #[tokio::test]
