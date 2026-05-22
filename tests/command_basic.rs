@@ -978,6 +978,7 @@ async fn list_falls_back_to_sync_ciphers_when_ciphers_endpoint_fails() {
     ctx.write_saved_user_keys(&keys).unwrap();
 
     ctx.binary()
+        .arg("--allow-insecure-http")
         .arg("list")
         .arg("--json")
         .assert()
