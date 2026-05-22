@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::str::FromStr;
 
 // OAuth2 Token Response
@@ -354,8 +354,34 @@ pub struct FieldData {
     pub name: Option<String>,
     #[serde(alias = "Value", alias = "value")]
     pub value: Option<String>,
-    #[serde(alias = "Type", alias = "type")]
+    #[serde(
+        alias = "Type",
+        alias = "type",
+        default = "default_field_type",
+        deserialize_with = "deserialize_field_type"
+    )]
     pub r#type: u8, // 0=Text, 1=Hidden, 2=Boolean, 3=Linked
+}
+
+fn default_field_type() -> u8 {
+    1
+}
+
+fn deserialize_field_type<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Number(number)) => number
+            .as_u64()
+            .and_then(|n| u8::try_from(n).ok())
+            .unwrap_or_else(default_field_type),
+        Some(serde_json::Value::String(value)) => {
+            value.parse::<u8>().unwrap_or_else(|_| default_field_type())
+        }
+        _ => default_field_type(),
+    })
 }
 
 // Simplified cipher output for display (decrypted)
@@ -903,6 +929,42 @@ mod tests {
             assert_eq!(fields[1].r#type, 1); // Hidden
             assert_eq!(fields[2].r#type, 2); // Boolean
             assert_eq!(fields[3].r#type, 3); // Linked
+        }
+
+        #[test]
+        fn test_field_data_missing_type_defaults_to_hidden() {
+            let json = r#"{"Name": "unknown-field", "Value": "secret-value"}"#;
+
+            let field: FieldData = serde_json::from_str(json).unwrap();
+
+            assert_eq!(field.r#type, 1);
+        }
+
+        #[test]
+        fn test_field_data_invalid_type_defaults_to_hidden() {
+            let json = r#"{"Name": "unknown-field", "Value": "secret-value", "Type": "invalid"}"#;
+
+            let field: FieldData = serde_json::from_str(json).unwrap();
+
+            assert_eq!(field.r#type, 1);
+        }
+
+        #[test]
+        fn test_cipher_with_invalid_field_type_still_deserializes() {
+            let json = r#"{
+                "Id": "cipher-with-bad-field",
+                "Type": 1,
+                "Name": "Encrypted Name",
+                "Fields": [
+                    {"Name": "api-key", "Value": "secret-value", "Type": "invalid"}
+                ]
+            }"#;
+
+            let cipher: Cipher = serde_json::from_str(json).unwrap();
+            let fields = cipher.fields.unwrap();
+
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields[0].r#type, 1);
         }
 
         #[test]
