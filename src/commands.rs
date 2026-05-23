@@ -30,7 +30,7 @@ fn token_expiry_from_lifetime(now: i64, expires_in: i64) -> Result<i64> {
 }
 
 use crate::api::ApiClient;
-use crate::config::{self, Config};
+use crate::config::{self, Config, KeyPersistenceOutcome};
 use crate::crypto::CryptoKeys;
 use crate::models::{Cipher, CipherOutput, CipherType, FieldOutput};
 
@@ -269,7 +269,14 @@ pub async fn unlock(password: Option<String>, opts: &CommandOptions) -> Result<(
 
     // Save the keys
     config.crypto_keys = Some(crypto_keys);
-    config.save_keys()?;
+    let key_persistence = config.save_keys()?;
+    if key_persistence == KeyPersistenceOutcome::NotPersisted {
+        anyhow::bail!(
+            "Vault keys were not persisted. Unlock cannot create a reusable unlocked session \
+             because the system keyring is unavailable and VAULTWARDEN_ALLOW_INSECURE_KEY_FILE \
+             is not set."
+        );
+    }
 
     let org_count = config.org_crypto_keys.len();
     if org_count > 0 {

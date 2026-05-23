@@ -2,6 +2,7 @@
 
 mod support;
 
+use assert_cmd::Command;
 use predicates::prelude::*;
 use support::{
     TestContext, allow_insecure_key_file_fallback, encrypt_string_for_test, encrypted_user_key,
@@ -123,6 +124,46 @@ fn unlock_reads_password_from_environment() {
     let saved_keys = saved.crypto_keys.expect("saved user keys");
     assert_eq!(saved_keys.enc_key, keys.enc_key);
     assert_eq!(saved_keys.mac_key, keys.mac_key);
+}
+
+#[test]
+fn unlock_fails_when_keys_cannot_be_persisted() {
+    let ctx = TestContext::new();
+    let email = "user@example.com";
+    let password = "MySecurePassword123!"; // secrets-ignore: test fixture
+    let keys = test_crypto_keys();
+
+    ctx.write_config(&Config {
+        server: Some("https://vault.example.com".to_string()),
+        email: Some(email.to_string()),
+        access_token: Some("token".to_string()),
+        token_expiry: Some(i64::MAX),
+        encrypted_key: Some(encrypted_user_key(password, email, 600000, &keys)),
+        kdf_iterations: Some(600000),
+        ..Default::default()
+    })
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("vaultwarden-cli").unwrap();
+    cmd.env("HOME", ctx.home_dir())
+        .env("XDG_CONFIG_HOME", ctx.config_root())
+        .env("VAULTWARDEN_PASSWORD", password)
+        .env_remove("VAULTWARDEN_ALLOW_INSECURE_KEY_FILE")
+        .arg("unlock")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("Vault unlocked successfully!").not())
+        .stderr(predicate::str::contains("Vault keys were not persisted"));
+
+    let saved = ctx.load_config().unwrap();
+    assert!(
+        saved.crypto_keys.is_none(),
+        "unlock must not leave reusable saved keys when persistence failed"
+    );
+    assert!(
+        !ctx.keys_path().exists(),
+        "keys.json should not be written without explicit fallback"
+    );
 }
 
 #[tokio::test]

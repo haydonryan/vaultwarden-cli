@@ -3,7 +3,7 @@
 mod support;
 
 use support::{TestContext, allow_insecure_key_file_fallback, env_lock, mock_keyring};
-use vaultwarden_cli::config::{self, Config};
+use vaultwarden_cli::config::{self, Config, KeyPersistenceOutcome};
 
 #[test]
 fn config_load_fails_for_invalid_config_json() {
@@ -136,9 +136,10 @@ fn config_save_keys_defaults_to_no_persist_without_keyring() {
     });
 
     let _capture = config::capture_warnings();
-    config
+    let outcome = config
         .save_keys()
         .expect("no-persist key fallback should not fail");
+    assert_eq!(outcome, KeyPersistenceOutcome::NotPersisted);
     let warnings = _capture.drain();
 
     assert!(
@@ -175,7 +176,8 @@ fn config_save_keys_round_trips_when_config_dir_exists() {
     );
 
     config.save().unwrap();
-    config.save_keys().unwrap();
+    let outcome = config.save_keys().unwrap();
+    assert_eq!(outcome, KeyPersistenceOutcome::LegacyKeyFile);
 
     let loaded = ctx.load_config().unwrap();
 

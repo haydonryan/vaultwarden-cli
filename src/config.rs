@@ -221,6 +221,13 @@ pub struct Config {
     pub config_dir_override: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyPersistenceOutcome {
+    SystemKeyring,
+    LegacyKeyFile,
+    NotPersisted,
+}
+
 impl Config {
     pub fn config_dir() -> Result<PathBuf> {
         if let Some(path) = CONFIG_DIR_OVERRIDE.with(|override_dir| override_dir.borrow().clone()) {
@@ -377,7 +384,7 @@ impl Config {
         })
     }
 
-    pub fn save_keys(&self) -> Result<()> {
+    pub fn save_keys(&self) -> Result<KeyPersistenceOutcome> {
         // Store keys in the OS keyring instead of a plaintext file.
         // If keyring is unavailable, default to no-persist rather than writing
         // decrypted keys to disk. A plaintext file fallback exists only behind
@@ -428,7 +435,7 @@ impl Config {
                     if path.exists() {
                         drop(fs::remove_file(&path));
                     }
-                    return Ok(());
+                    return Ok(KeyPersistenceOutcome::SystemKeyring);
                 }
                 Err(err) => {
                     emit_warning(&format!(
@@ -449,7 +456,7 @@ impl Config {
                  the system keyring is unavailable. To use the legacy plaintext keys.json \
                  fallback, set {ALLOW_INSECURE_KEY_FILE_ENV}=true."
             ));
-            return Ok(());
+            return Ok(KeyPersistenceOutcome::NotPersisted);
         }
 
         emit_warning(&format!(
@@ -463,7 +470,7 @@ impl Config {
         //   • keyring set_password failed
         // write_secure uses fchmod-via-fd to avoid the TOCTOU race.
         write_secure(&path, content.as_bytes())?;
-        Ok(())
+        Ok(KeyPersistenceOutcome::LegacyKeyFile)
     }
 
     pub fn load_saved_keys(&mut self) -> Result<()> {
