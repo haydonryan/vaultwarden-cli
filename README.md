@@ -233,6 +233,10 @@ vaultwarden-cli logout
 | `value` | Just the password, no newline |
 | `username` | Just the username, no newline |
 
+JSON output includes decrypted secret fields such as passwords, notes, custom fields, and SSH keys.
+When stdout is redirected or captured, JSON output is blocked unless you pass
+`--allow-plaintext-json` or set `VAULTWARDEN_ALLOW_PLAINTEXT_JSON=true`.
+
 ## Configuration
 
 Configuration is stored in:

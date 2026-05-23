@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use regex::Regex;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -33,13 +33,43 @@ use crate::models::{Cipher, CipherOutput, CipherType, FieldOutput};
 ///
 /// The [`Default`] implementation preserves the original secure-only behaviour
 /// (HTTPS required). Callers that only need to set one field can use struct-update
-/// syntax: `CommandOptions { allow_insecure_http: true }`.
+/// syntax: `CommandOptions { allow_insecure_http: true, ..Default::default() }`.
 #[derive(Debug, Default, Clone)]
 pub struct CommandOptions {
     /// Permit `http://` server URLs. Has the same effect as
     /// `VAULTWARDEN_ALLOW_HTTP=1` but takes precedence over it.
     /// Defaults to `false`.
     pub allow_insecure_http: bool,
+
+    /// Permit plaintext JSON output when stdout is not a terminal.
+    /// JSON output includes decrypted secret fields and is otherwise rejected
+    /// for non-interactive stdout to avoid accidental capture.
+    pub allow_plaintext_json: bool,
+
+    /// Whether stdout should be treated as an interactive terminal for
+    /// plaintext JSON output policy.
+    pub json_stdout_is_terminal: bool,
+}
+
+impl CommandOptions {
+    #[must_use]
+    pub fn for_cli(allow_insecure_http: bool, allow_plaintext_json: bool) -> Self {
+        Self {
+            allow_insecure_http,
+            allow_plaintext_json,
+            json_stdout_is_terminal: io::stdout().is_terminal(),
+        }
+    }
+}
+
+fn ensure_plaintext_json_allowed(opts: &CommandOptions) -> Result<()> {
+    if opts.allow_plaintext_json || opts.json_stdout_is_terminal {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "Plaintext JSON output includes decrypted secrets and is blocked when stdout is not a terminal. Pass --allow-plaintext-json or set VAULTWARDEN_ALLOW_PLAINTEXT_JSON=true to intentionally allow capture."
+    )
 }
 
 pub async fn login(
@@ -635,6 +665,10 @@ pub async fn list(
         return Ok(());
     }
 
+    if json_output {
+        ensure_plaintext_json_allowed(opts)?;
+    }
+
     for line in format_list_output(&outputs, json_output)? {
         println!("{line}");
     }
@@ -713,6 +747,9 @@ pub async fn get(
         .context(format!("Item '{item}' not found"))?
     };
 
+    if format == "json" {
+        ensure_plaintext_json_allowed(opts)?;
+    }
     print_cipher_output(&output, format)
 }
 
@@ -751,6 +788,9 @@ pub async fn get_by_uri(
     )
     .context(format!("No item found with URI containing '{uri}'"))?;
 
+    if format == "json" {
+        ensure_plaintext_json_allowed(opts)?;
+    }
     print_cipher_output(&output, format)
 }
 
@@ -1991,6 +2031,8 @@ mod tests {
                 Some("test-secret".to_string()),
                 &CommandOptions {
                     allow_insecure_http: true,
+                    allow_plaintext_json: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -2029,6 +2071,8 @@ mod tests {
                 Some("test-secret".to_string()),
                 &CommandOptions {
                     allow_insecure_http: true,
+                    allow_plaintext_json: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -2078,6 +2122,8 @@ mod tests {
                 Some("test-secret".to_string()),
                 &CommandOptions {
                     allow_insecure_http: true,
+                    allow_plaintext_json: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -2121,6 +2167,7 @@ mod tests {
                 Some("bad-secret".to_string()),
                 &CommandOptions {
                     allow_insecure_http: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -2191,6 +2238,7 @@ mod tests {
                 Some("new-secret".to_string()),
                 &CommandOptions {
                     allow_insecure_http: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -2746,6 +2794,7 @@ mod tests {
                 false,
                 &CommandOptions {
                     allow_insecure_http: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -2795,6 +2844,7 @@ mod tests {
                 false,
                 &CommandOptions {
                     allow_insecure_http: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -2846,6 +2896,7 @@ mod tests {
                 false,
                 &CommandOptions {
                     allow_insecure_http: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -2901,6 +2952,7 @@ mod tests {
                 true,
                 &CommandOptions {
                     allow_insecure_http: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -3036,6 +3088,7 @@ mod tests {
                 false,
                 &CommandOptions {
                     allow_insecure_http: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -3093,6 +3146,7 @@ mod tests {
                 false,
                 &CommandOptions {
                     allow_insecure_http: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -3150,6 +3204,7 @@ mod tests {
                 false,
                 &CommandOptions {
                     allow_insecure_http: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -3206,6 +3261,7 @@ mod tests {
                 false,
                 &CommandOptions {
                     allow_insecure_http: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -3260,6 +3316,7 @@ mod tests {
                 false,
                 &CommandOptions {
                     allow_insecure_http: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -3379,6 +3436,8 @@ mod tests {
                 None,
                 &CommandOptions {
                     allow_insecure_http: true,
+                    allow_plaintext_json: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -3434,6 +3493,8 @@ mod tests {
                 None,
                 &CommandOptions {
                     allow_insecure_http: true,
+                    allow_plaintext_json: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -3487,6 +3548,8 @@ mod tests {
                 None,
                 &CommandOptions {
                     allow_insecure_http: true,
+                    allow_plaintext_json: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -3601,6 +3664,8 @@ mod tests {
                 None,
                 &CommandOptions {
                     allow_insecure_http: true,
+                    allow_plaintext_json: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -3654,6 +3719,7 @@ mod tests {
                 None,
                 &CommandOptions {
                     allow_insecure_http: true,
+                    ..Default::default()
                 },
             )
             .await;
@@ -4224,6 +4290,38 @@ mod tests {
             };
             let err = format_cipher_output(&output, "username").unwrap_err();
             assert!(err.to_string().contains("Item has no username"));
+        }
+    }
+
+    mod plaintext_json_policy_tests {
+        use super::*;
+
+        #[test]
+        fn allows_plaintext_json_when_stdout_is_terminal() {
+            let opts = CommandOptions {
+                json_stdout_is_terminal: true,
+                ..Default::default()
+            };
+
+            ensure_plaintext_json_allowed(&opts).unwrap();
+        }
+
+        #[test]
+        fn rejects_plaintext_json_when_stdout_is_captured_without_opt_in() {
+            let err = ensure_plaintext_json_allowed(&CommandOptions::default()).unwrap_err();
+
+            assert!(err.to_string().contains("Plaintext JSON output"));
+            assert!(err.to_string().contains("--allow-plaintext-json"));
+        }
+
+        #[test]
+        fn allows_plaintext_json_when_non_interactive_output_is_explicitly_enabled() {
+            let opts = CommandOptions {
+                allow_plaintext_json: true,
+                ..Default::default()
+            };
+
+            ensure_plaintext_json_allowed(&opts).unwrap();
         }
     }
 }

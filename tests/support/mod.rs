@@ -151,6 +151,7 @@ impl TestContext {
         let mut cmd = Command::cargo_bin("vaultwarden-cli").expect("binary exists");
         cmd.env("HOME", self.home_dir());
         cmd.env("XDG_CONFIG_HOME", self.config_root());
+        cmd.env("VAULTWARDEN_ALLOW_PLAINTEXT_JSON", "true");
         cmd
     }
 }

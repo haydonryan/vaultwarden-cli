@@ -22,6 +22,11 @@ struct Cli {
     #[arg(long, global = true)]
     allow_insecure_mac: bool,
 
+    /// Allow plaintext JSON secret output when stdout is redirected or captured.
+    /// Also settable via VAULTWARDEN_ALLOW_PLAINTEXT_JSON=true env var.
+    #[arg(long, global = true, env = "VAULTWARDEN_ALLOW_PLAINTEXT_JSON")]
+    allow_plaintext_json: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -229,9 +234,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
     // Propagate global security flags to library code
     vaultwarden_cli::crypto::set_allow_insecure_mac(cli.allow_insecure_mac);
 
-    let opts = commands::CommandOptions {
-        allow_insecure_http: cli.allow_insecure_http,
-    };
+    let opts = commands::CommandOptions::for_cli(cli.allow_insecure_http, cli.allow_plaintext_json);
 
     match cli.command {
         Commands::Login {
@@ -401,6 +404,13 @@ mod tests {
     fn test_effective_format_no_override() {
         assert_eq!(effective_format("env", false, false), "env");
         assert_eq!(effective_format("json", false, false), "json");
+    }
+
+    #[test]
+    fn test_cli_global_allow_plaintext_json_parsing() {
+        let cli = Cli::parse_from(["vaultwarden-cli", "--allow-plaintext-json", "status"]);
+
+        assert!(cli.allow_plaintext_json);
     }
 
     #[test]

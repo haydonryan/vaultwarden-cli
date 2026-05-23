@@ -129,6 +129,8 @@ impl LiveTestEnv {
         cmd.env("XDG_CONFIG_HOME", &self.config_root);
         // The test server uses plain HTTP; tell the CLI to accept it.
         cmd.env("VAULTWARDEN_ALLOW_HTTP", "1");
+        // Live tests capture stdout and assert JSON payloads intentionally.
+        cmd.env("VAULTWARDEN_ALLOW_PLAINTEXT_JSON", "true");
         // Disable keyring so tests stay file-based and fully isolated.
         cmd.env("KEYRING_BACKEND", "plaintext");
         cmd
