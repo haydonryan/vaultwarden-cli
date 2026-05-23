@@ -3,6 +3,8 @@
 use clap::{Parser, Subcommand};
 use vaultwarden_cli::commands;
 
+type Result<T> = std::result::Result<T, anyhow::Error>;
+
 #[derive(Parser)]
 #[command(name = "vaultwarden-cli")]
 #[command(
@@ -208,7 +210,22 @@ const fn effective_format(format: &str, username: bool, password: bool) -> &str 
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    let result = run_cli(cli).await;
 
+    if let Err(e) = &result {
+        eprintln!("Error: {e:#}");
+    }
+    let exit_code = result_exit_code(&result);
+    if exit_code != 0 {
+        std::process::exit(exit_code);
+    }
+}
+
+fn result_exit_code(result: &Result<()>) -> i32 {
+    if result.is_ok() { 0 } else { 1 }
+}
+
+async fn run_cli(cli: Cli) -> Result<()> {
     // Propagate global security flags to library code
     vaultwarden_cli::crypto::set_allow_insecure_mac(cli.allow_insecure_mac);
 
@@ -216,7 +233,7 @@ async fn main() {
         allow_insecure_http: cli.allow_insecure_http,
     };
 
-    let result = match cli.command {
+    match cli.command {
         Commands::Login {
             server,
             client_id,
@@ -302,17 +319,73 @@ async fn main() {
             output,
             skip_missing,
         } => commands::interpolate(&file, output.as_deref(), skip_missing, &opts).await,
-    };
-
-    if let Err(e) = result {
-        eprintln!("Error: {e:#}");
-        std::process::exit(1);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
+    use tempfile::TempDir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct TestEnv {
+        _guard: MutexGuard<'static, ()>,
+        _temp_dir: TempDir,
+        old_home: Option<String>,
+        old_xdg_config_home: Option<String>,
+    }
+
+    impl TestEnv {
+        fn new() -> Self {
+            let guard = ENV_LOCK.lock().expect("env lock poisoned");
+            let temp_dir = TempDir::new().expect("create temp dir");
+            let home = temp_dir.path().join("home");
+            let config_root = temp_dir.path().join("config-root");
+            std::fs::create_dir_all(&home).expect("create home dir");
+            std::fs::create_dir_all(&config_root).expect("create config root");
+
+            let old_home = std::env::var("HOME").ok();
+            let old_xdg_config_home = std::env::var("XDG_CONFIG_HOME").ok();
+            unsafe {
+                std::env::set_var("HOME", &home);
+                std::env::set_var("XDG_CONFIG_HOME", &config_root);
+            }
+
+            Self {
+                _guard: guard,
+                _temp_dir: temp_dir,
+                old_home,
+                old_xdg_config_home,
+            }
+        }
+
+        fn config_dir(&self) -> std::path::PathBuf {
+            std::env::var("XDG_CONFIG_HOME")
+                .map(std::path::PathBuf::from)
+                .expect("XDG_CONFIG_HOME should be set")
+                .join("vaultwarden-cli")
+        }
+    }
+
+    impl Drop for TestEnv {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(value) = &self.old_home {
+                    std::env::set_var("HOME", value);
+                } else {
+                    std::env::remove_var("HOME");
+                }
+
+                if let Some(value) = &self.old_xdg_config_home {
+                    std::env::set_var("XDG_CONFIG_HOME", value);
+                } else {
+                    std::env::remove_var("XDG_CONFIG_HOME");
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_effective_format_username_override() {
@@ -328,6 +401,49 @@ mod tests {
     fn test_effective_format_no_override() {
         assert_eq!(effective_format("env", false, false), "env");
         assert_eq!(effective_format("json", false, false), "json");
+    }
+
+    #[test]
+    fn test_result_exit_code_success() {
+        assert_eq!(result_exit_code(&Ok(())), 0);
+    }
+
+    #[test]
+    fn test_result_exit_code_error() {
+        assert_eq!(result_exit_code(&Err(anyhow::anyhow!("failure"))), 1);
+    }
+
+    #[tokio::test]
+    async fn test_run_cli_dispatches_status_success() {
+        let _env = TestEnv::new();
+        let cli = Cli::parse_from(["vaultwarden-cli", "status"]);
+
+        run_cli(cli).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_run_cli_propagates_command_errors() {
+        let _env = TestEnv::new();
+        let cli = Cli::parse_from(["vaultwarden-cli", "run"]);
+
+        let err = run_cli(cli).await.unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("At least one of --name, --org, --folder, or --collection")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_cli_reports_config_load_errors() {
+        let env = TestEnv::new();
+        std::fs::create_dir_all(env.config_dir()).unwrap();
+        std::fs::write(env.config_dir().join("config.json"), "{not-json").unwrap();
+        let cli = Cli::parse_from(["vaultwarden-cli", "status"]);
+
+        let err = run_cli(cli).await.unwrap_err();
+
+        assert!(err.to_string().contains("Failed to parse config"));
     }
 
     #[test]
