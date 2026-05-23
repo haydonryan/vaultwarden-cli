@@ -4848,6 +4848,7 @@ dependencies = [
  "cbc 0.2.1",
  "clap",
  "directories",
+ "fs4",
  "hkdf 0.13.0",
  "hmac 0.13.0",
  "keyring",

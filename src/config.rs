@@ -202,6 +202,10 @@ impl Config {
         Ok(Self::config_dir()?.join("tokens.json"))
     }
 
+    pub fn token_refresh_lock_path() -> Result<PathBuf> {
+        Ok(Self::config_dir()?.join("token-refresh.lock"))
+    }
+
     pub fn load() -> Result<Self> {
         let path = Self::config_path()?;
         if path.exists() {

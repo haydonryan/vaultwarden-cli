@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
+use fs4::fs_std::FileExt;
 use regex::Regex;
 use std::collections::{BTreeSet, HashMap};
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, IsTerminal, Write};
 use std::process::Command;
 use std::str::FromStr;
@@ -28,6 +29,40 @@ use crate::api::ApiClient;
 use crate::config::{self, Config};
 use crate::crypto::CryptoKeys;
 use crate::models::{Cipher, CipherOutput, CipherType, FieldOutput};
+
+struct TokenRefreshLock {
+    file: File,
+}
+
+impl Drop for TokenRefreshLock {
+    fn drop(&mut self) {
+        drop(self.file.unlock());
+    }
+}
+
+async fn acquire_token_refresh_lock() -> Result<TokenRefreshLock> {
+    tokio::task::spawn_blocking(acquire_token_refresh_lock_blocking)
+        .await
+        .context("Token refresh lock task failed")?
+}
+
+fn acquire_token_refresh_lock_blocking() -> Result<TokenRefreshLock> {
+    let path = Config::token_refresh_lock_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create config directory {parent:?}"))?;
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("Failed to open token refresh lock at {}", path.display()))?;
+    file.lock_exclusive()
+        .with_context(|| format!("Failed to lock token refresh state at {}", path.display()))?;
+    Ok(TokenRefreshLock { file })
+}
 
 /// Options controlling connection behaviour for commands that talk to Vaultwarden.
 ///
@@ -290,38 +325,47 @@ pub async fn status() -> Result<()> {
 }
 
 async fn ensure_valid_token(config: &mut Config, allow_insecure_http: bool) -> Result<String> {
-    let access_token = config
-        .access_token
-        .clone()
-        .context("Not logged in. Please run 'vaultwarden-cli login' first.")?;
-
-    // Check if token is expired
-    let now = unix_now();
-
-    if let Some(expiry) = config.token_expiry
-        && now >= expiry - 60
-    {
-        // Token expired or expiring soon, try to refresh
-        if let Some(refresh_token) = &config.refresh_token {
-            let api = ApiClient::from_config_with_flags(config, allow_insecure_http)?;
-            match api.refresh_token(refresh_token).await {
-                Ok(token_response) => {
-                    let new_expiry = token_expiry_from_lifetime(now, token_response.expires_in)?;
-                    config.access_token = Some(token_response.access_token.clone());
-                    config.refresh_token = token_response.refresh_token;
-                    config.token_expiry = Some(new_expiry);
-                    config.save()?;
-                    return Ok(token_response.access_token);
-                }
-                Err(_) => {
-                    anyhow::bail!("Token expired and refresh failed. Please login again.");
-                }
-            }
-        }
-        anyhow::bail!("Token expired. Please login again.");
+    if !token_needs_refresh(config) {
+        return config
+            .access_token
+            .clone()
+            .context("Not logged in. Please run 'vaultwarden-cli login' first.");
     }
 
-    Ok(access_token)
+    let _lock = acquire_token_refresh_lock().await?;
+    config.load_saved_tokens()?;
+
+    if !token_needs_refresh(config) {
+        return config
+            .access_token
+            .clone()
+            .context("Not logged in. Please run 'vaultwarden-cli login' first.");
+    }
+
+    let refresh_token = config
+        .refresh_token
+        .clone()
+        .context("Token expired. Please login again.")?;
+    let api = ApiClient::from_config_with_flags(config, allow_insecure_http)?;
+    match api.refresh_token(&refresh_token).await {
+        Ok(token_response) => {
+            let new_expiry = token_expiry_from_lifetime(unix_now(), token_response.expires_in)?;
+            config.access_token = Some(token_response.access_token.clone());
+            config.refresh_token = token_response.refresh_token;
+            config.token_expiry = Some(new_expiry);
+            config.save()?;
+            Ok(token_response.access_token)
+        }
+        Err(_) => {
+            anyhow::bail!("Token expired and refresh failed. Please login again.");
+        }
+    }
+}
+
+fn token_needs_refresh(config: &Config) -> bool {
+    config
+        .token_expiry
+        .is_some_and(|expiry| unix_now() >= expiry - 60)
 }
 
 fn ensure_unlocked(config: &Config) -> Result<()> {
@@ -3949,6 +3993,57 @@ mod tests {
             assert_eq!(config.access_token, Some("new-token".to_string()));
             assert_eq!(config.refresh_token, Some("new-refresh".to_string()));
             assert!(config.token_expiry.unwrap() > 0);
+        }
+
+        #[tokio::test]
+        async fn test_ensure_valid_token_serializes_concurrent_refresh() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let response = serde_json::json!({
+                "access_token": "new-token",
+                "expires_in": 3600,
+                "token_type": "Bearer",
+                "refresh_token": "new-refresh"
+            });
+
+            Mock::given(method("POST"))
+                .and(path("/identity/connect/token"))
+                .and(body_string_contains("grant_type=refresh_token"))
+                .and(body_string_contains("refresh_token=old-refresh"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(&response)
+                        .set_delay(std::time::Duration::from_millis(250)),
+                )
+                .expect(1)
+                .mount(&mock_server)
+                .await;
+
+            let expired = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("expired-token".to_string()), // secrets-ignore: test fixture
+                refresh_token: Some("old-refresh".to_string()),  // secrets-ignore: test fixture
+                token_expiry: Some(0),
+                ..Default::default()
+            };
+            expired.save().unwrap();
+
+            let mut first = expired.clone();
+            let mut second = expired;
+            let (first_token, second_token) = tokio::join!(
+                ensure_valid_token(&mut first, true),
+                ensure_valid_token(&mut second, true)
+            );
+
+            assert_eq!(first_token.unwrap(), "new-token");
+            assert_eq!(second_token.unwrap(), "new-token");
+            assert_eq!(first.access_token, Some("new-token".to_string()));
+            assert_eq!(second.access_token, Some("new-token".to_string()));
+            assert_eq!(first.refresh_token, Some("new-refresh".to_string()));
+            assert_eq!(second.refresh_token, Some("new-refresh".to_string()));
         }
 
         #[tokio::test]
