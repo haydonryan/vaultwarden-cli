@@ -143,6 +143,38 @@ mod restrictive_file_permissions {
             mode & 0o777
         );
     }
+
+    #[test]
+    fn broad_tokens_file_permissions_are_repaired_before_load() {
+        let _guard = env_lock();
+        let ctx = TestContext::new();
+        ctx.write_raw_config(r#"{"server":"https://vault.example.com"}"#)
+            .unwrap();
+        fs::write(
+            ctx.tokens_path(),
+            r#"{"access_token":"token","refresh_token":"refresh","token_expiry":12345}"#,
+        )
+        .unwrap();
+
+        fs::set_permissions(ctx.tokens_path(), fs::Permissions::from_mode(0o644))
+            .expect("make tokens file too broad");
+
+        let loaded = ctx.load_config().expect("load config");
+        assert_eq!(loaded.access_token.as_deref(), Some("token"));
+        assert_eq!(loaded.refresh_token.as_deref(), Some("refresh"));
+        assert_eq!(loaded.token_expiry, Some(12345));
+        let mode = fs::metadata(ctx.tokens_path())
+            .expect("tokens file should exist")
+            .permissions()
+            .mode();
+
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "tokens.json permissions should be repaired to 0o600, got {:o}",
+            mode & 0o777
+        );
+    }
 }
 
 // ─────────────────────────────────────────────

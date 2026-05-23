@@ -603,6 +603,7 @@ impl Config {
         // Fallback: read from file
         let path = self.tokens_file_path()?;
         if path.exists() {
+            set_secure_file_permissions(&path)?;
             let content = fs::read_to_string(&path)?;
             let saved: SavedTokens = serde_json::from_str(&content)?;
             self.access_token = Some(saved.access_token);
