@@ -850,6 +850,58 @@ fn track_missing_placeholder(
     full.to_string()
 }
 
+fn build_interpolation_indexes(
+    ciphers: &[Cipher],
+    config: &Config,
+) -> (
+    HashMap<String, Vec<CipherOutput>>,
+    HashMap<String, CipherOutput>,
+) {
+    let mut by_name: HashMap<String, Vec<CipherOutput>> = HashMap::new();
+    let mut by_id: HashMap<String, CipherOutput> = HashMap::new();
+
+    for cipher in ciphers {
+        let keys = match get_cipher_keys(config, cipher) {
+            Ok(k) => k,
+            Err(_) => continue,
+        };
+        if let Ok(output) = decrypt_cipher(cipher, keys) {
+            by_id.insert(output.id.clone(), output.clone());
+            by_name
+                .entry(output.name.to_lowercase())
+                .or_default()
+                .push(output);
+        }
+    }
+
+    (by_name, by_id)
+}
+
+fn resolve_interpolation_placeholder(
+    raw_name: &str,
+    component: &str,
+    by_name: &HashMap<String, Vec<CipherOutput>>,
+    by_id: &HashMap<String, CipherOutput>,
+) -> Result<String> {
+    if let Some(cipher) = by_id.get(raw_name) {
+        return resolve_component(cipher, component);
+    }
+
+    let key = raw_name.to_lowercase();
+    match by_name.get(&key).map(Vec::as_slice) {
+        Some([cipher]) => resolve_component(cipher, component),
+        Some(matches) => {
+            anyhow::bail!(
+                "item name '{raw_name}' is ambiguous; {} vault items match case-insensitively. Use an item id to disambiguate.",
+                matches.len()
+            );
+        }
+        None => {
+            anyhow::bail!("item '{raw_name}' not found");
+        }
+    }
+}
+
 pub async fn interpolate(
     file: &str,
     output_file: Option<&str>,
@@ -857,18 +909,7 @@ pub async fn interpolate(
     opts: &CommandOptions,
 ) -> Result<()> {
     let ctx = load_sync_context(opts.allow_insecure_http).await?;
-    let mut by_name: HashMap<String, CipherOutput> = HashMap::new();
-
-    for cipher in &ctx.sync_response.ciphers {
-        let keys = match get_cipher_keys(&ctx.config, cipher) {
-            Ok(k) => k,
-            Err(_) => continue,
-        };
-        if let Ok(output) = decrypt_cipher(cipher, keys) {
-            let key = output.name.to_lowercase();
-            by_name.entry(key).or_insert(output);
-        }
-    }
+    let (by_name, by_id) = build_interpolation_indexes(&ctx.sync_response.ciphers, &ctx.config);
 
     let input =
         fs::read_to_string(file).with_context(|| format!("Failed to read file '{file}'"))?;
@@ -882,22 +923,11 @@ pub async fn interpolate(
         let placeholder = &caps[1];
         match parse_placeholder(placeholder) {
             Ok((raw_name, component)) => {
-                let key = raw_name.to_lowercase();
-                match by_name.get(&key) {
-                    Some(cipher) => match resolve_component(cipher, &component) {
-                        Ok(value) => value,
-                        Err(err) => track_missing_placeholder(
-                            placeholder,
-                            &err.to_string(),
-                            &full_placeholder,
-                            skip_missing,
-                            &mut missing,
-                            &mut unmatched_placeholders,
-                        ),
-                    },
-                    None => track_missing_placeholder(
+                match resolve_interpolation_placeholder(&raw_name, &component, &by_name, &by_id) {
+                    Ok(value) => value,
+                    Err(err) => track_missing_placeholder(
                         placeholder,
-                        &format!("item '{raw_name}' not found"),
+                        &err.to_string(),
                         &full_placeholder,
                         skip_missing,
                         &mut missing,
@@ -2711,32 +2741,31 @@ mod tests {
             }
         }
 
-        fn make_sync_response_with_one_login() -> serde_json::Value {
+        fn encrypt_for_interpolate_test(value: &str, crypto_keys: &CryptoKeys) -> String {
+            crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                value.as_bytes(),
+                &crypto_keys.enc_key,
+                &crypto_keys.mac_key,
+            )
+        }
+
+        fn make_sync_response_with_logins(
+            logins: &[(&str, &str, &str, &str)],
+        ) -> serde_json::Value {
             let crypto_keys = CryptoKeys {
                 enc_key: vec![0x42u8; 32],
                 mac_key: vec![0x43u8; 32],
             };
 
-            let encrypted_name = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
-                b"MyLogin",
-                &crypto_keys.enc_key,
-                &crypto_keys.mac_key,
-            );
-            let encrypted_user = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
-                b"myuser",
-                &crypto_keys.enc_key,
-                &crypto_keys.mac_key,
-            );
-            let encrypted_pass = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
-                b"mypass",
-                &crypto_keys.enc_key,
-                &crypto_keys.mac_key,
-            );
+            let ciphers = logins
+                .iter()
+                .map(|(id, name, username, password)| {
+                    let encrypted_name = encrypt_for_interpolate_test(name, &crypto_keys);
+                    let encrypted_user = encrypt_for_interpolate_test(username, &crypto_keys);
+                    let encrypted_pass = encrypt_for_interpolate_test(password, &crypto_keys);
 
-            serde_json::json!({
-                "ciphers": [
-                    {
-                        "id": "cipher-1",
+                    serde_json::json!({
+                        "id": id,
                         "type": 1,
                         "name": encrypted_name,
                         "login": {
@@ -2747,8 +2776,12 @@ mod tests {
                         },
                         "collectionIds": [],
                         "organizationId": null
-                    }
-                ],
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            serde_json::json!({
+                "ciphers": ciphers,
                 "folders": [],
                 "collections": [],
                 "profile": {
@@ -2757,6 +2790,39 @@ mod tests {
                     "organizations": []
                 }
             })
+        }
+
+        fn make_sync_response_with_one_login() -> serde_json::Value {
+            make_sync_response_with_logins(&[("cipher-1", "MyLogin", "myuser", "mypass")])
+        }
+
+        fn test_crypto_keys() -> CryptoKeys {
+            CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            }
+        }
+
+        async fn mount_sync_response(mock_server: &MockServer, sync_response: serde_json::Value) {
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .expect(1)
+                .mount(mock_server)
+                .await;
+        }
+
+        fn save_unlocked_test_config(mock_server: &MockServer) {
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(test_crypto_keys()),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
         }
 
         #[tokio::test]
@@ -2769,28 +2835,8 @@ mod tests {
 
             let sync_response = make_sync_response_with_one_login();
 
-            Mock::given(method("GET"))
-                .and(path("/api/sync"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
-                .expect(1)
-                .mount(&mock_server)
-                .await;
-
-            let crypto_keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
-
-            let config = Config {
-                server: Some(mock_server.uri()),
-                access_token: Some("token".to_string()),
-                token_expiry: Some(i64::MAX),
-                email: Some("user@example.com".to_string()),
-                crypto_keys: Some(crypto_keys),
-                ..Default::default()
-            };
-            config.save().unwrap();
-            config.save_keys().unwrap();
+            mount_sync_response(&mock_server, sync_response).await;
+            save_unlocked_test_config(&mock_server);
 
             let input_path = temp_dir.path().join("input.yml");
             std::fs::write(
@@ -2822,28 +2868,8 @@ mod tests {
 
             let sync_response = make_sync_response_with_one_login();
 
-            Mock::given(method("GET"))
-                .and(path("/api/sync"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
-                .expect(1)
-                .mount(&mock_server)
-                .await;
-
-            let crypto_keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
-
-            let config = Config {
-                server: Some(mock_server.uri()),
-                access_token: Some("token".to_string()),
-                token_expiry: Some(i64::MAX),
-                email: Some("user@example.com".to_string()),
-                crypto_keys: Some(crypto_keys),
-                ..Default::default()
-            };
-            config.save().unwrap();
-            config.save_keys().unwrap();
+            mount_sync_response(&mock_server, sync_response).await;
+            save_unlocked_test_config(&mock_server);
 
             let input_path = temp_dir.path().join("input.yml");
             std::fs::write(&input_path, "user: ((MyLogin.username))\n").unwrap();
@@ -2875,28 +2901,8 @@ mod tests {
 
             let sync_response = make_sync_response_with_one_login();
 
-            Mock::given(method("GET"))
-                .and(path("/api/sync"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
-                .expect(1)
-                .mount(&mock_server)
-                .await;
-
-            let crypto_keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
-
-            let config = Config {
-                server: Some(mock_server.uri()),
-                access_token: Some("token".to_string()),
-                token_expiry: Some(i64::MAX),
-                email: Some("user@example.com".to_string()),
-                crypto_keys: Some(crypto_keys),
-                ..Default::default()
-            };
-            config.save().unwrap();
-            config.save_keys().unwrap();
+            mount_sync_response(&mock_server, sync_response).await;
+            save_unlocked_test_config(&mock_server);
 
             let input_path = temp_dir.path().join("input.yml");
             std::fs::write(&input_path, "missing: ((Unknown.item))\n").unwrap();
@@ -2930,28 +2936,8 @@ mod tests {
 
             let sync_response = make_sync_response_with_one_login();
 
-            Mock::given(method("GET"))
-                .and(path("/api/sync"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
-                .expect(1)
-                .mount(&mock_server)
-                .await;
-
-            let crypto_keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
-
-            let config = Config {
-                server: Some(mock_server.uri()),
-                access_token: Some("token".to_string()),
-                token_expiry: Some(i64::MAX),
-                email: Some("user@example.com".to_string()),
-                crypto_keys: Some(crypto_keys),
-                ..Default::default()
-            };
-            config.save().unwrap();
-            config.save_keys().unwrap();
+            mount_sync_response(&mock_server, sync_response).await;
+            save_unlocked_test_config(&mock_server);
 
             let input_path = temp_dir.path().join("input.yml");
             std::fs::write(&input_path, "keep: ((Missing.item))\n").unwrap();
@@ -2971,6 +2957,142 @@ mod tests {
 
             let output = std::fs::read_to_string(&output_path).unwrap();
             assert_eq!(output, "keep: ((Missing.item))\n");
+        }
+
+        #[tokio::test]
+        async fn test_interpolate_fails_on_duplicate_item_names() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let sync_response = make_sync_response_with_logins(&[
+                ("cipher-1", "MyLogin", "first-user", "first-pass"),
+                ("cipher-2", "MyLogin", "second-user", "second-pass"),
+            ]);
+            mount_sync_response(&mock_server, sync_response).await;
+            save_unlocked_test_config(&mock_server);
+
+            let input_path = temp_dir.path().join("input.yml");
+            std::fs::write(&input_path, "user: ((MyLogin.username))\n").unwrap();
+
+            let result = interpolate(
+                input_path.to_str().unwrap(),
+                None,
+                false,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("Interpolation failed"));
+            assert!(err.contains("MyLogin.username"));
+            assert!(err.contains("item name 'MyLogin' is ambiguous"));
+            assert!(err.contains("2 vault items match case-insensitively"));
+        }
+
+        #[tokio::test]
+        async fn test_interpolate_fails_on_case_insensitive_duplicate_item_names() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let sync_response = make_sync_response_with_logins(&[
+                ("cipher-1", "MyLogin", "first-user", "first-pass"),
+                ("cipher-2", "mylogin", "second-user", "second-pass"),
+            ]);
+            mount_sync_response(&mock_server, sync_response).await;
+            save_unlocked_test_config(&mock_server);
+
+            let input_path = temp_dir.path().join("input.yml");
+            std::fs::write(&input_path, "user: ((MYLOGIN.username))\n").unwrap();
+
+            let result = interpolate(
+                input_path.to_str().unwrap(),
+                None,
+                false,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("item name 'MYLOGIN' is ambiguous"));
+            assert!(err.contains("2 vault items match case-insensitively"));
+        }
+
+        #[tokio::test]
+        async fn test_interpolate_allows_item_id_to_disambiguate_duplicate_names() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let sync_response = make_sync_response_with_logins(&[
+                ("cipher-1", "MyLogin", "first-user", "first-pass"),
+                ("cipher-2", "MyLogin", "second-user", "second-pass"),
+            ]);
+            mount_sync_response(&mock_server, sync_response).await;
+            save_unlocked_test_config(&mock_server);
+
+            let input_path = temp_dir.path().join("input.yml");
+            std::fs::write(&input_path, "user: ((cipher-2.username))\n").unwrap();
+
+            let output_path = temp_dir.path().join("output.yml");
+            let result = interpolate(
+                input_path.to_str().unwrap(),
+                Some(output_path.to_str().unwrap()),
+                false,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            assert!(result.is_ok());
+            let output = std::fs::read_to_string(&output_path).unwrap();
+            assert_eq!(output, "user: second-user\n");
+        }
+
+        #[tokio::test]
+        async fn test_interpolate_skip_missing_leaves_ambiguous_placeholder_unchanged() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let sync_response = make_sync_response_with_logins(&[
+                ("cipher-1", "MyLogin", "first-user", "first-pass"),
+                ("cipher-2", "MyLogin", "second-user", "second-pass"),
+            ]);
+            mount_sync_response(&mock_server, sync_response).await;
+            save_unlocked_test_config(&mock_server);
+
+            let input_path = temp_dir.path().join("input.yml");
+            std::fs::write(&input_path, "user: ((MyLogin.username))\n").unwrap();
+
+            let output_path = temp_dir.path().join("output.yml");
+            let result = interpolate(
+                input_path.to_str().unwrap(),
+                Some(output_path.to_str().unwrap()),
+                true,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            assert!(result.is_ok());
+            let output = std::fs::read_to_string(&output_path).unwrap();
+            assert_eq!(output, "user: ((MyLogin.username))\n");
         }
     }
 
