@@ -287,6 +287,83 @@ fn config_save_load_round_trips_tokens() {
 }
 
 #[test]
+fn config_save_tokens_noops_when_access_token_is_absent() {
+    let _guard = env_lock();
+    let ctx = TestContext::new();
+    ctx.set_process_env();
+
+    let config = Config {
+        refresh_token: Some("refresh-without-access".to_string()),
+        token_expiry: Some(1_234),
+        ..Default::default()
+    };
+
+    config
+        .save_tokens()
+        .expect("save_tokens should no-op without an access token");
+
+    assert!(
+        !ctx.tokens_path().exists(),
+        "tokens.json should not be created when there is no access token"
+    );
+}
+
+#[test]
+fn config_save_tokens_fails_when_config_dir_is_missing() {
+    let _guard = env_lock();
+    let ctx = TestContext::new();
+    ctx.set_process_env();
+
+    let config = Config {
+        access_token: Some("token".to_string()),
+        ..Default::default()
+    };
+
+    let err = config
+        .save_tokens()
+        .expect_err("save_tokens should fail without a config dir");
+
+    assert!(err.to_string().contains("No such file"));
+}
+
+#[test]
+fn config_load_ignores_invalid_saved_tokens_json() {
+    let _guard = env_lock();
+    let ctx = TestContext::new();
+    ctx.set_process_env();
+    ctx.write_raw_config(
+        r#"{
+            "server": "https://vault.example.com"
+        }"#,
+    )
+    .unwrap();
+    std::fs::write(ctx.tokens_path(), "{not-json").unwrap();
+
+    let config = Config::load().expect("config load should continue");
+
+    assert_eq!(config.server.as_deref(), Some("https://vault.example.com"));
+    assert!(config.access_token.is_none());
+    assert!(config.refresh_token.is_none());
+    assert!(config.token_expiry.is_none());
+}
+
+#[test]
+fn config_load_saved_tokens_reports_malformed_file() {
+    let _guard = env_lock();
+    let ctx = TestContext::new();
+    ctx.set_process_env();
+    ctx.create_config_dir();
+    std::fs::write(ctx.tokens_path(), "{not-json").unwrap();
+
+    let mut config = Config::default();
+    let err = config
+        .load_saved_tokens()
+        .expect_err("direct token load should report malformed persisted state");
+
+    assert!(err.to_string().contains("line 1 column"));
+}
+
+#[test]
 fn config_clear_removes_tokens() {
     let _guard = env_lock();
     let ctx = TestContext::new();
