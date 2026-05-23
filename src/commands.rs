@@ -572,6 +572,20 @@ fn try_decrypt(keys: &CryptoKeys, encrypted: Option<&str>) -> Result<Option<Stri
     encrypted.map(|e| keys.decrypt_to_string(e)).transpose()
 }
 
+fn try_decrypt_cipher_subfield(
+    keys: &CryptoKeys,
+    encrypted: Option<&str>,
+    cipher_id: &str,
+    field_name: &str,
+) -> Result<Option<String>> {
+    encrypted
+        .map(|value| {
+            keys.decrypt_to_string(value)
+                .with_context(|| format!("failed to decrypt {field_name} for cipher {cipher_id}"))
+        })
+        .transpose()
+}
+
 fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
     let name = cipher.get_name().context("Cipher has no name")?;
     let decrypted_name = keys.decrypt_to_string(name)?;
@@ -581,44 +595,74 @@ fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
     let decrypted_uri = try_decrypt(keys, cipher.get_uri())?;
     let decrypted_notes = try_decrypt(keys, cipher.get_notes())?;
 
-    let decrypted_fields = cipher.get_fields().map(|fields| {
-        fields
-            .iter()
-            .filter_map(|f| {
-                let name = f
-                    .name
-                    .as_ref()
-                    .and_then(|n| keys.decrypt_to_string(n).ok())?;
-                let value = f
-                    .value
-                    .as_ref()
-                    .and_then(|v| keys.decrypt_to_string(v).ok())
-                    .unwrap_or_default();
-                Some(FieldOutput {
-                    name,
-                    value,
-                    hidden: f.r#type == 1,
+    let decrypted_fields = cipher
+        .get_fields()
+        .map(|fields| {
+            fields
+                .iter()
+                .enumerate()
+                .filter_map(|(index, field)| {
+                    let encrypted_name = field.name.as_ref()?;
+                    Some((index, field, encrypted_name))
                 })
-            })
-            .collect()
-    });
+                .map(|(index, field, encrypted_name)| {
+                    let name = keys.decrypt_to_string(encrypted_name).with_context(|| {
+                        format!(
+                            "failed to decrypt custom field name at index {index} for cipher {}",
+                            cipher.id
+                        )
+                    })?;
+                    let value = field
+                        .value
+                        .as_ref()
+                        .map(|encrypted_value| {
+                            keys.decrypt_to_string(encrypted_value).with_context(|| {
+                                format!(
+                                    "failed to decrypt custom field '{name}' value for cipher {}",
+                                    cipher.id
+                                )
+                            })
+                        })
+                        .transpose()?
+                        .unwrap_or_default();
+                    Ok(FieldOutput {
+                        name,
+                        value,
+                        hidden: field.r#type == 1,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .transpose()?;
 
     // Decrypt SSH key fields if present
-    let ssh_public_key = cipher
-        .ssh_key
-        .as_ref()
-        .and_then(|s| s.public_key.as_deref())
-        .and_then(|k| keys.decrypt_to_string(k).ok());
-    let ssh_private_key = cipher
-        .ssh_key
-        .as_ref()
-        .and_then(|s| s.private_key.as_deref())
-        .and_then(|k| keys.decrypt_to_string(k).ok());
-    let ssh_fingerprint = cipher
-        .ssh_key
-        .as_ref()
-        .and_then(|s| s.fingerprint.as_deref())
-        .and_then(|k| keys.decrypt_to_string(k).ok());
+    let ssh_public_key = try_decrypt_cipher_subfield(
+        keys,
+        cipher
+            .ssh_key
+            .as_ref()
+            .and_then(|s| s.public_key.as_deref()),
+        &cipher.id,
+        "SSH public key",
+    )?;
+    let ssh_private_key = try_decrypt_cipher_subfield(
+        keys,
+        cipher
+            .ssh_key
+            .as_ref()
+            .and_then(|s| s.private_key.as_deref()),
+        &cipher.id,
+        "SSH private key",
+    )?;
+    let ssh_fingerprint = try_decrypt_cipher_subfield(
+        keys,
+        cipher
+            .ssh_key
+            .as_ref()
+            .and_then(|s| s.fingerprint.as_deref()),
+        &cipher.id,
+        "SSH fingerprint",
+    )?;
 
     Ok(CipherOutput {
         id: cipher.id.clone(),
@@ -1879,7 +1923,7 @@ mod tests {
     // Tests for decrypt_cipher helper
     mod decrypt_cipher_tests {
         use super::*;
-        use crate::models::Cipher;
+        use crate::models::{Cipher, FieldData, SshKeyData};
 
         fn create_test_cipher(id: &str, cipher_type: u8) -> Cipher {
             Cipher {
@@ -1898,6 +1942,27 @@ mod tests {
                 fields: None,
                 data: None,
             }
+        }
+
+        fn test_crypto_keys() -> CryptoKeys {
+            CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            }
+        }
+
+        fn encrypt_for_decrypt_cipher_test(value: &str, crypto_keys: &CryptoKeys) -> String {
+            crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                value.as_bytes(),
+                &crypto_keys.enc_key,
+                &crypto_keys.mac_key,
+            )
+        }
+
+        fn create_named_test_cipher(id: &str, cipher_type: u8, keys: &CryptoKeys) -> Cipher {
+            let mut cipher = create_test_cipher(id, cipher_type);
+            cipher.name = Some(encrypt_for_decrypt_cipher_test("Test Item", keys));
+            cipher
         }
 
         #[test]
@@ -1933,6 +1998,86 @@ mod tests {
 
             cipher.r#type = 6;
             assert_eq!(cipher.cipher_type().unwrap().to_string(), "ssh");
+        }
+
+        #[test]
+        fn test_decrypt_cipher_errors_on_invalid_custom_field_name() {
+            let keys = test_crypto_keys();
+            let mut cipher = create_named_test_cipher("cipher-1", 1, &keys);
+            cipher.fields = Some(vec![FieldData {
+                name: Some("not encrypted".to_string()),
+                value: Some(encrypt_for_decrypt_cipher_test("secret", &keys)),
+                r#type: 1,
+            }]);
+
+            let err = decrypt_cipher(&cipher, &keys).unwrap_err();
+            let message = format!("{err:#}");
+            assert!(message.contains("failed to decrypt custom field name at index 0"));
+            assert!(message.contains("cipher-1"));
+        }
+
+        #[test]
+        fn test_decrypt_cipher_errors_on_invalid_custom_field_value() {
+            let keys = test_crypto_keys();
+            let mut cipher = create_named_test_cipher("cipher-1", 1, &keys);
+            cipher.fields = Some(vec![FieldData {
+                name: Some(encrypt_for_decrypt_cipher_test("api token", &keys)),
+                value: Some("not encrypted".to_string()),
+                r#type: 1,
+            }]);
+
+            let err = decrypt_cipher(&cipher, &keys).unwrap_err();
+            let message = format!("{err:#}");
+            assert!(message.contains("failed to decrypt custom field 'api token' value"));
+            assert!(message.contains("cipher-1"));
+        }
+
+        #[test]
+        fn test_decrypt_cipher_errors_on_invalid_ssh_public_key() {
+            let keys = test_crypto_keys();
+            let mut cipher = create_named_test_cipher("cipher-ssh", 5, &keys);
+            cipher.ssh_key = Some(SshKeyData {
+                public_key: Some("not encrypted".to_string()),
+                private_key: Some(encrypt_for_decrypt_cipher_test("private", &keys)),
+                fingerprint: Some(encrypt_for_decrypt_cipher_test("fingerprint", &keys)),
+            });
+
+            let err = decrypt_cipher(&cipher, &keys).unwrap_err();
+            let message = format!("{err:#}");
+            assert!(message.contains("failed to decrypt SSH public key"));
+            assert!(message.contains("cipher-ssh"));
+        }
+
+        #[test]
+        fn test_decrypt_cipher_errors_on_invalid_ssh_private_key() {
+            let keys = test_crypto_keys();
+            let mut cipher = create_named_test_cipher("cipher-ssh", 5, &keys);
+            cipher.ssh_key = Some(SshKeyData {
+                public_key: Some(encrypt_for_decrypt_cipher_test("public", &keys)),
+                private_key: Some("not encrypted".to_string()),
+                fingerprint: Some(encrypt_for_decrypt_cipher_test("fingerprint", &keys)),
+            });
+
+            let err = decrypt_cipher(&cipher, &keys).unwrap_err();
+            let message = format!("{err:#}");
+            assert!(message.contains("failed to decrypt SSH private key"));
+            assert!(message.contains("cipher-ssh"));
+        }
+
+        #[test]
+        fn test_decrypt_cipher_errors_on_invalid_ssh_fingerprint() {
+            let keys = test_crypto_keys();
+            let mut cipher = create_named_test_cipher("cipher-ssh", 5, &keys);
+            cipher.ssh_key = Some(SshKeyData {
+                public_key: Some(encrypt_for_decrypt_cipher_test("public", &keys)),
+                private_key: Some(encrypt_for_decrypt_cipher_test("private", &keys)),
+                fingerprint: Some("not encrypted".to_string()),
+            });
+
+            let err = decrypt_cipher(&cipher, &keys).unwrap_err();
+            let message = format!("{err:#}");
+            assert!(message.contains("failed to decrypt SSH fingerprint"));
+            assert!(message.contains("cipher-ssh"));
         }
     }
 
