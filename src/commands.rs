@@ -7,13 +7,17 @@ use std::io::{self, IsTerminal, Write};
 use std::process::{Command, ExitStatus};
 use std::str::FromStr;
 use std::sync::LazyLock;
-use std::time::{SystemTime, UNIX_EPOCH}; // used by unix_now()
+use std::time::{SystemTime, UNIX_EPOCH};
 
-fn unix_now() -> i64 {
-    SystemTime::now()
+fn system_time_to_unix_seconds(time: SystemTime) -> Result<i64> {
+    let duration = time
         .duration_since(UNIX_EPOCH)
-        .expect("system clock is before UNIX epoch")
-        .as_secs() as i64
+        .context("System clock is before the Unix epoch")?;
+    i64::try_from(duration.as_secs()).context("System time exceeds supported Unix timestamp range")
+}
+
+fn unix_now() -> Result<i64> {
+    system_time_to_unix_seconds(SystemTime::now())
 }
 
 fn token_expiry_from_lifetime(now: i64, expires_in: i64) -> Result<i64> {
@@ -155,7 +159,7 @@ pub async fn login(
     let token_response = api.login(&client_id, &client_secret).await?;
 
     // Calculate token expiry
-    let expiry = token_expiry_from_lifetime(unix_now(), token_response.expires_in)?;
+    let expiry = token_expiry_from_lifetime(unix_now()?, token_response.expires_in)?;
 
     // Save configuration
     config.server = Some(server);
@@ -320,7 +324,7 @@ pub async fn status() -> Result<()> {
 
     // Check token expiry
     if let Some(expiry) = config.token_expiry {
-        let now = unix_now();
+        let now = unix_now()?;
         if expiry > now {
             let remaining = expiry - now;
             let hours = remaining / 3600;
@@ -341,7 +345,7 @@ pub async fn status() -> Result<()> {
 }
 
 async fn ensure_valid_token(config: &mut Config, allow_insecure_http: bool) -> Result<String> {
-    if !token_needs_refresh(config) {
+    if !token_needs_refresh(config)? {
         return config
             .access_token
             .clone()
@@ -351,7 +355,7 @@ async fn ensure_valid_token(config: &mut Config, allow_insecure_http: bool) -> R
     let _lock = acquire_token_refresh_lock(config).await?;
     config.load_saved_tokens()?;
 
-    if !token_needs_refresh(config) {
+    if !token_needs_refresh(config)? {
         return config
             .access_token
             .clone()
@@ -365,7 +369,7 @@ async fn ensure_valid_token(config: &mut Config, allow_insecure_http: bool) -> R
     let api = ApiClient::from_config_with_flags(config, allow_insecure_http)?;
     match api.refresh_token(&refresh_token).await {
         Ok(token_response) => {
-            let new_expiry = token_expiry_from_lifetime(unix_now(), token_response.expires_in)?;
+            let new_expiry = token_expiry_from_lifetime(unix_now()?, token_response.expires_in)?;
             config.access_token = Some(token_response.access_token.clone());
             config.refresh_token = token_response.refresh_token;
             config.token_expiry = Some(new_expiry);
@@ -378,10 +382,11 @@ async fn ensure_valid_token(config: &mut Config, allow_insecure_http: bool) -> R
     }
 }
 
-fn token_needs_refresh(config: &Config) -> bool {
-    config
-        .token_expiry
-        .is_some_and(|expiry| unix_now() >= expiry - 60)
+fn token_needs_refresh(config: &Config) -> Result<bool> {
+    let Some(expiry) = config.token_expiry else {
+        return Ok(false);
+    };
+    Ok(unix_now()? >= expiry - 60)
 }
 
 fn ensure_unlocked(config: &Config) -> Result<()> {
@@ -1327,9 +1332,27 @@ pub async fn run_with_secrets(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use tokio::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::const_new(());
+
+    mod time_tests {
+        use super::*;
+
+        #[test]
+        fn system_time_to_unix_seconds_rejects_pre_epoch_time() {
+            let err = system_time_to_unix_seconds(UNIX_EPOCH - Duration::from_secs(1)).unwrap_err();
+            assert_eq!(err.to_string(), "System clock is before the Unix epoch");
+        }
+
+        #[test]
+        fn system_time_to_unix_seconds_returns_epoch_seconds() {
+            let seconds =
+                system_time_to_unix_seconds(UNIX_EPOCH + Duration::from_secs(1_234)).unwrap();
+            assert_eq!(seconds, 1_234);
+        }
+    }
 
     mod sync_context_tests {
         use super::*;
@@ -2113,7 +2136,7 @@ mod tests {
                 .mount(&mock_server)
                 .await;
 
-            let before_login = unix_now();
+            let before_login = unix_now().unwrap();
             let result = login(
                 Some(mock_server.uri()),
                 Some("test-client".to_string()),
@@ -2143,7 +2166,7 @@ mod tests {
             assert_eq!(config.org_keys.get("org-1"), Some(&"2.org-key".to_string()));
             let token_expiry = config.token_expiry.unwrap();
             assert!(token_expiry >= before_login + 3600);
-            assert!(token_expiry <= unix_now() + 3600);
+            assert!(token_expiry <= unix_now().unwrap() + 3600);
         }
 
         async fn assert_login_rejects_invalid_expires_in(expires_in: i64) {
