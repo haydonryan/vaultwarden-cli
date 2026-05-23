@@ -131,6 +131,8 @@ impl LiveTestEnv {
         cmd.env("VAULTWARDEN_ALLOW_HTTP", "1");
         // Live tests capture stdout and assert JSON payloads intentionally.
         cmd.env("VAULTWARDEN_ALLOW_PLAINTEXT_JSON", "true");
+        // Live fixtures intentionally use isolated legacy keys.json storage.
+        cmd.env("VAULTWARDEN_ALLOW_INSECURE_KEY_FILE", "true");
         // Disable keyring so tests stay file-based and fully isolated.
         cmd.env("KEYRING_BACKEND", "plaintext");
         cmd

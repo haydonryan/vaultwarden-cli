@@ -32,6 +32,8 @@ thread_local! {
     static CONFIG_DIR_OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
+const ALLOW_INSECURE_KEY_FILE_ENV: &str = "VAULTWARDEN_ALLOW_INSECURE_KEY_FILE";
+
 /// Emit a warning.  In normal operation this prints to stderr.  While a
 /// [`WarnCapture`] guard is active the message is recorded in its buffer
 /// instead so that tests can assert on warning output.
@@ -165,6 +167,23 @@ fn set_secure_dir_permissions(path: &std::path::Path) -> Result<()> {
     }
     #[allow(unreachable_code)]
     Ok(())
+}
+
+fn set_secure_file_permissions(path: &std::path::Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("Failed to set secure permissions on {path:?}"))?;
+    }
+    #[allow(unreachable_code)]
+    Ok(())
+}
+
+fn insecure_key_file_fallback_allowed() -> bool {
+    cfg!(test)
+        || std::env::var(ALLOW_INSECURE_KEY_FILE_ENV)
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -360,7 +379,9 @@ impl Config {
 
     pub fn save_keys(&self) -> Result<()> {
         // Store keys in the OS keyring instead of a plaintext file.
-        // Fall back to file if keyring is unavailable (with warning).
+        // If keyring is unavailable, default to no-persist rather than writing
+        // decrypted keys to disk. A plaintext file fallback exists only behind
+        // an explicit unsafe compatibility/test opt-in.
         let user_keys = self.crypto_keys.as_ref().map(Self::keys_to_key_data);
         let org_keys: HashMap<String, KeyData> = self
             .org_crypto_keys
@@ -383,11 +404,7 @@ impl Config {
         // downgrading.
         let keyring_entry = match &self.client_id {
             None => {
-                emit_warning(
-                    "Warning: client_id is not set — cannot use the system keyring. \
-                     Keys will be stored in a file instead (less secure). \
-                     This may indicate an incomplete login or a corrupt config.",
-                );
+                emit_warning("Warning: client_id is not set — cannot use the system keyring.");
                 None
             }
             Some(client_id) => match keyring_entry_for_keys(client_id) {
@@ -395,7 +412,7 @@ impl Config {
                 Err(err) => {
                     emit_warning(&format!(
                         "Warning: Could not create keyring entry: {err}. \
-                         Falling back to file-based key storage (less secure).",
+                         Key persistence will be disabled unless insecure file fallback is explicitly enabled.",
                     ));
                     None
                 }
@@ -416,18 +433,35 @@ impl Config {
                 Err(err) => {
                     emit_warning(&format!(
                         "Warning: Could not store keys in system keyring: {err}. \
-                         Falling back to file-based key storage (less secure).",
+                         Key persistence will be disabled unless insecure file fallback is explicitly enabled.",
                     ));
                 }
             }
         }
 
-        // File fallback — reached from all three keyring failure paths:
+        let path = self.keys_file_path()?;
+        if !insecure_key_file_fallback_allowed() {
+            if path.exists() {
+                drop(fs::remove_file(&path));
+            }
+            emit_warning(&format!(
+                "Warning: Vault keys were not persisted. Unlock state is memory-only because \
+                 the system keyring is unavailable. To use the legacy plaintext keys.json \
+                 fallback, set {ALLOW_INSECURE_KEY_FILE_ENV}=true."
+            ));
+            return Ok(());
+        }
+
+        emit_warning(&format!(
+            "Warning: {ALLOW_INSECURE_KEY_FILE_ENV}=true enables legacy plaintext keys.json \
+             storage. keys.json is owner-only but decrypted vault keys are not encrypted at rest."
+        ));
+
+        // Explicit insecure file fallback — reached from all three keyring failure paths:
         //   • client_id is None
         //   • keyring entry creation failed
         //   • keyring set_password failed
         // write_secure uses fchmod-via-fd to avoid the TOCTOU race.
-        let path = self.keys_file_path()?;
         write_secure(&path, content.as_bytes())?;
         Ok(())
     }
@@ -452,6 +486,16 @@ impl Config {
         // Fallback: read from file (legacy)
         let path = self.keys_file_path()?;
         if path.exists() {
+            if !insecure_key_file_fallback_allowed() {
+                drop(fs::remove_file(&path));
+                emit_warning(&format!(
+                    "Warning: Ignored and removed legacy plaintext keys.json. Unlock again with \
+                     system keyring support, or set {ALLOW_INSECURE_KEY_FILE_ENV}=true to accept \
+                     the insecure file fallback."
+                ));
+                return Ok(());
+            }
+            set_secure_file_permissions(&path)?;
             let content = fs::read_to_string(&path)?;
             let saved: SavedKeys = serde_json::from_str(&content)?;
 

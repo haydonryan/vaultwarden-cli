@@ -166,6 +166,7 @@ impl TestContext {
         cmd.env("HOME", self.home_dir());
         cmd.env("XDG_CONFIG_HOME", self.config_root());
         cmd.env("VAULTWARDEN_ALLOW_PLAINTEXT_JSON", "true");
+        cmd.env("VAULTWARDEN_ALLOW_INSECURE_KEY_FILE", "true");
         cmd
     }
 }
@@ -175,6 +176,35 @@ pub fn env_lock() -> MutexGuard<'static, ()> {
         .get_or_init(|| Mutex::new(()))
         .lock()
         .expect("env lock poisoned")
+}
+
+pub struct ScopedEnvVar {
+    name: &'static str,
+    previous: Option<String>,
+}
+
+impl ScopedEnvVar {
+    pub fn set(name: &'static str, value: &str) -> Self {
+        let previous = std::env::var(name).ok();
+        unsafe { std::env::set_var(name, value) };
+        Self { name, previous }
+    }
+}
+
+impl Drop for ScopedEnvVar {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(value) = &self.previous {
+                std::env::set_var(self.name, value);
+            } else {
+                std::env::remove_var(self.name);
+            }
+        }
+    }
+}
+
+pub fn allow_insecure_key_file_fallback() -> ScopedEnvVar {
+    ScopedEnvVar::set("VAULTWARDEN_ALLOW_INSECURE_KEY_FILE", "true")
 }
 
 pub fn test_crypto_keys() -> CryptoKeys {

@@ -276,8 +276,10 @@ If you run in a headless/minimal environment without Secret Service, `vaultwarde
 
 ## Security
 
-- Master password is never stored; only the derived encryption keys are persisted
-- Client secrets are stored in the system keyring, not plain text
+- Master password is never stored.
+- Client secrets and unlocked vault keys are stored in the system keyring when available.
+- If the keyring is unavailable, unlocked vault keys are not persisted by default; unlock state is memory-only for that process.
+- The legacy plaintext `keys.json` fallback is disabled by default. Set `VAULTWARDEN_ALLOW_INSECURE_KEY_FILE=true` only when you intentionally accept owner-only but unencrypted key storage for an isolated compatibility/test environment.
 - Decryption keys can be cleared at any time with `lock`
 - All cryptographic operations use well-audited Rust crates
 

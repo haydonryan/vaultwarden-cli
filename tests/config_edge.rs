@@ -2,7 +2,7 @@
 
 mod support;
 
-use support::{TestContext, env_lock};
+use support::{TestContext, allow_insecure_key_file_fallback, env_lock};
 use vaultwarden_cli::config::{self, Config};
 
 #[test]
@@ -62,6 +62,8 @@ fn config_load_ignores_invalid_saved_key_base64() {
 
 #[test]
 fn config_save_keys_fails_when_config_dir_is_missing() {
+    let _guard = env_lock();
+    let _allow_key_file = allow_insecure_key_file_fallback();
     let ctx = TestContext::new();
 
     let config = ctx.scoped_config(Config {
@@ -82,6 +84,7 @@ fn config_save_keys_fails_when_config_dir_is_missing() {
 #[test]
 fn config_save_keys_warns_when_client_id_is_none() {
     let _guard = env_lock();
+    let _allow_key_file = allow_insecure_key_file_fallback();
     let ctx = TestContext::new();
 
     // Create the config directory so the file fallback can succeed —
@@ -109,15 +112,49 @@ fn config_save_keys_warns_when_client_id_is_none() {
             .any(|w| w.contains("client_id") && w.contains("not set")),
         "expected a warning about missing client_id, got: {warnings:?}"
     );
-    // The fallback path (file storage) must also be mentioned
+    // The explicit unsafe fallback path must also be mentioned.
     assert!(
-        warnings.iter().any(|w| w.contains("file")),
-        "expected a warning mentioning file fallback, got: {warnings:?}"
+        warnings
+            .iter()
+            .any(|w| w.contains("VAULTWARDEN_ALLOW_INSECURE_KEY_FILE")),
+        "expected a warning mentioning the insecure key-file opt-in, got: {warnings:?}"
+    );
+}
+
+#[test]
+fn config_save_keys_defaults_to_no_persist_without_keyring() {
+    let _guard = env_lock();
+    let ctx = TestContext::new();
+    ctx.create_config_dir();
+
+    let config = ctx.scoped_config(Config {
+        crypto_keys: Some(vaultwarden_cli::crypto::CryptoKeys {
+            enc_key: vec![7u8; 32],
+            mac_key: vec![9u8; 32],
+        }),
+        ..Default::default()
+    });
+
+    let _capture = config::capture_warnings();
+    config
+        .save_keys()
+        .expect("no-persist key fallback should not fail");
+    let warnings = _capture.drain();
+
+    assert!(
+        !ctx.keys_path().exists(),
+        "keys.json should not be written unless insecure file fallback is explicit"
+    );
+    assert!(
+        warnings.iter().any(|w| w.contains("not persisted")),
+        "expected no-persist warning, got: {warnings:?}"
     );
 }
 
 #[test]
 fn config_save_keys_round_trips_when_config_dir_exists() {
+    let _guard = env_lock();
+    let _allow_key_file = allow_insecure_key_file_fallback();
     let ctx = TestContext::new();
 
     let mut config = ctx.scoped_config(Config {
@@ -156,6 +193,8 @@ fn config_save_keys_round_trips_when_config_dir_exists() {
 
 #[test]
 fn config_clear_removes_runtime_state_and_saved_keys_but_keeps_server_settings() {
+    let _guard = env_lock();
+    let _allow_key_file = allow_insecure_key_file_fallback();
     let ctx = TestContext::new();
 
     let mut config = ctx.scoped_config(Config {

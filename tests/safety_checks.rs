@@ -13,7 +13,7 @@
 
 mod support;
 
-use support::{TestContext, env_lock};
+use support::{TestContext, allow_insecure_key_file_fallback, env_lock};
 use vaultwarden_cli::config::Config;
 use vaultwarden_cli::crypto::CryptoKeys;
 
@@ -78,6 +78,8 @@ mod restrictive_file_permissions {
 
     #[test]
     fn keys_file_is_owner_readable_and_writable_only_when_stored_on_disk() {
+        let _guard = env_lock();
+        let _allow_key_file = allow_insecure_key_file_fallback();
         let ctx = TestContext::new();
 
         // Create config without client_id so keyring path is skipped (fallback to file)
@@ -109,6 +111,37 @@ mod restrictive_file_permissions {
             );
         }
         // If keyring is available, keys.json should NOT exist (stored in keyring instead)
+    }
+
+    #[test]
+    fn broad_keys_file_permissions_are_repaired_before_legacy_load() {
+        let _guard = env_lock();
+        let _allow_key_file = allow_insecure_key_file_fallback();
+        let ctx = TestContext::new();
+        let keys = CryptoKeys {
+            enc_key: vec![1u8; 32],
+            mac_key: vec![2u8; 32],
+        };
+        ctx.write_raw_config(r#"{"server":"https://vault.example.com"}"#)
+            .unwrap();
+        ctx.write_saved_user_keys(&keys).unwrap();
+
+        fs::set_permissions(ctx.keys_path(), fs::Permissions::from_mode(0o644))
+            .expect("make keys file too broad");
+
+        let loaded = ctx.load_config().expect("load config");
+        assert!(loaded.crypto_keys.is_some());
+        let mode = fs::metadata(ctx.keys_path())
+            .expect("keys file should exist")
+            .permissions()
+            .mode();
+
+        assert_eq!(
+            mode & 0o777,
+            0o600,
+            "keys.json permissions should be repaired to 0o600, got {:o}",
+            mode & 0o777
+        );
     }
 }
 

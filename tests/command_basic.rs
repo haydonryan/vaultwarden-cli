@@ -3,7 +3,10 @@
 mod support;
 
 use predicates::prelude::*;
-use support::{TestContext, encrypt_string_for_test, encrypted_user_key, test_crypto_keys};
+use support::{
+    TestContext, allow_insecure_key_file_fallback, encrypt_string_for_test, encrypted_user_key,
+    env_lock, test_crypto_keys,
+};
 use vaultwarden_cli::config::Config;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -114,6 +117,8 @@ fn unlock_reads_password_from_environment() {
         .success()
         .stdout(predicate::str::contains("Vault unlocked successfully!"));
 
+    let _guard = env_lock();
+    let _allow_key_file = allow_insecure_key_file_fallback();
     let saved = ctx.load_config().unwrap();
     let saved_keys = saved.crypto_keys.expect("saved user keys");
     assert_eq!(saved_keys.enc_key, keys.enc_key);
