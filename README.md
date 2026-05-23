@@ -56,6 +56,17 @@ You can run the same suite manually with:
 just pre-commit
 ```
 
+Run coverage with tarpaulin using an isolated `/tmp` run root so build artifacts
+and the JSON report stay out of the checkout:
+
+```bash
+just coverage
+```
+
+The recipe prints the run root and leaves `tarpaulin-report.json` in that
+temporary output directory for inspection. Remove the printed run root when you
+no longer need the report.
+
 ## Usage
 
 ### Authentication

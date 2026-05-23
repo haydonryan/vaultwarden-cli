@@ -8,6 +8,16 @@ check:
 test:
     cargo test
 
+coverage:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    RUN_ROOT="${RUN_ROOT:-$(mktemp -d /tmp/vaultwarden-cli-tarpaulin.XXXXXX)}"
+    mkdir -p "$RUN_ROOT/tmp" "$RUN_ROOT/target" "$RUN_ROOT/out"
+    echo "coverage run root: $RUN_ROOT"
+    TMPDIR="$RUN_ROOT/tmp" cargo tarpaulin --all-targets --no-fail-fast --target-dir "$RUN_ROOT/target" --output-dir "$RUN_ROOT/out" --out Json Stdout --timeout 120
+    test -s "$RUN_ROOT/out/tarpaulin-report.json"
+    echo "coverage report: $RUN_ROOT/out/tarpaulin-report.json"
+
 pre-commit:
     #!/usr/bin/env bash
     set -euo pipefail
