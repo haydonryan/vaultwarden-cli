@@ -383,7 +383,7 @@ fn token_needs_refresh(config: &Config) -> Result<bool> {
     let Some(expiry) = config.token_expiry else {
         return Ok(false);
     };
-    Ok(unix_now()? >= expiry - 60)
+    Ok(unix_now()? >= expiry.saturating_sub(60))
 }
 
 fn ensure_unlocked(config: &Config) -> Result<()> {
@@ -4095,6 +4095,36 @@ mod tests {
             };
             let token = tokio_test::block_on(ensure_valid_token(&mut config, true)).unwrap();
             assert_eq!(token, "valid-token");
+        }
+
+        #[test]
+        fn test_token_needs_refresh_with_negative_expiry() {
+            let config = Config {
+                token_expiry: Some(-1),
+                ..Default::default()
+            };
+
+            assert!(token_needs_refresh(&config).unwrap());
+        }
+
+        #[test]
+        fn test_token_needs_refresh_with_min_expiry() {
+            let config = Config {
+                token_expiry: Some(i64::MIN),
+                ..Default::default()
+            };
+
+            assert!(token_needs_refresh(&config).unwrap());
+        }
+
+        #[test]
+        fn test_token_needs_refresh_with_max_expiry() {
+            let config = Config {
+                token_expiry: Some(i64::MAX),
+                ..Default::default()
+            };
+
+            assert!(!token_needs_refresh(&config).unwrap());
         }
 
         #[test]
