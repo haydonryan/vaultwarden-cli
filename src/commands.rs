@@ -1293,16 +1293,35 @@ pub async fn run_with_secrets(
             .map(|name| find_by_name_or_id(name))
             .collect::<Result<Vec<_>>>()?
     } else {
-        let outputs: Vec<CipherOutput> = ctx
+        let mut outputs = Vec::new();
+        let mut failures = Vec::new();
+        for cipher in ctx
             .sync_response
             .ciphers
             .iter()
             .filter(|cipher| matches_filters(cipher))
-            .filter_map(|cipher| {
-                let keys = get_cipher_keys(&ctx.config, cipher).ok()?;
-                decrypt_cipher(cipher, keys).ok()
-            })
-            .collect();
+        {
+            let output = get_cipher_keys(&ctx.config, cipher)
+                .and_then(|keys| decrypt_cipher(cipher, keys))
+                .with_context(|| {
+                    format!(
+                        "selected filtered item '{}' could not be decrypted",
+                        cipher.id
+                    )
+                });
+            match output {
+                Ok(output) => outputs.push(output),
+                Err(err) => failures.push(format!("{}: {err:#}", cipher.id)),
+            }
+        }
+
+        if !failures.is_empty() {
+            anyhow::bail!(
+                "filtered run could not decrypt {} selected item(s): {}",
+                failures.len(),
+                failures.join("; ")
+            );
+        }
 
         if outputs.is_empty() {
             anyhow::bail!("No item found matching the specified filters");
@@ -2958,6 +2977,54 @@ mod tests {
             make_sync_response_with_logins(&[("cipher-1", "MyLogin", "myuser", "mypass")])
         }
 
+        fn make_collection_response_with_missing_org_key() -> serde_json::Value {
+            let crypto_keys = test_crypto_keys();
+
+            serde_json::json!({
+                "ciphers": [
+                    {
+                        "id": "cipher-1",
+                        "type": 1,
+                        "name": encrypt_for_interpolate_test("GoodLogin", &crypto_keys),
+                        "login": {
+                            "username": encrypt_for_interpolate_test("good-user", &crypto_keys),
+                            "password": encrypt_for_interpolate_test("good-pass", &crypto_keys),
+                            "uris": null,
+                            "totp": null
+                        },
+                        "collectionIds": ["DZ1"],
+                        "organizationId": null
+                    },
+                    {
+                        "id": "cipher-2",
+                        "type": 1,
+                        "name": encrypt_for_interpolate_test("MissingOrgKey", &crypto_keys),
+                        "login": {
+                            "username": encrypt_for_interpolate_test("bad-user", &crypto_keys),
+                            "password": encrypt_for_interpolate_test("bad-pass", &crypto_keys),
+                            "uris": null,
+                            "totp": null
+                        },
+                        "collectionIds": ["DZ1"],
+                        "organizationId": "org-1"
+                    }
+                ],
+                "folders": [],
+                "collections": [
+                    {
+                        "id": "DZ1",
+                        "name": "collection-name-not-needed-for-id-match",
+                        "organizationId": "org-1"
+                    }
+                ],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            })
+        }
+
         fn test_crypto_keys() -> CryptoKeys {
             CryptoKeys {
                 enc_key: vec![0x42u8; 32],
@@ -3122,6 +3189,42 @@ mod tests {
             .await;
 
             assert!(matches!(result, Ok(CommandOutcome::Success)));
+        }
+
+        #[tokio::test]
+        async fn test_run_with_collection_filter_fails_on_selected_missing_org_key() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            mount_sync_response(
+                &mock_server,
+                make_collection_response_with_missing_org_key(),
+            )
+            .await;
+            save_unlocked_test_config(&mock_server);
+
+            let err = run_with_secrets(
+                &[],
+                false,
+                None,
+                None,
+                Some("DZ1"),
+                false,
+                &[String::from("true")],
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("selected filtered item without keys should fail the run");
+
+            let message = err.to_string();
+            assert!(message.contains("filtered run could not decrypt 1 selected item(s)"));
+            assert!(message.contains("cipher-2"));
+            assert!(message.contains("Organization key not available for org org-1"));
         }
 
         #[tokio::test]
