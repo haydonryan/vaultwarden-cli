@@ -282,14 +282,21 @@ pub async fn unlock(password: Option<String>, opts: &CommandOptions) -> Result<(
 
 pub async fn lock() -> Result<()> {
     let config = Config::load()?;
+    lock_loaded_config(&config)?;
+    Ok(())
+}
+
+fn lock_loaded_config(config: &Config) -> Result<()> {
     config.delete_saved_keys()?;
     println!("Vault locked.");
     Ok(())
 }
 
 pub async fn logout() -> Result<()> {
-    let mut config = Config::load()?;
+    logout_loaded_config(Config::load()?)
+}
 
+fn logout_loaded_config(mut config: Config) -> Result<()> {
     if !config.is_logged_in() {
         println!("Not currently logged in.");
         return Ok(());
@@ -2113,8 +2120,46 @@ mod tests {
     mod command_state_tests {
         use super::*;
 
+        struct MockKeyring {
+            previous: Option<std::sync::Arc<keyring_core::CredentialStore>>,
+        }
+
+        impl MockKeyring {
+            fn install() -> Self {
+                let previous = keyring_core::unset_default_store();
+                keyring_core::set_default_store(keyring_core::mock::Store::new().unwrap());
+                Self { previous }
+            }
+        }
+
+        impl Drop for MockKeyring {
+            fn drop(&mut self) {
+                if let Some(previous) = self.previous.take() {
+                    keyring_core::set_default_store(previous);
+                } else {
+                    keyring_core::unset_default_store();
+                }
+            }
+        }
+
         fn set_temp_config_dir(temp_dir: &tempfile::TempDir) -> config::ConfigDirOverride {
             Config::scoped_config_dir_override_for_thread(temp_dir.path().join("vaultwarden-cli"))
+        }
+
+        fn mock_entry(user: &str) -> keyring_core::Entry {
+            keyring_core::Entry::new("vaultwarden-cli", user)
+                .expect("mock keyring entry should be created")
+        }
+
+        fn fail_next_keyring_call(entry: &keyring_core::Entry) {
+            let mock = entry
+                .as_any()
+                .downcast_ref::<keyring_core::mock::Cred>()
+                .expect("entry should come from mock keyring");
+            mock.set_error(keyring_core::Error::Invalid(
+                "delete".to_string(),
+                "simulated failure".to_string(),
+            ));
         }
 
         #[tokio::test]
@@ -2217,6 +2262,30 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_lock_reports_keyring_delete_failure() {
+            let _guard = ENV_LOCK.lock().await;
+            let _keyring_guard = crate::KEYRING_TEST_LOCK.lock().unwrap();
+            let _mock_keyring = MockKeyring::install();
+            let entry = mock_entry("client-lock-fail:keys");
+            entry.set_password("saved keys").unwrap();
+            fail_next_keyring_call(&entry);
+
+            let config = Config {
+                client_id: Some("client-lock-fail".to_string()),
+                ..Default::default()
+            };
+
+            let err =
+                lock_loaded_config(&config).expect_err("lock should report keyring delete failure");
+
+            assert!(
+                err.to_string()
+                    .contains("Failed to delete saved vault keys from system keyring"),
+                "unexpected error: {err:#}"
+            );
+        }
+
+        #[tokio::test]
         async fn test_logout_when_not_logged_in() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
@@ -2229,6 +2298,8 @@ mod tests {
         #[tokio::test]
         async fn test_logout_clears_config_and_keys() {
             let _guard = ENV_LOCK.lock().await;
+            let _keyring_guard = crate::KEYRING_TEST_LOCK.lock().unwrap();
+            let _mock_keyring = MockKeyring::install();
             let temp_dir = tempfile::TempDir::new().unwrap();
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
@@ -2253,7 +2324,7 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = logout().await;
+            let result = logout_loaded_config(Config::load().unwrap());
             assert!(result.is_ok());
 
             let loaded = Config::load().unwrap();
@@ -2268,6 +2339,32 @@ mod tests {
             assert!(loaded.org_keys.is_empty());
             assert!(loaded.org_crypto_keys.is_empty());
             assert!(!Config::keys_path().unwrap().exists());
+        }
+
+        #[tokio::test]
+        async fn test_logout_reports_client_secret_delete_failure() {
+            let _guard = ENV_LOCK.lock().await;
+            let _keyring_guard = crate::KEYRING_TEST_LOCK.lock().unwrap();
+            let _mock_keyring = MockKeyring::install();
+            let entry = mock_entry("client-logout-fail");
+            entry.set_password("client secret").unwrap();
+            fail_next_keyring_call(&entry);
+
+            let config = Config {
+                server: Some("https://vault.example.com".to_string()),
+                client_id: Some("client-logout-fail".to_string()),
+                access_token: Some("token".to_string()),
+                ..Default::default()
+            };
+
+            let err = logout_loaded_config(config)
+                .expect_err("logout should report client secret delete failure");
+
+            assert!(
+                err.to_string()
+                    .contains("Failed to delete client secret from system keyring"),
+                "unexpected error: {err:#}"
+            );
         }
     }
 

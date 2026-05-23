@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use directories::ProjectDirs;
-use keyring_core::Entry;
+use keyring_core::{Entry, Error as KeyringError};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -514,9 +514,12 @@ impl Config {
     pub fn delete_saved_keys(&self) -> Result<()> {
         // Delete from OS keyring
         if let Some(client_id) = &self.client_id
-            && let Ok(entry) = keyring_entry_for_keys(client_id)
+            && let Some(entry) = optional_keyring_entry_for_delete(
+                keyring_entry_for_keys(client_id),
+                "saved vault keys",
+            )?
         {
-            drop(entry.delete_credential()); // Ignore errors if not found
+            delete_keyring_credential(entry, "saved vault keys")?;
         }
 
         // Also remove legacy keys.json if it exists
@@ -616,9 +619,12 @@ impl Config {
     pub fn delete_saved_tokens(&self) -> Result<()> {
         // Delete from OS keyring
         if let Some(client_id) = &self.client_id
-            && let Ok(entry) = keyring_entry_for_tokens(client_id)
+            && let Some(entry) = optional_keyring_entry_for_delete(
+                keyring_entry_for_tokens(client_id),
+                "saved tokens",
+            )?
         {
-            drop(entry.delete_credential()); // Ignore errors if not found
+            delete_keyring_credential(entry, "saved tokens")?;
         }
 
         // Also remove tokens.json if it exists
@@ -703,6 +709,31 @@ fn keyring_entry_for_tokens(client_id: &str) -> Result<Entry> {
     )?)
 }
 
+fn optional_keyring_entry_for_delete(entry: Result<Entry>, label: &str) -> Result<Option<Entry>> {
+    match entry {
+        Ok(entry) => Ok(Some(entry)),
+        Err(err) => {
+            if err
+                .downcast_ref::<KeyringError>()
+                .is_some_and(|err| matches!(err, KeyringError::NoEntry))
+            {
+                Ok(None)
+            } else {
+                Err(err).with_context(|| format!("Failed to access {label} in system keyring"))
+            }
+        }
+    }
+}
+
+fn delete_keyring_credential(entry: Entry, label: &str) -> Result<()> {
+    match entry.delete_credential() {
+        Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
+        Err(err) => {
+            Err(err).with_context(|| format!("Failed to delete {label} from system keyring"))
+        }
+    }
+}
+
 // Store client secret securely using keyring
 pub fn store_client_secret(client_id: &str, secret: &str) -> Result<()> {
     keyring_entry(client_id)?.set_password(secret)?;
@@ -716,8 +747,10 @@ pub fn get_client_secret(client_id: &str) -> Result<String> {
 }
 
 pub fn delete_client_secret(client_id: &str) -> Result<()> {
-    if let Ok(entry) = keyring_entry(client_id) {
-        drop(entry.delete_credential()); // Ignore errors if not found
+    if let Some(entry) =
+        optional_keyring_entry_for_delete(keyring_entry(client_id), "client secret")?
+    {
+        delete_keyring_credential(entry, "client secret")?;
     }
     Ok(())
 }
@@ -725,6 +758,43 @@ pub fn delete_client_secret(client_id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct MockKeyring {
+        previous: Option<std::sync::Arc<keyring_core::CredentialStore>>,
+    }
+
+    impl MockKeyring {
+        fn install() -> Self {
+            let previous = keyring_core::unset_default_store();
+            keyring_core::set_default_store(keyring_core::mock::Store::new().unwrap());
+            Self { previous }
+        }
+    }
+
+    impl Drop for MockKeyring {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.take() {
+                keyring_core::set_default_store(previous);
+            } else {
+                keyring_core::unset_default_store();
+            }
+        }
+    }
+
+    fn mock_entry(user: &str) -> Entry {
+        Entry::new("vaultwarden-cli", user).expect("mock keyring entry should be created")
+    }
+
+    fn fail_next_keyring_call(entry: &Entry) {
+        let mock = entry
+            .as_any()
+            .downcast_ref::<keyring_core::mock::Cred>()
+            .expect("entry should come from mock keyring");
+        mock.set_error(KeyringError::Invalid(
+            "delete".to_string(),
+            "simulated failure".to_string(),
+        ));
+    }
 
     // Config state tests
     mod config_state_tests {
@@ -809,6 +879,99 @@ mod tests {
         fn test_get_server_none() {
             let config = Config::default();
             assert_eq!(config.get_server(), None);
+        }
+    }
+
+    mod keyring_delete_tests {
+        use super::*;
+
+        #[test]
+        fn delete_saved_keys_ignores_missing_keyring_entry() {
+            let _keyring_guard = crate::KEYRING_TEST_LOCK.lock().unwrap();
+            let _mock_keyring = MockKeyring::install();
+            let config = Config {
+                client_id: Some("client-keys-missing".to_string()),
+                ..Default::default()
+            };
+
+            config
+                .delete_saved_keys()
+                .expect("missing keyring keys should be idempotent");
+        }
+
+        #[test]
+        fn delete_saved_keys_reports_keyring_delete_failure() {
+            let _keyring_guard = crate::KEYRING_TEST_LOCK.lock().unwrap();
+            let _mock_keyring = MockKeyring::install();
+            let entry = mock_entry("client-keys-fail:keys");
+            entry.set_password("saved keys").unwrap();
+            fail_next_keyring_call(&entry);
+
+            let config = Config {
+                client_id: Some("client-keys-fail".to_string()),
+                ..Default::default()
+            };
+
+            let err = config
+                .delete_saved_keys()
+                .expect_err("keyring delete failure should be reported");
+
+            assert!(
+                err.to_string()
+                    .contains("Failed to delete saved vault keys from system keyring"),
+                "unexpected error: {err:#}"
+            );
+        }
+
+        #[test]
+        fn delete_saved_tokens_reports_keyring_delete_failure() {
+            let _keyring_guard = crate::KEYRING_TEST_LOCK.lock().unwrap();
+            let _mock_keyring = MockKeyring::install();
+            let entry = mock_entry("client-tokens-fail:tokens");
+            entry.set_password("saved tokens").unwrap();
+            fail_next_keyring_call(&entry);
+
+            let config = Config {
+                client_id: Some("client-tokens-fail".to_string()),
+                ..Default::default()
+            };
+
+            let err = config
+                .delete_saved_tokens()
+                .expect_err("keyring token delete failure should be reported");
+
+            assert!(
+                err.to_string()
+                    .contains("Failed to delete saved tokens from system keyring"),
+                "unexpected error: {err:#}"
+            );
+        }
+
+        #[test]
+        fn delete_client_secret_ignores_missing_keyring_entry() {
+            let _keyring_guard = crate::KEYRING_TEST_LOCK.lock().unwrap();
+            let _mock_keyring = MockKeyring::install();
+
+            delete_client_secret("client-secret-missing")
+                .expect("missing client secret should be idempotent");
+        }
+
+        #[test]
+        fn delete_client_secret_reports_keyring_delete_failure() {
+            let _keyring_guard = crate::KEYRING_TEST_LOCK.lock().unwrap();
+            let _mock_keyring = MockKeyring::install();
+            let entry = mock_entry("client-secret-fail");
+            entry.set_password("client secret").unwrap();
+            fail_next_keyring_call(&entry);
+
+            let err = delete_client_secret("client-secret-fail")
+                .expect_err("client secret delete failure should be reported");
+
+            assert!(
+                err.to_string()
+                    .contains("Failed to delete client secret from system keyring"),
+                "unexpected error: {err:#}"
+            );
         }
     }
 

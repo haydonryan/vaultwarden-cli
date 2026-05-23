@@ -9,7 +9,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use tempfile::TempDir;
 use vaultwarden_cli::config::Config;
 use vaultwarden_cli::crypto::CryptoKeys;
@@ -205,6 +205,26 @@ impl Drop for ScopedEnvVar {
 
 pub fn allow_insecure_key_file_fallback() -> ScopedEnvVar {
     ScopedEnvVar::set("VAULTWARDEN_ALLOW_INSECURE_KEY_FILE", "true")
+}
+
+pub struct MockKeyring {
+    previous: Option<Arc<keyring_core::CredentialStore>>,
+}
+
+impl Drop for MockKeyring {
+    fn drop(&mut self) {
+        if let Some(previous) = self.previous.take() {
+            keyring_core::set_default_store(previous);
+        } else {
+            keyring_core::unset_default_store();
+        }
+    }
+}
+
+pub fn mock_keyring() -> MockKeyring {
+    let previous = keyring_core::unset_default_store();
+    keyring_core::set_default_store(keyring_core::mock::Store::new().unwrap());
+    MockKeyring { previous }
 }
 
 pub fn test_crypto_keys() -> CryptoKeys {

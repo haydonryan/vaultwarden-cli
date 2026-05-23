@@ -2,7 +2,7 @@
 
 mod support;
 
-use support::{TestContext, allow_insecure_key_file_fallback, env_lock};
+use support::{TestContext, allow_insecure_key_file_fallback, env_lock, mock_keyring};
 use vaultwarden_cli::config::{self, Config};
 
 #[test]
@@ -227,6 +227,7 @@ fn config_clear_removes_runtime_state_and_saved_keys_but_keeps_server_settings()
     config.save_keys().unwrap();
     assert!(ctx.keys_path().exists());
 
+    let _mock_keyring = mock_keyring();
     config.clear().unwrap();
 
     assert!(!ctx.keys_path().exists());
