@@ -1123,10 +1123,38 @@ fn print_cipher_output(output: &CipherOutput, format: &str) -> Result<()> {
 }
 
 fn sanitize_env_name(name: &str) -> String {
-    name.to_uppercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '_' })
-        .collect()
+    let mut sanitized = String::new();
+    let mut last_was_separator = true;
+
+    for byte in name.bytes() {
+        match byte {
+            b'a'..=b'z' => {
+                sanitized.push(char::from(byte.to_ascii_uppercase()));
+                last_was_separator = false;
+            }
+            b'A'..=b'Z' | b'0'..=b'9' => {
+                sanitized.push(char::from(byte));
+                last_was_separator = false;
+            }
+            _ if !last_was_separator => {
+                sanitized.push('_');
+                last_was_separator = true;
+            }
+            _ => {}
+        }
+    }
+
+    while sanitized.ends_with('_') {
+        sanitized.pop();
+    }
+
+    if sanitized.is_empty() {
+        sanitized.push_str("ITEM");
+    } else if sanitized.starts_with(|c: char| c.is_ascii_digit()) {
+        sanitized.insert_str(0, "ITEM_");
+    }
+
+    sanitized
 }
 
 fn shell_quote_env_value(value: &str) -> Result<String> {
@@ -1445,12 +1473,12 @@ mod tests {
         #[test]
         fn test_numbers_preserved() {
             assert_eq!(sanitize_env_name("app123"), "APP123");
-            assert_eq!(sanitize_env_name("123app"), "123APP");
+            assert_eq!(sanitize_env_name("123app"), "ITEM_123APP");
         }
 
         #[test]
         fn test_mixed_input() {
-            assert_eq!(sanitize_env_name("My App-v2.0!"), "MY_APP_V2_0_");
+            assert_eq!(sanitize_env_name("My App-v2.0!"), "MY_APP_V2_0");
         }
 
         #[test]
@@ -1460,24 +1488,37 @@ mod tests {
 
         #[test]
         fn test_empty_string() {
-            assert_eq!(sanitize_env_name(""), "");
+            assert_eq!(sanitize_env_name(""), "ITEM");
         }
 
         #[test]
         fn test_unicode_characters() {
-            // Note: is_alphanumeric() considers unicode letters as alphanumeric
-            // So 'é' and CJK characters are preserved (uppercased where possible)
-            let result = sanitize_env_name("café");
-            assert!(result.starts_with("CAF"));
-            // CJK characters don't have uppercase, so they stay as-is
-            let result = sanitize_env_name("日本語");
-            assert_eq!(result.chars().count(), 3); // 3 characters (not bytes)
+            assert_eq!(sanitize_env_name("café"), "CAF");
+            assert_eq!(sanitize_env_name("日本語"), "ITEM");
         }
 
         #[test]
         fn test_consecutive_special_chars() {
-            assert_eq!(sanitize_env_name("my--app"), "MY__APP");
-            assert_eq!(sanitize_env_name("app...name"), "APP___NAME");
+            assert_eq!(sanitize_env_name("my--app"), "MY_APP");
+            assert_eq!(sanitize_env_name("app...name"), "APP_NAME");
+        }
+
+        #[test]
+        fn test_edge_case_names_are_portable_identifiers() {
+            let names = [
+                sanitize_env_name("123 app"),
+                sanitize_env_name("日本語"),
+                sanitize_env_name("!!!"),
+                sanitize_env_name(" café 9 "),
+            ];
+
+            for name in names {
+                assert!(name.starts_with(|c: char| c.is_ascii_uppercase() || c == '_'));
+                assert!(
+                    name.chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+                );
+            }
         }
     }
 
@@ -4689,6 +4730,52 @@ mod tests {
             assert!(env.contains("export MY_APP_USERNAME='user'\n"));
             assert!(env.contains("export MY_APP_PASSWORD='pass'\n"));
             assert!(env.contains("export MY_APP_API_TOKEN='tok-123'\n"));
+        }
+
+        #[test]
+        fn test_format_cipher_output_env_uses_portable_names_for_edge_cases() {
+            let output = CipherOutput {
+                name: "123 café !!!".to_string(),
+                fields: Some(vec![FieldOutput {
+                    name: "9 token".to_string(),
+                    value: "tok-123".to_string(),
+                    hidden: true,
+                }]),
+                ..sample_output()
+            };
+
+            let env = format_cipher_output(&output, "env").unwrap();
+
+            assert!(env.contains("export ITEM_123_CAF_USERNAME='user'\n"));
+            assert!(env.contains("export ITEM_123_CAF_ITEM_9_TOKEN='tok-123'\n"));
+        }
+
+        #[test]
+        #[cfg(unix)]
+        fn test_format_cipher_output_env_edge_names_round_trip_through_shell() {
+            let cases = [
+                ("123 app", "ITEM_123_APP_PASSWORD"),
+                ("日本語", "ITEM_PASSWORD"),
+                ("!!!", "ITEM_PASSWORD"),
+            ];
+
+            for (item_name, env_name) in cases {
+                let output = CipherOutput {
+                    name: item_name.to_string(),
+                    password: Some(format!("{item_name} secret")),
+                    uri: None,
+                    username: None,
+                    fields: None,
+                    ..sample_output()
+                };
+                let env = format_cipher_output(&output, "env").unwrap();
+                let script = format!("{env}\nprintf %s \"${env_name}\"");
+
+                let output = Command::new("sh").arg("-c").arg(script).output().unwrap();
+
+                assert!(output.status.success());
+                assert_eq!(output.stdout, format!("{item_name} secret").as_bytes());
+            }
         }
 
         #[test]
