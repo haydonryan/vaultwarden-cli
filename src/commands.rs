@@ -796,12 +796,7 @@ pub async fn get(
         find_cipher_output(
             &ctx.sync_response.ciphers,
             &ctx.config,
-            |o| {
-                o.name.to_lowercase() == item_lower
-                    || o.uri
-                        .as_ref()
-                        .is_some_and(|u| u.to_lowercase().contains(&item_lower))
-            },
+            |o| o.name.to_lowercase() == item_lower,
             matches,
         )
         .context(format!("Item '{item}' not found"))?
@@ -3708,6 +3703,65 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_get_does_not_fall_back_to_uri_match() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let sync_response = serde_json::json!({
+                "ciphers": [
+                    make_encrypted_login("cipher-1", "Work Login", "user", "pass", "https://github.com", &keys),
+                ],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let result = get(
+                "github.com",
+                "json",
+                None,
+                None,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    allow_plaintext_json: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("not found"));
+        }
+
+        #[tokio::test]
         async fn test_get_not_found() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
@@ -3833,6 +3887,63 @@ mod tests {
             let sync_response = serde_json::json!({
                 "ciphers": [
                     make_encrypted_login("cipher-1", "GitHub", "user", "pass", "https://github.com", &keys),
+                ],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let result = get_by_uri(
+                "github.com",
+                "json",
+                None,
+                None,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    allow_plaintext_json: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_get_by_uri_matches_when_name_does_not_match() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let sync_response = serde_json::json!({
+                "ciphers": [
+                    make_encrypted_login("cipher-1", "Work Login", "user", "pass", "https://github.com", &keys),
                 ],
                 "folders": [],
                 "collections": [],
