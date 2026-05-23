@@ -3998,6 +3998,31 @@ mod tests {
         }
 
         #[test]
+        fn test_format_list_output_plain_env_vars_includes_ssh_fields() {
+            let output = CipherOutput {
+                username: None,
+                password: None,
+                uri: None,
+                fields: None,
+                ssh_public_key: Some("ssh-rsa AAAA".to_string()),
+                ssh_private_key: Some("-----BEGIN OPENSSH PRIVATE KEY-----".to_string()),
+                ssh_fingerprint: Some("SHA256:abc123".to_string()),
+                ..sample_output()
+            };
+
+            let out = format_list_output(&[output], false).unwrap();
+
+            assert_eq!(
+                out,
+                vec![
+                    "MY_APP_SSH_PUBLIC_KEY".to_string(),
+                    "MY_APP_SSH_PRIVATE_KEY".to_string(),
+                    "MY_APP_SSH_FINGERPRINT".to_string(),
+                ]
+            );
+        }
+
+        #[test]
         fn test_cipher_to_env_vars_includes_standard_and_custom_fields() {
             let vars = cipher_to_env_vars(&sample_output());
 
@@ -4009,6 +4034,40 @@ mod tests {
                     ("MY_APP_PASSWORD".to_string(), "pass".to_string()),
                     ("MY_APP_API_TOKEN".to_string(), "tok-123".to_string()),
                     ("MY_APP_REGION".to_string(), "us-east-1".to_string()),
+                ]
+            );
+        }
+
+        #[test]
+        fn test_cipher_to_env_vars_includes_ssh_fields() {
+            let output = CipherOutput {
+                username: None,
+                password: None,
+                uri: None,
+                fields: None,
+                ssh_public_key: Some("ssh-rsa AAAA".to_string()),
+                ssh_private_key: Some("-----BEGIN OPENSSH PRIVATE KEY-----".to_string()),
+                ssh_fingerprint: Some("SHA256:abc123".to_string()),
+                ..sample_output()
+            };
+
+            let vars = cipher_to_env_vars(&output);
+
+            assert_eq!(
+                vars,
+                vec![
+                    (
+                        "MY_APP_SSH_PUBLIC_KEY".to_string(),
+                        "ssh-rsa AAAA".to_string()
+                    ),
+                    (
+                        "MY_APP_SSH_PRIVATE_KEY".to_string(),
+                        "-----BEGIN OPENSSH PRIVATE KEY-----".to_string()
+                    ),
+                    (
+                        "MY_APP_SSH_FINGERPRINT".to_string(),
+                        "SHA256:abc123".to_string()
+                    ),
                 ]
             );
         }
@@ -4038,6 +4097,21 @@ mod tests {
             write_interpolated_output("rendered: true\n", Some(path.to_str().unwrap())).unwrap();
 
             assert_eq!(fs::read_to_string(path).unwrap(), "rendered: true\n");
+        }
+
+        #[test]
+        fn test_write_interpolated_output_reports_write_failure_context() {
+            let temp_dir = TempDir::new().unwrap();
+            let path = temp_dir.path().join("missing").join("config.yml");
+
+            let err = write_interpolated_output("rendered: true\n", Some(path.to_str().unwrap()))
+                .expect_err("write should fail when parent directory is absent");
+
+            assert!(
+                err.to_string()
+                    .contains("Failed to write interpolated output to")
+            );
+            assert!(err.to_string().contains("missing/config.yml"));
         }
 
         #[test]
