@@ -330,63 +330,37 @@ mod tests {
     use super::*;
     use std::sync::{Mutex, MutexGuard};
     use tempfile::TempDir;
+    use vaultwarden_cli::config::{Config, ConfigDirOverride};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     struct TestEnv {
         _guard: MutexGuard<'static, ()>,
         _temp_dir: TempDir,
-        old_home: Option<String>,
-        old_xdg_config_home: Option<String>,
+        _config_dir_override: ConfigDirOverride,
+        config_dir: std::path::PathBuf,
     }
 
     impl TestEnv {
         fn new() -> Self {
             let guard = ENV_LOCK.lock().expect("env lock poisoned");
             let temp_dir = TempDir::new().expect("create temp dir");
-            let home = temp_dir.path().join("home");
             let config_root = temp_dir.path().join("config-root");
-            std::fs::create_dir_all(&home).expect("create home dir");
             std::fs::create_dir_all(&config_root).expect("create config root");
+            let config_dir = config_root.join("vaultwarden-cli");
 
-            let old_home = std::env::var("HOME").ok();
-            let old_xdg_config_home = std::env::var("XDG_CONFIG_HOME").ok();
-            unsafe {
-                std::env::set_var("HOME", &home);
-                std::env::set_var("XDG_CONFIG_HOME", &config_root);
-            }
+            let config_dir_override = Config::scoped_config_dir_override_for_thread(&config_dir);
 
             Self {
                 _guard: guard,
                 _temp_dir: temp_dir,
-                old_home,
-                old_xdg_config_home,
+                _config_dir_override: config_dir_override,
+                config_dir,
             }
         }
 
         fn config_dir(&self) -> std::path::PathBuf {
-            std::env::var("XDG_CONFIG_HOME")
-                .map(std::path::PathBuf::from)
-                .expect("XDG_CONFIG_HOME should be set")
-                .join("vaultwarden-cli")
-        }
-    }
-
-    impl Drop for TestEnv {
-        fn drop(&mut self) {
-            unsafe {
-                if let Some(value) = &self.old_home {
-                    std::env::set_var("HOME", value);
-                } else {
-                    std::env::remove_var("HOME");
-                }
-
-                if let Some(value) = &self.old_xdg_config_home {
-                    std::env::set_var("XDG_CONFIG_HOME", value);
-                } else {
-                    std::env::remove_var("XDG_CONFIG_HOME");
-                }
-            }
+            self.config_dir.clone()
         }
     }
 

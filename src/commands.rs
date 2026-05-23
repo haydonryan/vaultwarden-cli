@@ -40,14 +40,14 @@ impl Drop for TokenRefreshLock {
     }
 }
 
-async fn acquire_token_refresh_lock() -> Result<TokenRefreshLock> {
-    tokio::task::spawn_blocking(acquire_token_refresh_lock_blocking)
+async fn acquire_token_refresh_lock(config: &Config) -> Result<TokenRefreshLock> {
+    let path = config.token_refresh_lock_file_path()?;
+    tokio::task::spawn_blocking(move || acquire_token_refresh_lock_blocking(path))
         .await
         .context("Token refresh lock task failed")?
 }
 
-fn acquire_token_refresh_lock_blocking() -> Result<TokenRefreshLock> {
-    let path = Config::token_refresh_lock_path()?;
+fn acquire_token_refresh_lock_blocking(path: std::path::PathBuf) -> Result<TokenRefreshLock> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create config directory {parent:?}"))?;
@@ -332,7 +332,7 @@ async fn ensure_valid_token(config: &mut Config, allow_insecure_http: bool) -> R
             .context("Not logged in. Please run 'vaultwarden-cli login' first.");
     }
 
-    let _lock = acquire_token_refresh_lock().await?;
+    let _lock = acquire_token_refresh_lock(config).await?;
     config.load_saved_tokens()?;
 
     if !token_needs_refresh(config) {
@@ -1865,18 +1865,15 @@ mod tests {
     mod command_state_tests {
         use super::*;
 
-        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) {
-            unsafe {
-                std::env::set_var("HOME", temp_dir.path());
-                std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
-            }
+        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) -> config::ConfigDirOverride {
+            Config::scoped_config_dir_override_for_thread(temp_dir.path().join("vaultwarden-cli"))
         }
 
         #[tokio::test]
         async fn test_status_when_not_logged_in() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let result = status().await;
             assert!(result.is_ok());
@@ -1886,7 +1883,7 @@ mod tests {
         async fn test_status_when_logged_in_locked() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let config = Config {
                 server: Some("https://vault.example.com".to_string()),
@@ -1906,7 +1903,7 @@ mod tests {
         async fn test_status_when_logged_in_unlocked() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mut config = Config {
                 server: Some("https://vault.example.com".to_string()),
@@ -1931,7 +1928,7 @@ mod tests {
         async fn test_status_token_expired() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let config = Config {
                 server: Some("https://vault.example.com".to_string()),
@@ -1949,7 +1946,7 @@ mod tests {
         async fn test_lock_deletes_saved_keys() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mut config = Config {
                 server: Some("https://vault.example.com".to_string()),
@@ -1975,7 +1972,7 @@ mod tests {
         async fn test_logout_when_not_logged_in() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let result = logout().await;
             assert!(result.is_ok());
@@ -1985,7 +1982,7 @@ mod tests {
         async fn test_logout_clears_config_and_keys() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mut config = Config {
                 server: Some("https://vault.example.com".to_string()),
@@ -2032,11 +2029,8 @@ mod tests {
         use wiremock::matchers::{body_string_contains, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) {
-            unsafe {
-                std::env::set_var("HOME", temp_dir.path());
-                std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
-            }
+        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) -> config::ConfigDirOverride {
+            Config::scoped_config_dir_override_for_thread(temp_dir.path().join("vaultwarden-cli"))
         }
 
         async fn mount_reachable_server(mock_server: &MockServer) {
@@ -2076,7 +2070,7 @@ mod tests {
         async fn test_login_success_with_provided_credentials() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
 
@@ -2144,7 +2138,7 @@ mod tests {
 
         async fn assert_login_rejects_invalid_expires_in(expires_in: i64) {
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
             mount_reachable_server(&mock_server).await;
@@ -2190,7 +2184,7 @@ mod tests {
         async fn test_login_fails_when_server_unreachable() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
 
@@ -2226,7 +2220,7 @@ mod tests {
         async fn test_login_fails_on_invalid_credentials() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
 
@@ -2264,7 +2258,7 @@ mod tests {
         async fn test_login_uses_existing_config_server_and_client_id() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
 
@@ -2345,11 +2339,8 @@ mod tests {
         use rsa::{Oaep, RsaPrivateKey, RsaPublicKey};
         use sha2::Sha256;
 
-        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) {
-            unsafe {
-                std::env::set_var("HOME", temp_dir.path());
-                std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
-            }
+        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) -> config::ConfigDirOverride {
+            Config::scoped_config_dir_override_for_thread(temp_dir.path().join("vaultwarden-cli"))
         }
 
         fn encrypt_symmetric_key_for_test(
@@ -2426,7 +2417,7 @@ mod tests {
         async fn test_unlock_fails_when_not_logged_in() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let result = unlock(Some("password".to_string()), &Default::default()).await;
             assert!(result.is_err());
@@ -2437,7 +2428,7 @@ mod tests {
         async fn test_unlock_with_password_argument() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let keys = CryptoKeys {
                 enc_key: vec![0x42u8; 32],
@@ -2476,7 +2467,7 @@ mod tests {
         async fn test_unlock_fails_with_wrong_password() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let keys = CryptoKeys {
                 enc_key: vec![0x42u8; 32],
@@ -2517,7 +2508,7 @@ mod tests {
         async fn test_unlock_decrypts_org_keys() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let user_keys = CryptoKeys {
                 enc_key: vec![0x42u8; 32],
@@ -2778,11 +2769,8 @@ mod tests {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) {
-            unsafe {
-                std::env::set_var("HOME", temp_dir.path());
-                std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
-            }
+        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) -> config::ConfigDirOverride {
+            Config::scoped_config_dir_override_for_thread(temp_dir.path().join("vaultwarden-cli"))
         }
 
         fn encrypt_for_interpolate_test(value: &str, crypto_keys: &CryptoKeys) -> String {
@@ -2873,7 +2861,7 @@ mod tests {
         async fn test_interpolate_replaces_placeholders() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
 
@@ -2906,7 +2894,7 @@ mod tests {
         async fn test_interpolate_writes_to_output_file() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
 
@@ -2939,7 +2927,7 @@ mod tests {
         async fn test_interpolate_fails_on_missing_placeholder() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
 
@@ -2974,7 +2962,7 @@ mod tests {
         async fn test_interpolate_skips_missing_placeholders() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
 
@@ -3007,7 +2995,7 @@ mod tests {
         async fn test_interpolate_fails_on_duplicate_item_names() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
             let sync_response = make_sync_response_with_logins(&[
@@ -3042,7 +3030,7 @@ mod tests {
         async fn test_interpolate_fails_on_case_insensitive_duplicate_item_names() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
             let sync_response = make_sync_response_with_logins(&[
@@ -3075,7 +3063,7 @@ mod tests {
         async fn test_interpolate_allows_item_id_to_disambiguate_duplicate_names() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
             let sync_response = make_sync_response_with_logins(&[
@@ -3109,7 +3097,7 @@ mod tests {
         async fn test_interpolate_skip_missing_leaves_ambiguous_placeholder_unchanged() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
             let sync_response = make_sync_response_with_logins(&[
@@ -3146,11 +3134,8 @@ mod tests {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) {
-            unsafe {
-                std::env::set_var("HOME", temp_dir.path());
-                std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
-            }
+        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) -> config::ConfigDirOverride {
+            Config::scoped_config_dir_override_for_thread(temp_dir.path().join("vaultwarden-cli"))
         }
 
         fn make_encrypted_login(
@@ -3218,7 +3203,7 @@ mod tests {
         async fn test_list_no_filters_shows_all_items() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
             let keys = CryptoKeys {
@@ -3276,7 +3261,7 @@ mod tests {
         async fn test_list_with_type_filter() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
             let keys = CryptoKeys {
@@ -3334,7 +3319,7 @@ mod tests {
         async fn test_list_with_search_filter() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
             let keys = CryptoKeys {
@@ -3392,7 +3377,7 @@ mod tests {
         async fn test_list_no_matches() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
             let keys = CryptoKeys {
@@ -3449,7 +3434,7 @@ mod tests {
         async fn test_list_invalid_type_filter_errors() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
             let keys = CryptoKeys {
@@ -3513,11 +3498,8 @@ mod tests {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) {
-            unsafe {
-                std::env::set_var("HOME", temp_dir.path());
-                std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
-            }
+        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) -> config::ConfigDirOverride {
+            Config::scoped_config_dir_override_for_thread(temp_dir.path().join("vaultwarden-cli"))
         }
 
         fn make_encrypted_login(
@@ -3568,7 +3550,7 @@ mod tests {
         async fn test_get_by_id() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
             let keys = CryptoKeys {
@@ -3625,7 +3607,7 @@ mod tests {
         async fn test_get_by_name() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
             let keys = CryptoKeys {
@@ -3682,7 +3664,7 @@ mod tests {
         async fn test_get_not_found() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
             let keys = CryptoKeys {
@@ -3741,11 +3723,8 @@ mod tests {
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) {
-            unsafe {
-                std::env::set_var("HOME", temp_dir.path());
-                std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
-            }
+        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) -> config::ConfigDirOverride {
+            Config::scoped_config_dir_override_for_thread(temp_dir.path().join("vaultwarden-cli"))
         }
 
         fn make_encrypted_login(
@@ -3796,7 +3775,7 @@ mod tests {
         async fn test_get_by_uri_match() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
             let keys = CryptoKeys {
@@ -3853,7 +3832,7 @@ mod tests {
         async fn test_get_by_uri_not_found() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
             let keys = CryptoKeys {
@@ -3916,11 +3895,8 @@ mod tests {
         use wiremock::matchers::{body_string_contains, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
-        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) {
-            unsafe {
-                std::env::set_var("HOME", temp_dir.path());
-                std::env::set_var("XDG_CONFIG_HOME", temp_dir.path());
-            }
+        fn set_temp_config_dir(temp_dir: &tempfile::TempDir) -> config::ConfigDirOverride {
+            Config::scoped_config_dir_override_for_thread(temp_dir.path().join("vaultwarden-cli"))
         }
 
         #[test]
@@ -3962,7 +3938,7 @@ mod tests {
         async fn test_ensure_valid_token_refreshes_successfully() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
             let response = serde_json::json!({
@@ -3999,7 +3975,7 @@ mod tests {
         async fn test_ensure_valid_token_serializes_concurrent_refresh() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
             let response = serde_json::json!({
@@ -4050,7 +4026,7 @@ mod tests {
         async fn test_ensure_valid_token_refresh_failure() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
-            set_temp_config_dir(&temp_dir);
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
 

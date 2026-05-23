@@ -7,21 +7,17 @@ use vaultwarden_cli::config::{self, Config};
 
 #[test]
 fn config_load_fails_for_invalid_config_json() {
-    let _guard = env_lock();
     let ctx = TestContext::new();
-    ctx.set_process_env();
     ctx.write_raw_config("{not-json").unwrap();
 
-    let err = Config::load().expect_err("config load should fail");
+    let err = ctx.load_config().expect_err("config load should fail");
 
     assert!(err.to_string().contains("Failed to parse config"));
 }
 
 #[test]
 fn config_load_ignores_invalid_saved_keys_json() {
-    let _guard = env_lock();
     let ctx = TestContext::new();
-    ctx.set_process_env();
     ctx.write_raw_config(
         r#"{
             "server": "https://vault.example.com"
@@ -30,7 +26,7 @@ fn config_load_ignores_invalid_saved_keys_json() {
     .unwrap();
     ctx.write_raw_keys("{not-json").unwrap();
 
-    let config = Config::load().expect("config load should continue");
+    let config = ctx.load_config().expect("config load should continue");
 
     assert_eq!(config.server.as_deref(), Some("https://vault.example.com"));
     assert!(config.crypto_keys.is_none());
@@ -39,9 +35,7 @@ fn config_load_ignores_invalid_saved_keys_json() {
 
 #[test]
 fn config_load_ignores_invalid_saved_key_base64() {
-    let _guard = env_lock();
     let ctx = TestContext::new();
-    ctx.set_process_env();
     ctx.write_raw_config(
         r#"{
             "server": "https://vault.example.com"
@@ -59,7 +53,7 @@ fn config_load_ignores_invalid_saved_key_base64() {
     )
     .unwrap();
 
-    let config = Config::load().expect("config load should continue");
+    let config = ctx.load_config().expect("config load should continue");
 
     assert_eq!(config.server.as_deref(), Some("https://vault.example.com"));
     assert!(config.crypto_keys.is_none());
@@ -68,17 +62,15 @@ fn config_load_ignores_invalid_saved_key_base64() {
 
 #[test]
 fn config_save_keys_fails_when_config_dir_is_missing() {
-    let _guard = env_lock();
     let ctx = TestContext::new();
-    ctx.set_process_env();
 
-    let config = Config {
+    let config = ctx.scoped_config(Config {
         crypto_keys: Some(vaultwarden_cli::crypto::CryptoKeys {
             enc_key: vec![7u8; 32],
             mac_key: vec![9u8; 32],
         }),
         ..Default::default()
-    };
+    });
 
     let err = config
         .save_keys()
@@ -91,20 +83,19 @@ fn config_save_keys_fails_when_config_dir_is_missing() {
 fn config_save_keys_warns_when_client_id_is_none() {
     let _guard = env_lock();
     let ctx = TestContext::new();
-    ctx.set_process_env();
 
     // Create the config directory so the file fallback can succeed —
     // we want to verify the *warning*, not the file-write failure.
     ctx.create_config_dir();
 
-    let config = Config {
+    let config = ctx.scoped_config(Config {
         // client_id deliberately absent: no keyring account can be formed
         crypto_keys: Some(vaultwarden_cli::crypto::CryptoKeys {
             enc_key: vec![7u8; 32],
             mac_key: vec![9u8; 32],
         }),
         ..Default::default()
-    };
+    });
 
     let _capture = config::capture_warnings();
     config
@@ -127,11 +118,9 @@ fn config_save_keys_warns_when_client_id_is_none() {
 
 #[test]
 fn config_save_keys_round_trips_when_config_dir_exists() {
-    let _guard = env_lock();
     let ctx = TestContext::new();
-    ctx.set_process_env();
 
-    let mut config = Config {
+    let mut config = ctx.scoped_config(Config {
         server: Some("https://vault.example.com".to_string()),
         access_token: Some("token".to_string()),
         crypto_keys: Some(vaultwarden_cli::crypto::CryptoKeys {
@@ -139,7 +128,7 @@ fn config_save_keys_round_trips_when_config_dir_exists() {
             mac_key: vec![2u8; 32],
         }),
         ..Default::default()
-    };
+    });
     config.org_crypto_keys.insert(
         "org-1".to_string(),
         vaultwarden_cli::crypto::CryptoKeys {
@@ -151,7 +140,7 @@ fn config_save_keys_round_trips_when_config_dir_exists() {
     config.save().unwrap();
     config.save_keys().unwrap();
 
-    let loaded = Config::load().unwrap();
+    let loaded = ctx.load_config().unwrap();
 
     let user_keys = loaded.crypto_keys.expect("user keys should load");
     assert_eq!(user_keys.enc_key, vec![1u8; 32]);
@@ -167,11 +156,9 @@ fn config_save_keys_round_trips_when_config_dir_exists() {
 
 #[test]
 fn config_clear_removes_runtime_state_and_saved_keys_but_keeps_server_settings() {
-    let _guard = env_lock();
     let ctx = TestContext::new();
-    ctx.set_process_env();
 
-    let mut config = Config {
+    let mut config = ctx.scoped_config(Config {
         server: Some("https://vault.example.com".to_string()),
         client_id: Some("client-id".to_string()),
         email: Some("user@example.com".to_string()),
@@ -185,7 +172,7 @@ fn config_clear_removes_runtime_state_and_saved_keys_but_keeps_server_settings()
             mac_key: vec![2u8; 32],
         }),
         ..Default::default()
-    };
+    });
     config
         .org_keys
         .insert("org-1".to_string(), "encrypted-org-key".to_string());
@@ -205,7 +192,7 @@ fn config_clear_removes_runtime_state_and_saved_keys_but_keeps_server_settings()
 
     assert!(!ctx.keys_path().exists());
 
-    let loaded = Config::load().unwrap();
+    let loaded = ctx.load_config().unwrap();
     assert_eq!(loaded.server.as_deref(), Some("https://vault.example.com"));
     assert_eq!(loaded.client_id.as_deref(), Some("client-id"));
     assert_eq!(loaded.email.as_deref(), Some("user@example.com"));
@@ -223,17 +210,15 @@ fn config_clear_removes_runtime_state_and_saved_keys_but_keeps_server_settings()
 
 #[test]
 fn config_tokens_not_present_in_config_json_after_save() {
-    let _guard = env_lock();
     let ctx = TestContext::new();
-    ctx.set_process_env();
 
-    let config = Config {
+    let config = ctx.scoped_config(Config {
         server: Some("https://vault.example.com".to_string()),
         access_token: Some("secret-token-abc".to_string()),
         refresh_token: Some("refresh-token-xyz".to_string()),
         token_expiry: Some(9_999_999_999),
         ..Default::default()
-    };
+    });
     config.save().unwrap();
 
     let raw = std::fs::read_to_string(ctx.config_path()).unwrap();
@@ -253,22 +238,20 @@ fn config_tokens_not_present_in_config_json_after_save() {
 
 #[test]
 fn config_save_load_round_trips_tokens() {
-    let _guard = env_lock();
     let ctx = TestContext::new();
-    ctx.set_process_env();
 
-    let config = Config {
+    let config = ctx.scoped_config(Config {
         server: Some("https://vault.example.com".to_string()),
         access_token: Some("round-trip-token".to_string()),
         refresh_token: Some("round-trip-refresh".to_string()),
         token_expiry: Some(1_234_567_890),
         ..Default::default()
-    };
+    });
     // save() calls save_tokens() internally; with client_id=None it falls back
     // to tokens.json (same as save_keys falls back to keys.json).
     config.save().unwrap();
 
-    let loaded = Config::load().unwrap();
+    let loaded = ctx.load_config().unwrap();
     assert_eq!(
         loaded.access_token.as_deref(),
         Some("round-trip-token"),
@@ -288,15 +271,13 @@ fn config_save_load_round_trips_tokens() {
 
 #[test]
 fn config_save_tokens_noops_when_access_token_is_absent() {
-    let _guard = env_lock();
     let ctx = TestContext::new();
-    ctx.set_process_env();
 
-    let config = Config {
+    let config = ctx.scoped_config(Config {
         refresh_token: Some("refresh-without-access".to_string()),
         token_expiry: Some(1_234),
         ..Default::default()
-    };
+    });
 
     config
         .save_tokens()
@@ -310,14 +291,12 @@ fn config_save_tokens_noops_when_access_token_is_absent() {
 
 #[test]
 fn config_save_tokens_fails_when_config_dir_is_missing() {
-    let _guard = env_lock();
     let ctx = TestContext::new();
-    ctx.set_process_env();
 
-    let config = Config {
+    let config = ctx.scoped_config(Config {
         access_token: Some("token".to_string()),
         ..Default::default()
-    };
+    });
 
     let err = config
         .save_tokens()
@@ -328,9 +307,7 @@ fn config_save_tokens_fails_when_config_dir_is_missing() {
 
 #[test]
 fn config_load_ignores_invalid_saved_tokens_json() {
-    let _guard = env_lock();
     let ctx = TestContext::new();
-    ctx.set_process_env();
     ctx.write_raw_config(
         r#"{
             "server": "https://vault.example.com"
@@ -339,7 +316,7 @@ fn config_load_ignores_invalid_saved_tokens_json() {
     .unwrap();
     std::fs::write(ctx.tokens_path(), "{not-json").unwrap();
 
-    let config = Config::load().expect("config load should continue");
+    let config = ctx.load_config().expect("config load should continue");
 
     assert_eq!(config.server.as_deref(), Some("https://vault.example.com"));
     assert!(config.access_token.is_none());
@@ -349,13 +326,11 @@ fn config_load_ignores_invalid_saved_tokens_json() {
 
 #[test]
 fn config_load_saved_tokens_reports_malformed_file() {
-    let _guard = env_lock();
     let ctx = TestContext::new();
-    ctx.set_process_env();
     ctx.create_config_dir();
     std::fs::write(ctx.tokens_path(), "{not-json").unwrap();
 
-    let mut config = Config::default();
+    let mut config = Config::default().with_config_dir(ctx.config_dir());
     let err = config
         .load_saved_tokens()
         .expect_err("direct token load should report malformed persisted state");
@@ -365,16 +340,14 @@ fn config_load_saved_tokens_reports_malformed_file() {
 
 #[test]
 fn config_clear_removes_tokens() {
-    let _guard = env_lock();
     let ctx = TestContext::new();
-    ctx.set_process_env();
 
-    let mut config = Config {
+    let mut config = ctx.scoped_config(Config {
         server: Some("https://vault.example.com".to_string()),
         access_token: Some("to-be-cleared".to_string()),
         refresh_token: Some("refresh-to-be-cleared".to_string()),
         ..Default::default()
-    };
+    });
     config.save().unwrap(); // persists tokens to tokens.json (no keyring in tests)
 
     assert!(
@@ -389,7 +362,7 @@ fn config_clear_removes_tokens() {
         "tokens.json should be removed after clear"
     );
 
-    let loaded = Config::load().unwrap();
+    let loaded = ctx.load_config().unwrap();
     assert!(
         loaded.access_token.is_none(),
         "access_token should be absent after clear"

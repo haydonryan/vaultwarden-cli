@@ -45,6 +45,12 @@ impl TestContext {
         self.root().join("config-root")
     }
 
+    /// Point this process at the context's config directory.
+    ///
+    /// Prefer `Config::load_from_dir`, `TestContext::scoped_config`, or
+    /// `TestContext::binary`, which avoid process-global mutation. This helper
+    /// remains only for tests that must exercise environment-based discovery;
+    /// callers must hold `env_lock()` for the full mutation window.
     pub fn set_process_env(&self) {
         std::fs::create_dir_all(self.home_dir()).expect("create home dir");
         std::fs::create_dir_all(self.config_root()).expect("create config root");
@@ -71,15 +77,23 @@ impl TestContext {
     }
 
     pub fn config_path(&self) -> PathBuf {
-        self.config_dir().join("config.json")
+        Config::config_path_in(self.config_dir())
     }
 
     pub fn keys_path(&self) -> PathBuf {
-        self.config_dir().join("keys.json")
+        Config::keys_path_in(self.config_dir())
     }
 
     pub fn tokens_path(&self) -> PathBuf {
-        self.config_dir().join("tokens.json")
+        Config::tokens_path_in(self.config_dir())
+    }
+
+    pub fn scoped_config(&self, config: Config) -> Config {
+        config.with_config_dir(self.config_dir())
+    }
+
+    pub fn load_config(&self) -> Result<Config> {
+        Config::load_from_dir(self.config_dir())
     }
 
     pub fn write_config(&self, config: &Config) -> Result<()> {

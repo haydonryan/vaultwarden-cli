@@ -29,15 +29,13 @@ mod restrictive_file_permissions {
 
     #[test]
     fn config_file_is_owner_readable_and_writable_only() {
-        let _guard = env_lock();
         let ctx = TestContext::new();
-        ctx.set_process_env();
 
-        let config = Config {
+        let config = ctx.scoped_config(Config {
             server: Some("https://vault.example.com".to_string()),
             access_token: Some("secret-token".to_string()),
             ..Default::default()
-        };
+        });
         config.save().unwrap();
 
         let mode = fs::metadata(ctx.config_path())
@@ -56,15 +54,13 @@ mod restrictive_file_permissions {
 
     #[test]
     fn config_directory_is_owner_accessible_only() {
-        let _guard = env_lock();
         let ctx = TestContext::new();
-        ctx.set_process_env();
 
-        let config = Config {
+        let config = ctx.scoped_config(Config {
             server: Some("https://vault.example.com".to_string()),
             access_token: Some("secret-token".to_string()),
             ..Default::default()
-        };
+        });
         config.save().unwrap();
 
         let mode = fs::metadata(ctx.config_dir())
@@ -82,12 +78,10 @@ mod restrictive_file_permissions {
 
     #[test]
     fn keys_file_is_owner_readable_and_writable_only_when_stored_on_disk() {
-        let _guard = env_lock();
         let ctx = TestContext::new();
-        ctx.set_process_env();
 
         // Create config without client_id so keyring path is skipped (fallback to file)
-        let config = Config {
+        let config = ctx.scoped_config(Config {
             server: Some("https://vault.example.com".to_string()),
             access_token: Some("token".to_string()),
             crypto_keys: Some(CryptoKeys {
@@ -96,7 +90,7 @@ mod restrictive_file_permissions {
             }),
             // No client_id — forces file fallback
             ..Default::default()
-        };
+        });
         config.save().unwrap();
         config.save_keys().unwrap();
 
@@ -388,9 +382,7 @@ mod interpolation_output_permissions {
 
     #[test]
     fn interpolation_output_is_owner_readable_and_writable_only() {
-        let _guard = env_lock();
         let ctx = TestContext::new();
-        ctx.set_process_env();
 
         let output_path = ctx.root().join("output.yaml");
 

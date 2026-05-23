@@ -3,13 +3,14 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use directories::ProjectDirs;
 use keyring_core::Entry;
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 #[cfg(unix)]
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::crypto::CryptoKeys;
 
@@ -27,6 +28,9 @@ use crate::crypto::CryptoKeys;
 // without the `test` cfg flag).
 
 static WARN_CAPTURE: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
+thread_local! {
+    static CONFIG_DIR_OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
 
 /// Emit a warning.  In normal operation this prints to stderr.  While a
 /// [`WarnCapture`] guard is active the message is recorded in its buffer
@@ -76,6 +80,16 @@ impl WarnCapture {
 impl Drop for WarnCapture {
     fn drop(&mut self) {
         *WARN_CAPTURE.lock().expect("WARN_CAPTURE poisoned") = None;
+    }
+}
+
+pub struct ConfigDirOverride {
+    _private: (),
+}
+
+impl Drop for ConfigDirOverride {
+    fn drop(&mut self) {
+        Config::clear_config_dir_override_for_process();
     }
 }
 
@@ -181,13 +195,49 @@ pub struct Config {
     // Decrypted organization keys: org_id -> keys
     #[serde(skip)]
     pub org_crypto_keys: HashMap<String, CryptoKeys>,
+    // Test and embedded callers can pin config I/O to an explicit directory
+    // instead of mutating process-global HOME/XDG_CONFIG_HOME.
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub config_dir_override: Option<PathBuf>,
 }
 
 impl Config {
     pub fn config_dir() -> Result<PathBuf> {
+        if let Some(path) = CONFIG_DIR_OVERRIDE.with(|override_dir| override_dir.borrow().clone()) {
+            return Ok(path);
+        }
+
         ProjectDirs::from("com", "vaultwarden", "vaultwarden-cli")
             .map(|dirs| dirs.config_dir().to_path_buf())
             .context("Failed to determine config directory")
+    }
+
+    /// Override this thread's config directory used by static path lookups.
+    ///
+    /// This is intended for tests around CLI entrypoints whose production code
+    /// must call [`Config::load`]. Callers must serialize use externally and
+    /// call [`clear_config_dir_override_for_process`] before releasing that
+    /// lock when other tests on the same thread may call static path helpers.
+    pub fn set_config_dir_override_for_process(config_dir: impl Into<PathBuf>) {
+        CONFIG_DIR_OVERRIDE.with(|override_dir| {
+            override_dir.replace(Some(config_dir.into()));
+        });
+    }
+
+    pub fn scoped_config_dir_override_for_thread(
+        config_dir: impl Into<PathBuf>,
+    ) -> ConfigDirOverride {
+        Self::set_config_dir_override_for_process(config_dir);
+        ConfigDirOverride { _private: () }
+    }
+
+    /// Clear a thread-local config directory override set by
+    /// [`set_config_dir_override_for_process`].
+    pub fn clear_config_dir_override_for_process() {
+        CONFIG_DIR_OVERRIDE.with(|override_dir| {
+            override_dir.replace(None);
+        });
     }
 
     pub fn config_path() -> Result<PathBuf> {
@@ -207,12 +257,18 @@ impl Config {
     }
 
     pub fn load() -> Result<Self> {
-        let path = Self::config_path()?;
+        Self::load_from_dir(Self::config_dir()?)
+    }
+
+    pub fn load_from_dir(config_dir: impl Into<PathBuf>) -> Result<Self> {
+        let config_dir = config_dir.into();
+        let path = config_dir.join("config.json");
         if path.exists() {
             let content = fs::read_to_string(&path)
                 .with_context(|| format!("Failed to read config from {path:?}"))?;
             let mut config: Self =
                 serde_json::from_str(&content).context("Failed to parse config")?;
+            config.config_dir_override = Some(config_dir);
 
             // Try to load saved keys
             if let Err(_err) = config.load_saved_keys() {
@@ -224,12 +280,52 @@ impl Config {
 
             Ok(config)
         } else {
-            Ok(Self::default())
+            Ok(Self::default().with_config_dir(config_dir))
         }
     }
 
+    #[must_use]
+    pub fn with_config_dir(mut self, config_dir: impl Into<PathBuf>) -> Self {
+        self.config_dir_override = Some(config_dir.into());
+        self
+    }
+
+    fn effective_config_dir(&self) -> Result<PathBuf> {
+        self.config_dir_override
+            .clone()
+            .map_or_else(Self::config_dir, Ok)
+    }
+
+    fn config_file_path(&self) -> Result<PathBuf> {
+        Ok(self.effective_config_dir()?.join("config.json"))
+    }
+
+    fn keys_file_path(&self) -> Result<PathBuf> {
+        Ok(self.effective_config_dir()?.join("keys.json"))
+    }
+
+    fn tokens_file_path(&self) -> Result<PathBuf> {
+        Ok(self.effective_config_dir()?.join("tokens.json"))
+    }
+
+    pub fn token_refresh_lock_file_path(&self) -> Result<PathBuf> {
+        Ok(self.effective_config_dir()?.join("token-refresh.lock"))
+    }
+
+    pub fn config_path_in(config_dir: impl AsRef<Path>) -> PathBuf {
+        config_dir.as_ref().join("config.json")
+    }
+
+    pub fn keys_path_in(config_dir: impl AsRef<Path>) -> PathBuf {
+        config_dir.as_ref().join("keys.json")
+    }
+
+    pub fn tokens_path_in(config_dir: impl AsRef<Path>) -> PathBuf {
+        config_dir.as_ref().join("tokens.json")
+    }
+
     pub fn save(&self) -> Result<()> {
-        let path = Self::config_path()?;
+        let path = self.config_file_path()?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create config directory {parent:?}"))?;
@@ -311,7 +407,7 @@ impl Config {
             match entry.set_password(&content) {
                 Ok(()) => {
                     // Remove legacy keys.json if it exists
-                    let path = Self::keys_path()?;
+                    let path = self.keys_file_path()?;
                     if path.exists() {
                         drop(fs::remove_file(&path));
                     }
@@ -331,7 +427,7 @@ impl Config {
         //   • keyring entry creation failed
         //   • keyring set_password failed
         // write_secure uses fchmod-via-fd to avoid the TOCTOU race.
-        let path = Self::keys_path()?;
+        let path = self.keys_file_path()?;
         write_secure(&path, content.as_bytes())?;
         Ok(())
     }
@@ -354,7 +450,7 @@ impl Config {
         }
 
         // Fallback: read from file (legacy)
-        let path = Self::keys_path()?;
+        let path = self.keys_file_path()?;
         if path.exists() {
             let content = fs::read_to_string(&path)?;
             let saved: SavedKeys = serde_json::from_str(&content)?;
@@ -380,7 +476,7 @@ impl Config {
         }
 
         // Also remove legacy keys.json if it exists
-        let path = Self::keys_path()?;
+        let path = self.keys_file_path()?;
         if path.exists() {
             fs::remove_file(&path)?;
         }
@@ -426,7 +522,7 @@ impl Config {
             match entry.set_password(&content) {
                 Ok(()) => {
                     // Remove tokens.json if it exists (keyring is now authoritative)
-                    let path = Self::tokens_path()?;
+                    let path = self.tokens_file_path()?;
                     if path.exists() {
                         drop(fs::remove_file(&path));
                     }
@@ -442,7 +538,7 @@ impl Config {
         }
 
         // File fallback — write_secure uses fchmod-via-fd to avoid the TOCTOU race.
-        let path = Self::tokens_path()?;
+        let path = self.tokens_file_path()?;
         write_secure(&path, content.as_bytes())?;
         Ok(())
     }
@@ -461,7 +557,7 @@ impl Config {
         }
 
         // Fallback: read from file
-        let path = Self::tokens_path()?;
+        let path = self.tokens_file_path()?;
         if path.exists() {
             let content = fs::read_to_string(&path)?;
             let saved: SavedTokens = serde_json::from_str(&content)?;
@@ -481,7 +577,7 @@ impl Config {
         }
 
         // Also remove tokens.json if it exists
-        let path = Self::tokens_path()?;
+        let path = self.tokens_file_path()?;
         if path.exists() {
             fs::remove_file(&path)?;
         }
