@@ -1006,10 +1006,16 @@ fn format_cipher_output(output: &CipherOutput, format: &str) -> Result<String> {
     match format {
         "json" => Ok(serde_json::to_string_pretty(output)?),
         "env" => {
-            let lines: String = cipher_to_env_vars(output)
+            let lines = cipher_to_env_vars(output)
                 .into_iter()
-                .map(|(name, value)| format!("export {}=\"{}\"\n", name, escape_value(&value)))
-                .collect();
+                .map(|(name, value)| {
+                    Ok(format!(
+                        "export {}={}\n",
+                        name,
+                        shell_quote_env_value(&value)?
+                    ))
+                })
+                .collect::<Result<String>>()?;
             Ok(lines)
         }
         "value" | "password" => get_field_string(&output.password, "password"),
@@ -1036,15 +1042,12 @@ fn sanitize_env_name(name: &str) -> String {
         .collect()
 }
 
-fn escape_value(value: &str) -> String {
-    let mut result = String::with_capacity(value.len());
-    for c in value.chars() {
-        if matches!(c, '\\' | '"' | '$' | '`') {
-            result.push('\\');
-        }
-        result.push(c);
+fn shell_quote_env_value(value: &str) -> Result<String> {
+    if value.contains('\0') {
+        anyhow::bail!("env output cannot represent values containing NUL bytes");
     }
-    result
+
+    Ok(format!("'{}'", value.replace('\'', "'\\''")))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1374,61 +1377,69 @@ mod tests {
         }
     }
 
-    // Tests for escape_value
-    mod escape_value_tests {
+    mod shell_quote_env_value_tests {
         use super::*;
 
         #[test]
         fn test_no_escaping_needed() {
-            assert_eq!(escape_value("simple"), "simple");
-            assert_eq!(escape_value("hello world"), "hello world");
-        }
-
-        #[test]
-        fn test_escape_backslash() {
-            assert_eq!(escape_value("path\\to\\file"), "path\\\\to\\\\file");
-        }
-
-        #[test]
-        fn test_escape_double_quote() {
-            assert_eq!(escape_value("say \"hello\""), "say \\\"hello\\\"");
-        }
-
-        #[test]
-        fn test_escape_dollar_sign() {
-            assert_eq!(escape_value("$HOME"), "\\$HOME");
-            assert_eq!(escape_value("cost: $100"), "cost: \\$100");
-        }
-
-        #[test]
-        fn test_escape_backtick() {
-            assert_eq!(escape_value("`command`"), "\\`command\\`");
-        }
-
-        #[test]
-        fn test_multiple_escapes() {
+            assert_eq!(shell_quote_env_value("simple").unwrap(), "'simple'");
             assert_eq!(
-                escape_value("echo \"$HOME\" `pwd`"),
-                "echo \\\"\\$HOME\\\" \\`pwd\\`"
+                shell_quote_env_value("hello world").unwrap(),
+                "'hello world'"
+            );
+        }
+
+        #[test]
+        fn test_quotes_shell_sensitive_bytes_without_expansion() {
+            assert_eq!(
+                shell_quote_env_value("path\\to\\file \"$HOME\" `pwd`").unwrap(),
+                "'path\\to\\file \"$HOME\" `pwd`'"
+            );
+        }
+
+        #[test]
+        fn test_escapes_single_quotes() {
+            assert_eq!(
+                shell_quote_env_value("can't stop").unwrap(),
+                "'can'\\''t stop'"
+            );
+        }
+
+        #[test]
+        fn test_preserves_multiline_and_carriage_return_values() {
+            assert_eq!(
+                shell_quote_env_value("line one\nline two\rline three").unwrap(),
+                "'line one\nline two\rline three'"
             );
         }
 
         #[test]
         fn test_empty_string() {
-            assert_eq!(escape_value(""), "");
+            assert_eq!(shell_quote_env_value("").unwrap(), "''");
         }
 
         #[test]
-        fn test_complex_password() {
-            // A realistic complex password with special characters
-            assert_eq!(escape_value("P@ss\"word$123`!"), "P@ss\\\"word\\$123\\`!");
+        fn test_rejects_nul() {
+            let err = shell_quote_env_value("before\0after").unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("env output cannot represent values containing NUL bytes")
+            );
         }
 
         #[test]
-        fn test_shell_injection_attempt() {
-            // Ensure potential shell injection is safely escaped
-            assert_eq!(escape_value("$(rm -rf /)"), "\\$(rm -rf /)");
-            assert_eq!(escape_value("`rm -rf /`"), "\\`rm -rf /\\`");
+        #[cfg(unix)]
+        fn test_export_assignment_round_trips_through_shell() {
+            let value = "quote ' dollar $HOME backslash \\ newline\ncarriage\r backtick `pwd`";
+            let assignment = format!("export SECRET={}", shell_quote_env_value(value).unwrap());
+            let output = Command::new("sh")
+                .arg("-c")
+                .arg(format!("{assignment}; printf %s \"$SECRET\""))
+                .output()
+                .unwrap();
+
+            assert!(output.status.success());
+            assert_eq!(output.stdout, value.as_bytes());
         }
     }
 
@@ -4238,10 +4249,76 @@ mod tests {
         fn test_format_cipher_output_env() {
             let output = sample_output();
             let env = format_cipher_output(&output, "env").unwrap();
-            assert!(env.contains("export MY_APP_URI=\"https://example.com\"\n"));
-            assert!(env.contains("export MY_APP_USERNAME=\"user\"\n"));
-            assert!(env.contains("export MY_APP_PASSWORD=\"pass\"\n"));
-            assert!(env.contains("export MY_APP_API_TOKEN=\"tok-123\"\n"));
+            assert!(env.contains("export MY_APP_URI='https://example.com'\n"));
+            assert!(env.contains("export MY_APP_USERNAME='user'\n"));
+            assert!(env.contains("export MY_APP_PASSWORD='pass'\n"));
+            assert!(env.contains("export MY_APP_API_TOKEN='tok-123'\n"));
+        }
+
+        #[test]
+        fn test_format_cipher_output_env_shell_quotes_sensitive_values() {
+            let output = CipherOutput {
+                password: Some("double \" dollar $ backslash \\ backtick `".to_string()),
+                notes: Some("line one\nline two\rline three".to_string()),
+                fields: Some(vec![FieldOutput {
+                    name: "quote".to_string(),
+                    value: "can't stop".to_string(),
+                    hidden: true,
+                }]),
+                ..sample_output()
+            };
+
+            let env = format_cipher_output(&output, "env").unwrap();
+
+            assert!(
+                env.contains(
+                    "export MY_APP_PASSWORD='double \" dollar $ backslash \\ backtick `'\n"
+                )
+            );
+            assert!(env.contains("export MY_APP_QUOTE='can'\\''t stop'\n"));
+        }
+
+        #[test]
+        fn test_format_cipher_output_env_preserves_multiline_values() {
+            let output = CipherOutput {
+                password: Some("line one\nline two\rline three".to_string()),
+                fields: None,
+                ..sample_output()
+            };
+
+            let env = format_cipher_output(&output, "env").unwrap();
+
+            assert!(env.contains("export MY_APP_PASSWORD='line one\nline two\rline three'\n"));
+        }
+
+        #[test]
+        fn test_format_cipher_output_env_rejects_nul_values() {
+            let output = CipherOutput {
+                password: Some("before\0after".to_string()),
+                fields: None,
+                ..sample_output()
+            };
+
+            let err = format_cipher_output(&output, "env").unwrap_err();
+
+            assert!(
+                err.to_string()
+                    .contains("env output cannot represent values containing NUL bytes")
+            );
+        }
+
+        #[test]
+        fn test_cipher_to_env_vars_keeps_raw_values_for_direct_injection() {
+            let raw = "line one\nline two\rquote ' dollar $ backslash \\ NUL \0 end";
+            let output = CipherOutput {
+                password: Some(raw.to_string()),
+                fields: None,
+                ..sample_output()
+            };
+
+            let vars = cipher_to_env_vars(&output);
+
+            assert!(vars.contains(&("MY_APP_PASSWORD".to_string(), raw.to_string())));
         }
 
         #[test]
