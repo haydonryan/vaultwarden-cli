@@ -18,6 +18,9 @@ coverage:
     test -s "$RUN_ROOT/out/tarpaulin-report.json"
     echo "coverage report: $RUN_ROOT/out/tarpaulin-report.json"
 
+benchmark:
+    cargo bench
+
 pre-commit:
     #!/usr/bin/env bash
     set -euo pipefail

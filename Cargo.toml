@@ -40,7 +40,11 @@ rand = "0.10"
 rand_core = "0.10"
 assert_cmd = "2.2"
 predicates = "3.1"
+criterion = "0.7"
 
+[[bench]]
+name = "vaultwarden_cli_bench"
+harness = false
 
 [package.metadata.release]
 allow-branch = ["main", "master"]
