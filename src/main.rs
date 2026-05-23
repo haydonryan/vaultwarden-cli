@@ -226,11 +226,14 @@ async fn main() {
     }
 }
 
-fn result_exit_code(result: &Result<()>) -> i32 {
-    if result.is_ok() { 0 } else { 1 }
+fn result_exit_code(result: &Result<commands::CommandOutcome>) -> i32 {
+    match result {
+        Ok(outcome) => outcome.exit_code(),
+        Err(_) => 1,
+    }
 }
 
-async fn run_cli(cli: Cli) -> Result<()> {
+async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
     // Propagate global security flags to library code
     vaultwarden_cli::crypto::set_allow_insecure_mac(cli.allow_insecure_mac);
 
@@ -241,17 +244,27 @@ async fn run_cli(cli: Cli) -> Result<()> {
             server,
             client_id,
             client_secret,
-        } => commands::login(server, client_id, client_secret, &opts).await,
-        Commands::Unlock { password } => commands::unlock(password, &opts).await,
-        Commands::Lock => commands::lock().await,
-        Commands::Logout => commands::logout().await,
+        } => commands::login(server, client_id, client_secret, &opts)
+            .await
+            .map(|()| commands::CommandOutcome::Success),
+        Commands::Unlock { password } => commands::unlock(password, &opts)
+            .await
+            .map(|()| commands::CommandOutcome::Success),
+        Commands::Lock => commands::lock()
+            .await
+            .map(|()| commands::CommandOutcome::Success),
+        Commands::Logout => commands::logout()
+            .await
+            .map(|()| commands::CommandOutcome::Success),
         Commands::List {
             r#type,
             search,
             org,
             collection,
             json,
-        } => commands::list(r#type, search, org, collection, json, &opts).await,
+        } => commands::list(r#type, search, org, collection, json, &opts)
+            .await
+            .map(|()| commands::CommandOutcome::Success),
         Commands::Get {
             item,
             format,
@@ -259,16 +272,15 @@ async fn run_cli(cli: Cli) -> Result<()> {
             password,
             org,
             collection,
-        } => {
-            commands::get(
-                &item,
-                effective_format(&format, username, password),
-                org,
-                collection,
-                &opts,
-            )
-            .await
-        }
+        } => commands::get(
+            &item,
+            effective_format(&format, username, password),
+            org,
+            collection,
+            &opts,
+        )
+        .await
+        .map(|()| commands::CommandOutcome::Success),
         Commands::GetUri {
             uri,
             format,
@@ -276,16 +288,15 @@ async fn run_cli(cli: Cli) -> Result<()> {
             password,
             org,
             collection,
-        } => {
-            commands::get_by_uri(
-                &uri,
-                effective_format(&format, username, password),
-                org,
-                collection,
-                &opts,
-            )
-            .await
-        }
+        } => commands::get_by_uri(
+            &uri,
+            effective_format(&format, username, password),
+            org,
+            collection,
+            &opts,
+        )
+        .await
+        .map(|()| commands::CommandOutcome::Success),
         Commands::Run {
             name,
             item,
@@ -316,12 +327,16 @@ async fn run_cli(cli: Cli) -> Result<()> {
         Commands::RunUri { uri, info, command } => {
             commands::run_with_secrets(&[uri], true, None, None, None, info, &command, &opts).await
         }
-        Commands::Status => commands::status().await,
+        Commands::Status => commands::status()
+            .await
+            .map(|()| commands::CommandOutcome::Success),
         Commands::Interpolate {
             file,
             output,
             skip_missing,
-        } => commands::interpolate(&file, output.as_deref(), skip_missing, &opts).await,
+        } => commands::interpolate(&file, output.as_deref(), skip_missing, &opts)
+            .await
+            .map(|()| commands::CommandOutcome::Success),
     }
 }
 
@@ -389,12 +404,22 @@ mod tests {
 
     #[test]
     fn test_result_exit_code_success() {
-        assert_eq!(result_exit_code(&Ok(())), 0);
+        assert_eq!(result_exit_code(&Ok(commands::CommandOutcome::Success)), 0);
     }
 
     #[test]
     fn test_result_exit_code_error() {
         assert_eq!(result_exit_code(&Err(anyhow::anyhow!("failure"))), 1);
+    }
+
+    #[test]
+    fn test_result_exit_code_child_status() {
+        let status = std::process::Command::new("false").status().unwrap();
+
+        assert_eq!(
+            result_exit_code(&Ok(commands::CommandOutcome::ChildExit(status))),
+            1
+        );
     }
 
     #[tokio::test]

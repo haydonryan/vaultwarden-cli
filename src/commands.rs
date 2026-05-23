@@ -4,7 +4,7 @@ use regex::Regex;
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, IsTerminal, Write};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 use std::str::FromStr;
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH}; // used by unix_now()
@@ -84,6 +84,22 @@ pub struct CommandOptions {
     /// Whether stdout should be treated as an interactive terminal for
     /// plaintext JSON output policy.
     pub json_stdout_is_terminal: bool,
+}
+
+#[derive(Debug)]
+pub enum CommandOutcome {
+    Success,
+    ChildExit(ExitStatus),
+}
+
+impl CommandOutcome {
+    #[must_use]
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            Self::Success => 0,
+            Self::ChildExit(status) => status.code().unwrap_or(1),
+        }
+    }
 }
 
 impl CommandOptions {
@@ -1134,7 +1150,7 @@ pub async fn run_with_secrets(
     info_only: bool,
     command: &[String],
     opts: &CommandOptions,
-) -> Result<()> {
+) -> Result<CommandOutcome> {
     if !search_by_uri
         && requested_items.is_empty()
         && org_filter.is_none()
@@ -1269,7 +1285,7 @@ pub async fn run_with_secrets(
         for (name, _) in &env_vars {
             println!("  {name}");
         }
-        return Ok(());
+        return Ok(CommandOutcome::Success);
     }
 
     // Require a command if not info_only
@@ -1306,12 +1322,11 @@ pub async fn run_with_secrets(
         .status()
         .with_context(|| format!("Failed to execute command: {}", command[0]))?;
 
-    // Exit with the same code as the child process
-    if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
-    }
-
-    Ok(())
+    Ok(if status.success() {
+        CommandOutcome::Success
+    } else {
+        CommandOutcome::ChildExit(status)
+    })
 }
 
 #[cfg(test)]
@@ -2855,6 +2870,38 @@ mod tests {
             };
             config.save().unwrap();
             config.save_keys().unwrap();
+        }
+
+        #[tokio::test]
+        async fn test_run_with_secrets_returns_child_exit_without_terminating_caller() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            mount_sync_response(&mock_server, make_sync_response_with_one_login()).await;
+            save_unlocked_test_config(&mock_server);
+
+            let outcome = run_with_secrets(
+                &[String::from("MyLogin")],
+                false,
+                None,
+                None,
+                None,
+                false,
+                &[String::from("false")],
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("run_with_secrets should return child status");
+
+            match outcome {
+                CommandOutcome::ChildExit(status) => assert_eq!(status.code(), Some(1)),
+                CommandOutcome::Success => panic!("expected child failure status"),
+            }
         }
 
         #[tokio::test]
