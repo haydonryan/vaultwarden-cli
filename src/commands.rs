@@ -161,7 +161,9 @@ pub async fn login(
     // Calculate token expiry
     let expiry = token_expiry_from_lifetime(unix_now()?, token_response.expires_in)?;
 
-    // Save configuration
+    // Stage configuration in memory. Persist only after the post-login sync
+    // succeeds, so a token success followed by sync failure cannot leave a
+    // partially logged-in session on disk.
     config.server = Some(server);
     config.client_id = Some(client_id.clone());
     config.access_token = Some(token_response.access_token.clone());
@@ -169,7 +171,6 @@ pub async fn login(
     config.token_expiry = Some(expiry);
     config.encrypted_key = token_response.key;
     config.kdf_iterations = token_response.kdf_iterations;
-    config.save()?;
 
     // Fetch profile to get email for key derivation
     let sync_response = api.sync(&token_response.access_token).await?;
@@ -177,6 +178,7 @@ pub async fn login(
     config.encrypted_private_key = sync_response.profile.private_key.clone();
 
     // Store organization keys
+    config.org_keys.clear();
     for org in &sync_response.profile.organizations {
         if let Some(key) = &org.key {
             config.org_keys.insert(org.id.clone(), key.clone());
@@ -2205,6 +2207,52 @@ mod tests {
             let token_expiry = config.token_expiry.unwrap();
             assert!(token_expiry >= before_login + 3600);
             assert!(token_expiry <= unix_now().unwrap() + 3600);
+        }
+
+        #[tokio::test]
+        async fn test_login_sync_failure_does_not_persist_logged_in_session() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+
+            mount_reachable_server(&mock_server).await;
+            mount_login_token_response(&mock_server, 3600).await;
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(500).set_body_string("sync failed"))
+                .expect(1)
+                .mount(&mock_server)
+                .await;
+
+            let result = login(
+                Some(mock_server.uri()),
+                Some("test-client".to_string()),
+                Some("test-secret".to_string()),
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    allow_plaintext_json: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            assert!(result.is_err());
+
+            let config = Config::load().unwrap();
+            assert!(!config.is_logged_in());
+            assert!(config.server.is_none());
+            assert!(config.client_id.is_none());
+            assert!(config.access_token.is_none());
+            assert!(config.refresh_token.is_none());
+            assert!(config.token_expiry.is_none());
+            assert!(config.email.is_none());
+            assert!(config.encrypted_key.is_none());
+            assert!(config.encrypted_private_key.is_none());
+            assert!(config.org_keys.is_empty());
+            assert!(!Config::tokens_path().unwrap().exists());
         }
 
         async fn assert_login_rejects_invalid_expires_in(expires_in: i64) {
