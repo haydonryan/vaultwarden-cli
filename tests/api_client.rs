@@ -126,6 +126,55 @@ async fn api_client_login_surfaces_non_success_responses() {
 }
 
 #[tokio::test]
+async fn api_client_error_bodies_are_bounded_and_marked_truncated() {
+    let mock_server = MockServer::start().await;
+    let body = format!("{}TAIL-SHOULD-NOT-APPEAR", "A".repeat(5000));
+
+    Mock::given(method("POST"))
+        .and(path("/identity/connect/token"))
+        .respond_with(ResponseTemplate::new(500).set_body_string(body))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::new_with_flags(&mock_server.uri(), true).unwrap();
+    let err = client
+        .login("bad-client", "bad-secret")
+        .await
+        .expect_err("login should fail");
+
+    let message = err.to_string();
+    assert!(message.contains("Login failed (500 Internal Server Error)"));
+    assert!(message.contains("[truncated after 4096 bytes]"));
+    assert!(!message.contains("TAIL-SHOULD-NOT-APPEAR"));
+}
+
+#[tokio::test]
+async fn api_client_error_bodies_escape_control_characters() {
+    let mock_server = MockServer::start().await;
+    let body = "bad\u{1b}[31m\nline\u{0}end";
+
+    Mock::given(method("GET"))
+        .and(path("/api/sync"))
+        .respond_with(ResponseTemplate::new(503).set_body_string(body))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::new_with_flags(&mock_server.uri(), true).unwrap();
+    let err = client
+        .sync("access-token")
+        .await
+        .expect_err("sync should fail");
+
+    let message = err.to_string();
+    assert!(message.contains("Sync failed (503 Service Unavailable)"));
+    assert!(message.contains(r"bad\u{1b}[31m\nline\u{0}end"));
+    assert!(!message.contains('\u{1b}'));
+    assert!(!message.contains('\0'));
+}
+
+#[tokio::test]
 async fn api_client_login_reports_malformed_json() {
     let mock_server = MockServer::start().await;
 

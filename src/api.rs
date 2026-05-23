@@ -1,7 +1,46 @@
 use crate::config::Config;
 use crate::models::{CipherListResponse, SyncResponse, TokenResponse};
 use anyhow::{Context, Result};
-use reqwest::Client;
+use reqwest::{Client, Response};
+
+const API_ERROR_BODY_LIMIT_BYTES: usize = 4096;
+
+fn sanitize_error_body_snippet(body: &str) -> String {
+    body.chars().flat_map(char::escape_default).collect()
+}
+
+async fn bounded_error_body_snippet(mut response: Response) -> String {
+    let mut body = Vec::new();
+    let mut truncated = false;
+
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                let remaining = API_ERROR_BODY_LIMIT_BYTES.saturating_sub(body.len());
+                if remaining == 0 {
+                    truncated = true;
+                    break;
+                }
+                if chunk.len() > remaining {
+                    body.extend_from_slice(&chunk[..remaining]);
+                    truncated = true;
+                    break;
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(err) => return format!("<failed to read error response body: {err}>"),
+        }
+    }
+
+    let snippet = String::from_utf8_lossy(&body);
+    let sanitized = sanitize_error_body_snippet(&snippet);
+    if truncated {
+        format!("{sanitized} [truncated after {API_ERROR_BODY_LIMIT_BYTES} bytes]")
+    } else {
+        sanitized
+    }
+}
 
 pub struct ApiClient {
     client: Client,
@@ -161,7 +200,7 @@ impl ApiClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = bounded_error_body_snippet(response).await;
             anyhow::bail!("{error_prefix} failed ({status}): {body}");
         }
 
@@ -190,7 +229,7 @@ impl ApiClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = bounded_error_body_snippet(response).await;
             anyhow::bail!("{error_prefix} failed ({status}): {body}");
         }
 
