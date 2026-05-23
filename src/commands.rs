@@ -513,6 +513,50 @@ fn find_cipher_output(
     None
 }
 
+fn ambiguous_item_name_message(raw_name: &str, count: usize) -> String {
+    format!(
+        "item name '{raw_name}' is ambiguous; {count} vault items match case-insensitively. Use an item id to disambiguate."
+    )
+}
+
+fn find_cipher_output_by_name_or_id(
+    ciphers: &[Cipher],
+    config: &Config,
+    name_or_id: &str,
+    matches_filters: impl Fn(&Cipher) -> bool,
+) -> Result<CipherOutput> {
+    if let Some(cipher) = ciphers
+        .iter()
+        .find(|c| c.id == name_or_id && matches_filters(c))
+    {
+        let keys = get_cipher_keys(config, cipher)?;
+        return decrypt_cipher(cipher, keys);
+    }
+
+    let name_lower = name_or_id.to_lowercase();
+    let mut matching_outputs = Vec::new();
+    for cipher in ciphers {
+        if !matches_filters(cipher) {
+            continue;
+        }
+        let keys = match get_cipher_keys(config, cipher) {
+            Ok(k) => k,
+            Err(_) => continue,
+        };
+        if let Ok(output) = decrypt_cipher(cipher, keys)
+            && output.name.to_lowercase() == name_lower
+        {
+            matching_outputs.push(output);
+        }
+    }
+
+    match matching_outputs.as_slice() {
+        [output] => Ok(output.clone()),
+        [] => anyhow::bail!("Item '{name_or_id}' not found"),
+        matches => anyhow::bail!("{}", ambiguous_item_name_message(name_or_id, matches.len())),
+    }
+}
+
 fn get_cipher_keys<'a>(config: &'a Config, cipher: &Cipher) -> Result<&'a CryptoKeys> {
     if let Some(keys) = config.get_keys_for_cipher(cipher.organization_id.as_deref()) {
         Ok(keys)
@@ -786,25 +830,8 @@ pub async fn get(
         )
     };
 
-    let cipher = ctx
-        .sync_response
-        .ciphers
-        .iter()
-        .find(|c| c.id == item && matches(c));
-
-    let output = if let Some(cipher) = cipher {
-        let keys = get_cipher_keys(&ctx.config, cipher)?;
-        decrypt_cipher(cipher, keys)?
-    } else {
-        let item_lower = item.to_lowercase();
-        find_cipher_output(
-            &ctx.sync_response.ciphers,
-            &ctx.config,
-            |o| o.name.to_lowercase() == item_lower,
-            matches,
-        )
-        .context(format!("Item '{item}' not found"))?
-    };
+    let output =
+        find_cipher_output_by_name_or_id(&ctx.sync_response.ciphers, &ctx.config, item, matches)?;
 
     if format == "json" {
         ensure_plaintext_json_allowed(opts)?;
@@ -950,10 +977,7 @@ fn resolve_interpolation_placeholder(
     match by_name.get(&key).map(Vec::as_slice) {
         Some([cipher]) => resolve_component(cipher, component),
         Some(matches) => {
-            anyhow::bail!(
-                "item name '{raw_name}' is ambiguous; {} vault items match case-insensitively. Use an item id to disambiguate.",
-                matches.len()
-            );
+            anyhow::bail!("{}", ambiguous_item_name_message(raw_name, matches.len()));
         }
         None => {
             anyhow::bail!("item '{raw_name}' not found");
@@ -1237,25 +1261,12 @@ pub async fn run_with_secrets(
     };
 
     let find_by_name_or_id = |name_or_id: &str| -> Result<CipherOutput> {
-        let cipher_by_id = ctx
-            .sync_response
-            .ciphers
-            .iter()
-            .find(|c| c.id == name_or_id && matches_filters(c));
-
-        if let Some(cipher) = cipher_by_id {
-            let keys = get_cipher_keys(&ctx.config, cipher)?;
-            return decrypt_cipher(cipher, keys);
-        }
-
-        let item_lower = name_or_id.to_lowercase();
-        find_cipher_output(
+        find_cipher_output_by_name_or_id(
             &ctx.sync_response.ciphers,
             &ctx.config,
-            |o| o.name.to_lowercase() == item_lower,
+            name_or_id,
             matches_filters,
         )
-        .context(format!("Item '{name_or_id}' not found"))
     };
 
     let outputs: Vec<CipherOutput> = if search_by_uri {
@@ -3041,6 +3052,79 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_run_with_secrets_fails_on_duplicate_item_names() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            mount_sync_response(
+                &mock_server,
+                make_sync_response_with_logins(&[
+                    ("cipher-1", "MyLogin", "first-user", "first-pass"),
+                    ("cipher-2", "mylogin", "second-user", "second-pass"),
+                ]),
+            )
+            .await;
+            save_unlocked_test_config(&mock_server);
+
+            let err = run_with_secrets(
+                &[String::from("MyLogin")],
+                false,
+                None,
+                None,
+                None,
+                false,
+                &[String::from("true")],
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("duplicate item names should be ambiguous");
+
+            let message = err.to_string();
+            assert!(message.contains("item name 'MyLogin' is ambiguous"));
+            assert!(message.contains("2 vault items match case-insensitively"));
+        }
+
+        #[tokio::test]
+        async fn test_run_with_secrets_allows_id_to_disambiguate_duplicate_names() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            mount_sync_response(
+                &mock_server,
+                make_sync_response_with_logins(&[
+                    ("cipher-1", "MyLogin", "first-user", "first-pass"),
+                    ("cipher-2", "mylogin", "second-user", "second-pass"),
+                ]),
+            )
+            .await;
+            save_unlocked_test_config(&mock_server);
+
+            let result = run_with_secrets(
+                &[String::from("cipher-2")],
+                false,
+                None,
+                None,
+                None,
+                false,
+                &[String::from("true")],
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            assert!(matches!(result, Ok(CommandOutcome::Success)));
+        }
+
+        #[tokio::test]
         async fn test_interpolate_replaces_placeholders() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
@@ -3900,6 +3984,127 @@ mod tests {
 
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("not found"));
+        }
+
+        #[tokio::test]
+        async fn test_get_fails_on_duplicate_item_names() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let sync_response = serde_json::json!({
+                "ciphers": [
+                    make_encrypted_login("cipher-1", "GitHub", "user-1", "pass-1", "https://github.com/one", &keys),
+                    make_encrypted_login("cipher-2", "github", "user-2", "pass-2", "https://github.com/two", &keys),
+                ],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let err = get(
+                "github",
+                "json",
+                None,
+                None,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    allow_plaintext_json: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("duplicate item names should be ambiguous");
+
+            let message = err.to_string();
+            assert!(message.contains("item name 'github' is ambiguous"));
+            assert!(message.contains("2 vault items match case-insensitively"));
+        }
+
+        #[tokio::test]
+        async fn test_get_allows_id_to_disambiguate_duplicate_names() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let sync_response = serde_json::json!({
+                "ciphers": [
+                    make_encrypted_login("cipher-1", "GitHub", "user-1", "pass-1", "https://github.com/one", &keys),
+                    make_encrypted_login("cipher-2", "github", "user-2", "pass-2", "https://github.com/two", &keys),
+                ],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let result = get(
+                "cipher-2",
+                "json",
+                None,
+                None,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    allow_plaintext_json: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            assert!(result.is_ok());
         }
 
         #[tokio::test]
