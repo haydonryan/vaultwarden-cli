@@ -367,19 +367,16 @@ async fn ensure_valid_token(config: &mut Config, allow_insecure_http: bool) -> R
         .clone()
         .context("Token expired. Please login again.")?;
     let api = ApiClient::from_config_with_flags(config, allow_insecure_http)?;
-    match api.refresh_token(&refresh_token).await {
-        Ok(token_response) => {
-            let new_expiry = token_expiry_from_lifetime(unix_now()?, token_response.expires_in)?;
-            config.access_token = Some(token_response.access_token.clone());
-            config.refresh_token = token_response.refresh_token;
-            config.token_expiry = Some(new_expiry);
-            config.save()?;
-            Ok(token_response.access_token)
-        }
-        Err(_) => {
-            anyhow::bail!("Token expired and refresh failed. Please login again.");
-        }
-    }
+    let token_response = api
+        .refresh_token(&refresh_token)
+        .await
+        .context("Token expired and refresh failed. Please login again.")?;
+    let new_expiry = token_expiry_from_lifetime(unix_now()?, token_response.expires_in)?;
+    config.access_token = Some(token_response.access_token.clone());
+    config.refresh_token = token_response.refresh_token;
+    config.token_expiry = Some(new_expiry);
+    config.save()?;
+    Ok(token_response.access_token)
 }
 
 fn token_needs_refresh(config: &Config) -> Result<bool> {
@@ -4228,10 +4225,13 @@ mod tests {
             };
 
             let err = ensure_valid_token(&mut config, true).await.unwrap_err();
+            let display_chain = format!("{err:#}");
             assert!(
                 err.to_string()
                     .contains("Token expired and refresh failed. Please login again.")
             );
+            assert!(display_chain.contains("Token refresh failed (401 Unauthorized)"));
+            assert!(display_chain.contains("invalid_token"));
         }
     }
 
