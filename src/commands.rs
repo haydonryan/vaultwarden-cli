@@ -1231,7 +1231,7 @@ pub async fn run_with_secrets(
     let outputs: Vec<CipherOutput> = if search_by_uri {
         let uri = requested_items
             .first()
-            .expect("URI required for URI search");
+            .context("URI search requires a URI argument")?;
         let uri_lower = uri.to_lowercase();
         vec![
             find_cipher_output(
@@ -2917,6 +2917,38 @@ mod tests {
                 CommandOutcome::ChildExit(status) => assert_eq!(status.code(), Some(1)),
                 CommandOutcome::Success => panic!("expected child failure status"),
             }
+        }
+
+        #[tokio::test]
+        async fn test_run_with_secrets_errors_on_empty_uri_search_input() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            mount_sync_response(&mock_server, make_sync_response_with_one_login()).await;
+            save_unlocked_test_config(&mock_server);
+
+            let err = run_with_secrets(
+                &[],
+                true,
+                None,
+                None,
+                None,
+                false,
+                &[String::from("true")],
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("empty URI search should return an error");
+
+            assert!(
+                err.to_string()
+                    .contains("URI search requires a URI argument")
+            );
         }
 
         #[tokio::test]
