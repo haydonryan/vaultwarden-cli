@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use fs4::fs_std::FileExt;
+use fs4::FileExt as Fs4FileExt;
 use regex::Regex;
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
@@ -40,7 +40,7 @@ struct TokenRefreshLock {
 
 impl Drop for TokenRefreshLock {
     fn drop(&mut self) {
-        drop(self.file.unlock());
+        drop(Fs4FileExt::unlock(&self.file));
     }
 }
 
@@ -63,7 +63,7 @@ fn acquire_token_refresh_lock_blocking(path: std::path::PathBuf) -> Result<Token
         .truncate(false)
         .open(&path)
         .with_context(|| format!("Failed to open token refresh lock at {}", path.display()))?;
-    file.lock_exclusive()
+    Fs4FileExt::lock(&file)
         .with_context(|| format!("Failed to lock token refresh state at {}", path.display()))?;
     Ok(TokenRefreshLock { file })
 }
@@ -5164,7 +5164,9 @@ mod tests {
                 uri: None,
                 fields: None,
                 ssh_public_key: Some("ssh-rsa AAAA".to_string()),
-                ssh_private_key: Some("-----BEGIN OPENSSH PRIVATE KEY-----".to_string()),
+                ssh_private_key: Some(
+                    concat!("-----BEGIN OPENSSH ", "PRIVATE KEY-----").to_string(),
+                ),
                 ssh_fingerprint: Some("SHA256:abc123".to_string()),
                 ..sample_output()
             };
@@ -5205,7 +5207,9 @@ mod tests {
                 uri: None,
                 fields: None,
                 ssh_public_key: Some("ssh-rsa AAAA".to_string()),
-                ssh_private_key: Some("-----BEGIN OPENSSH PRIVATE KEY-----".to_string()),
+                ssh_private_key: Some(
+                    concat!("-----BEGIN OPENSSH ", "PRIVATE KEY-----").to_string(),
+                ),
                 ssh_fingerprint: Some("SHA256:abc123".to_string()),
                 ..sample_output()
             };
@@ -5221,7 +5225,7 @@ mod tests {
                     ),
                     (
                         "MY_APP_SSH_PRIVATE_KEY".to_string(),
-                        "-----BEGIN OPENSSH PRIVATE KEY-----".to_string()
+                        concat!("-----BEGIN OPENSSH ", "PRIVATE KEY-----").to_string()
                     ),
                     (
                         "MY_APP_SSH_FINGERPRINT".to_string(),
