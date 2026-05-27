@@ -54,6 +54,11 @@ criterion = { version = "0.8", default-features = false }
 name = "vaultwarden_cli_bench"
 harness = false
 
+[profile.release]
+strip = "symbols"
+codegen-units = 1
+panic = "abort"
+
 [package.metadata.release]
 allow-branch = ["main", "master"]
 sign-commit = false
