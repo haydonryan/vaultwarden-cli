@@ -48,7 +48,7 @@ rand = "0.10"
 rand_core = "0.10"
 assert_cmd = "2.2"
 predicates = "3.1"
-criterion = "0.8"
+criterion = { version = "0.8", default-features = false }
 
 [[bench]]
 name = "vaultwarden_cli_bench"
