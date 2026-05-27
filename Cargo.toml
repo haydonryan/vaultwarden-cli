@@ -66,3 +66,6 @@ todo = "deny"
 unimplemented = "deny"
 unreachable = "deny"
 unused_result_ok = "deny"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }

@@ -508,6 +508,7 @@ mod performance_tests {
     }
 
     #[test]
+    #[cfg_attr(tarpaulin, ignore)]
     fn test_stretch_key_is_fast() {
         let master_key = vec![0u8; 32];
 
