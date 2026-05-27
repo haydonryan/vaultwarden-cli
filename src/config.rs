@@ -702,18 +702,62 @@ struct SavedKeys {
 }
 
 fn keyring_entry(client_id: &str) -> Result<Entry> {
+    ensure_native_keyring_store()?;
     Ok(Entry::new("vaultwarden-cli", client_id)?)
 }
 
 fn keyring_entry_for_keys(client_id: &str) -> Result<Entry> {
+    ensure_native_keyring_store()?;
     Ok(Entry::new("vaultwarden-cli", &format!("{client_id}:keys"))?)
 }
 
 fn keyring_entry_for_tokens(client_id: &str) -> Result<Entry> {
+    ensure_native_keyring_store()?;
     Ok(Entry::new(
         "vaultwarden-cli",
         &format!("{client_id}:tokens"),
     )?)
+}
+
+fn ensure_native_keyring_store() -> Result<()> {
+    if keyring_core::get_default_store().is_some() {
+        return Ok(());
+    }
+
+    install_native_keyring_store()
+}
+
+#[cfg(test)]
+fn install_native_keyring_store() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn install_native_keyring_store() -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        keyring_core::set_default_store(dbus_secret_service_keyring_store::Store::new()?);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        keyring_core::set_default_store(apple_native_keyring_store::keychain::Store::new()?);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        keyring_core::set_default_store(windows_native_keyring_store::Store::new()?);
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        anyhow::bail!(
+            "System keyring storage is not configured for this platform; \
+             set {ALLOW_INSECURE_KEY_FILE_ENV}=true to use file fallback where available"
+        );
+    }
+
+    Ok(())
 }
 
 fn optional_keyring_entry_for_delete(entry: Result<Entry>, label: &str) -> Result<Option<Entry>> {
