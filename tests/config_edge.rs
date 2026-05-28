@@ -2,7 +2,9 @@
 
 mod support;
 
-use support::{TestContext, allow_insecure_key_file_fallback, env_lock, mock_keyring};
+use support::{
+    TestContext, allow_insecure_key_file_fallback, env_lock, mock_keyring, unavailable_keyring,
+};
 use vaultwarden_cli::config::{self, Config, KeyPersistenceOutcome};
 
 #[test]
@@ -84,6 +86,7 @@ fn config_save_keys_fails_when_config_dir_is_missing() {
 #[test]
 fn config_save_keys_warns_when_client_id_is_none() {
     let _guard = env_lock();
+    let _unavailable_keyring = unavailable_keyring();
     let _allow_key_file = allow_insecure_key_file_fallback();
     let ctx = TestContext::new();
 
@@ -124,6 +127,7 @@ fn config_save_keys_warns_when_client_id_is_none() {
 #[test]
 fn config_save_keys_defaults_to_no_persist_without_keyring() {
     let _guard = env_lock();
+    let _unavailable_keyring = unavailable_keyring();
     let ctx = TestContext::new();
     ctx.create_config_dir();
 
@@ -155,6 +159,7 @@ fn config_save_keys_defaults_to_no_persist_without_keyring() {
 #[test]
 fn config_save_keys_round_trips_when_config_dir_exists() {
     let _guard = env_lock();
+    let _unavailable_keyring = unavailable_keyring();
     let _allow_key_file = allow_insecure_key_file_fallback();
     let ctx = TestContext::new();
 
@@ -196,6 +201,7 @@ fn config_save_keys_round_trips_when_config_dir_exists() {
 #[test]
 fn config_clear_removes_runtime_state_and_saved_keys_but_keeps_server_settings() {
     let _guard = env_lock();
+    let _unavailable_keyring = unavailable_keyring();
     let _allow_key_file = allow_insecure_key_file_fallback();
     let ctx = TestContext::new();
 

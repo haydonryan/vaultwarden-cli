@@ -6,7 +6,9 @@ use assert_cmd::Command;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use cbc::Encryptor;
 use hmac::{Hmac, Mac};
+use keyring_core::api::CredentialStoreApi;
 use sha2::Sha256;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -224,6 +226,38 @@ impl Drop for MockKeyring {
 pub fn mock_keyring() -> MockKeyring {
     let previous = keyring_core::unset_default_store();
     keyring_core::set_default_store(keyring_core::mock::Store::new().unwrap());
+    MockKeyring { previous }
+}
+
+#[derive(Debug)]
+struct UnavailableKeyringStore;
+
+impl CredentialStoreApi for UnavailableKeyringStore {
+    fn vendor(&self) -> String {
+        "vaultwarden-cli-test".to_string()
+    }
+
+    fn id(&self) -> String {
+        "unavailable".to_string()
+    }
+
+    fn build(
+        &self,
+        _service: &str,
+        _user: &str,
+        _modifiers: Option<&HashMap<&str, &str>>,
+    ) -> keyring_core::Result<keyring_core::Entry> {
+        Err(keyring_core::Error::NoDefaultStore)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+pub fn unavailable_keyring() -> MockKeyring {
+    let previous = keyring_core::unset_default_store();
+    keyring_core::set_default_store(Arc::new(UnavailableKeyringStore));
     MockKeyring { previous }
 }
 
