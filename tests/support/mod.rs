@@ -1,11 +1,11 @@
 #![allow(dead_code, clippy::pedantic, clippy::nursery)]
 
-use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
+use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 use anyhow::{Context, Result};
 use assert_cmd::Command;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use cbc::Encryptor;
-use hmac::{Hmac, KeyInit, Mac};
+use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -261,7 +261,7 @@ pub fn encrypt_bytes_for_test(plaintext: &[u8], enc_key: &[u8], mac_key: &[u8]) 
 
     let ciphertext = Aes256CbcEnc::new_from_slices(enc_key, &iv)
         .expect("cipher init")
-        .encrypt_padded::<Pkcs7>(&mut buf, msg_len)
+        .encrypt_padded_mut::<Pkcs7>(&mut buf, msg_len)
         .expect("padding")
         .to_vec();
 

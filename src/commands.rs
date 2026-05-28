@@ -1736,10 +1736,10 @@ mod tests {
     mod filter_resolution_tests {
         use super::*;
         use crate::models::{Collection, Organization, Profile};
-        use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
+        use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
         use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
         use cbc::Encryptor;
-        use hmac::{Hmac, KeyInit, Mac};
+        use hmac::{Hmac, Mac};
         use sha2::Sha256;
 
         type Aes256CbcEnc = Encryptor<aes::Aes256>;
@@ -1763,7 +1763,7 @@ mod tests {
 
             let ciphertext = Aes256CbcEnc::new_from_slices(&keys.enc_key, &iv)
                 .unwrap()
-                .encrypt_padded::<Pkcs7>(&mut buf, msg_len)
+                .encrypt_padded_mut::<Pkcs7>(&mut buf, msg_len)
                 .unwrap()
                 .to_vec();
 
@@ -2747,9 +2747,9 @@ mod tests {
             email: &str,
             iterations: u32,
         ) -> String {
-            use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
+            use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
             use cbc::Encryptor;
-            use hmac::{Hmac, KeyInit, Mac};
+            use hmac::{Hmac, Mac};
 
             type Aes256CbcEnc = Encryptor<aes::Aes256>;
 
@@ -2763,7 +2763,7 @@ mod tests {
 
             let ciphertext = Aes256CbcEnc::new_from_slices(&stretched.enc_key, &iv)
                 .unwrap()
-                .encrypt_padded::<Pkcs7>(&mut buf, msg_len)
+                .encrypt_padded_mut::<Pkcs7>(&mut buf, msg_len)
                 .unwrap()
                 .to_vec();
 
@@ -2781,9 +2781,9 @@ mod tests {
         }
 
         fn encrypt_bytes_for_test(plaintext: &[u8], enc_key: &[u8], mac_key: &[u8]) -> String {
-            use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
+            use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
             use cbc::Encryptor;
-            use hmac::{Hmac, KeyInit, Mac};
+            use hmac::{Hmac, Mac};
 
             type Aes256CbcEnc = Encryptor<aes::Aes256>;
 
@@ -2794,7 +2794,7 @@ mod tests {
 
             let ciphertext = Aes256CbcEnc::new_from_slices(enc_key, &iv)
                 .unwrap()
-                .encrypt_padded::<Pkcs7>(&mut buf, msg_len)
+                .encrypt_padded_mut::<Pkcs7>(&mut buf, msg_len)
                 .unwrap()
                 .to_vec();
 
@@ -2923,7 +2923,7 @@ mod tests {
             );
 
             // Generate RSA key pair
-            let mut rng = rand::rng();
+            let mut rng = rsa::rand_core::OsRng;
             let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
             let public_key = RsaPublicKey::from(&private_key);
             let der = private_key.to_pkcs8_der().unwrap().as_bytes().to_vec();
@@ -2933,7 +2933,7 @@ mod tests {
 
             // Encrypt org symmetric key with RSA
             let org_symmetric_key: Vec<u8> = (0..64).collect();
-            let padding = Oaep::<Sha256>::new();
+            let padding = Oaep::new::<Sha256>();
             let encrypted_org_key = public_key
                 .encrypt(&mut rng, padding, &org_symmetric_key)
                 .unwrap();
