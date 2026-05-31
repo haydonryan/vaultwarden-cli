@@ -9,7 +9,8 @@ license = "MIT"
 [dependencies]
 clap = { version = "4.6", features = ["derive", "env"] }
 tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "sync"] }
-reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json", "form"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no-provider", "json", "form"] }
+rustls = { version = "0.23.40", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"

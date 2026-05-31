@@ -82,6 +82,8 @@ impl ApiClient {
             );
         }
 
+        crate::install_default_tls_provider();
+
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(60))
             .connect_timeout(std::time::Duration::from_secs(15))

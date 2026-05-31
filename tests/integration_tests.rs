@@ -12,6 +12,11 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 mod api_tests {
     use super::*;
 
+    fn http_client() -> reqwest::Client {
+        vaultwarden_cli::install_default_tls_provider();
+        reqwest::Client::new()
+    }
+
     #[tokio::test]
     async fn test_api_client_check_server_success() {
         let mock_server = MockServer::start().await;
@@ -22,7 +27,7 @@ mod api_tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = http_client();
         let response = client
             .get(format!("{}/alive", mock_server.uri()))
             .send()
@@ -42,7 +47,7 @@ mod api_tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = http_client();
         let response = client
             .get(format!("{}/alive", mock_server.uri()))
             .send()
@@ -72,7 +77,7 @@ mod api_tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = http_client();
         let response = client
             .post(format!("{}/identity/connect/token", mock_server.uri()))
             .form(&[
@@ -104,7 +109,7 @@ mod api_tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = http_client();
         let response = client
             .post(format!("{}/identity/connect/token", mock_server.uri()))
             .form(&[
@@ -153,7 +158,7 @@ mod api_tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = http_client();
         let response = client
             .get(format!("{}/api/sync", mock_server.uri()))
             .bearer_auth("test-token")
@@ -178,7 +183,7 @@ mod api_tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = http_client();
         let response = client
             .get(format!("{}/api/sync", mock_server.uri()))
             .send()
@@ -206,7 +211,7 @@ mod api_tests {
             .mount(&mock_server)
             .await;
 
-        let client = reqwest::Client::new();
+        let client = http_client();
         let response = client
             .post(format!("{}/identity/connect/token", mock_server.uri()))
             .form(&[
