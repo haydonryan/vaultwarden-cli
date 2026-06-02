@@ -1006,34 +1006,13 @@ async fn list_json_requires_opt_in_when_stdout_is_captured() {
 }
 
 #[tokio::test]
-async fn list_with_type_filter_uses_ciphers_endpoint_when_sync_omits_ssh_items() {
+async fn list_with_type_filter_uses_sync_ciphers_without_secondary_fetch() {
     let ctx = TestContext::new();
     let keys = test_crypto_keys();
     let mock_server = MockServer::start().await;
 
     let sync_response = serde_json::json!({
         "Ciphers": [
-            {
-                "Id": "cipher-login",
-                "Type": 1,
-                "Name": encrypt_string_for_test("Alpha Login", &keys),
-                "Login": {
-                    "Username": encrypt_string_for_test("alice", &keys)
-                }
-            }
-        ],
-        "Folders": [],
-        "Collections": [],
-        "Profile": {
-            "Id": "user-1",
-            "Email": "user@example.com",
-            "Organizations": []
-        }
-    });
-
-    let ciphers_response = serde_json::json!({
-        "object": "list",
-        "data": [
             {
                 "Id": "cipher-login",
                 "Type": 1,
@@ -1051,7 +1030,14 @@ async fn list_with_type_filter_uses_ciphers_endpoint_when_sync_omits_ssh_items()
                     "PublicKey": encrypt_string_for_test("PUBLIC-KEY", &keys)
                 }
             }
-        ]
+        ],
+        "Folders": [],
+        "Collections": [],
+        "Profile": {
+            "Id": "user-1",
+            "Email": "user@example.com",
+            "Organizations": []
+        }
     });
 
     Mock::given(method("GET"))
@@ -1065,8 +1051,8 @@ async fn list_with_type_filter_uses_ciphers_endpoint_when_sync_omits_ssh_items()
     Mock::given(method("GET"))
         .and(path("/api/ciphers"))
         .and(header("authorization", "Bearer access-token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(&ciphers_response))
-        .expect(1)
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
         .mount(&mock_server)
         .await;
 
@@ -1093,7 +1079,7 @@ async fn list_with_type_filter_uses_ciphers_endpoint_when_sync_omits_ssh_items()
 }
 
 #[tokio::test]
-async fn list_falls_back_to_sync_ciphers_when_ciphers_endpoint_fails() {
+async fn list_uses_sync_ciphers_without_ciphers_endpoint_fallback() {
     let ctx = TestContext::new();
     let keys = test_crypto_keys();
     let mock_server = MockServer::start().await;
@@ -1126,14 +1112,6 @@ async fn list_falls_back_to_sync_ciphers_when_ciphers_endpoint_fails() {
         .mount(&mock_server)
         .await;
 
-    Mock::given(method("GET"))
-        .and(path("/api/ciphers"))
-        .and(header("authorization", "Bearer access-token"))
-        .respond_with(ResponseTemplate::new(500))
-        .expect(1)
-        .mount(&mock_server)
-        .await;
-
     ctx.write_config(&Config {
         server: Some(mock_server.uri()),
         access_token: Some("access-token".to_string()),
@@ -1150,7 +1128,5 @@ async fn list_falls_back_to_sync_ciphers_when_ciphers_endpoint_fails() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"name\": \"Alpha Login\""))
-        .stderr(predicate::str::contains(
-            "Warning: Could not load /api/ciphers; using /api/sync ciphers only",
-        ));
+        .stderr(predicate::str::contains("Could not load /api/ciphers").not());
 }
