@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::models::{CipherListResponse, SyncResponse, TokenResponse};
 use anyhow::{Context, Result};
-use reqwest::{Client, Response};
+use reqwest::{Client, Response, Url};
 
 const API_ERROR_BODY_LIMIT_BYTES: usize = 4096;
 
@@ -167,6 +167,51 @@ impl ApiClient {
         .await
     }
 
+    pub async fn cipher_by_id(
+        &self,
+        access_token: &str,
+        cipher_id: &str,
+    ) -> Result<crate::models::Cipher> {
+        let path = format!("/api/ciphers/{cipher_id}");
+        self.get_json(
+            &path,
+            access_token,
+            "cipher",
+            "Cipher",
+            "Failed to parse cipher response",
+        )
+        .await
+    }
+
+    pub async fn ciphers_filtered(
+        &self,
+        access_token: &str,
+        organization_id: Option<&str>,
+        collection_id: Option<&str>,
+        cipher_type: Option<u8>,
+    ) -> Result<CipherListResponse> {
+        let mut params = Vec::new();
+        if let Some(value) = organization_id {
+            params.push(("organizationId", value.to_string()));
+        }
+        if let Some(value) = collection_id {
+            params.push(("collectionId", value.to_string()));
+        }
+        if let Some(value) = cipher_type {
+            params.push(("type", value.to_string()));
+        }
+
+        self.get_json_with_query(
+            "/api/ciphers",
+            &params,
+            access_token,
+            "filtered cipher list",
+            "Filtered cipher list",
+            "Failed to parse cipher list response",
+        )
+        .await
+    }
+
     // Check server status/health
     pub async fn check_server(&self) -> Result<bool> {
         let url = format!("{}/alive", self.base_url);
@@ -218,10 +263,37 @@ impl ApiClient {
         error_prefix: &str,
         parse_context: &str,
     ) -> Result<T> {
-        let url = format!("{}{}", self.base_url, path);
+        self.get_json_with_query(
+            path,
+            &[],
+            access_token,
+            operation,
+            error_prefix,
+            parse_context,
+        )
+        .await
+    }
+
+    async fn get_json_with_query<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+        access_token: &str,
+        operation: &str,
+        error_prefix: &str,
+        parse_context: &str,
+    ) -> Result<T> {
+        let mut url = Url::parse(&format!("{}{}", self.base_url, path))
+            .context("Failed to build request URL")?;
+        {
+            let mut query_pairs = url.query_pairs_mut();
+            for (key, value) in query {
+                query_pairs.append_pair(key, value);
+            }
+        }
         let response = self
             .client
-            .get(&url)
+            .get(url)
             .bearer_auth(access_token)
             .send()
             .await

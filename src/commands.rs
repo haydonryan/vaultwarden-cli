@@ -411,17 +411,36 @@ fn ensure_unlocked(config: &Config) -> Result<()> {
 
 struct SyncContext {
     config: Config,
+    access_token: String,
+    api: ApiClient,
     sync_response: crate::models::SyncResponse,
 }
 
-async fn load_sync_context(allow_insecure_http: bool) -> Result<SyncContext> {
+struct ApiContext {
+    config: Config,
+    access_token: String,
+    api: ApiClient,
+}
+
+async fn load_api_context(allow_insecure_http: bool) -> Result<ApiContext> {
     let mut config = Config::load()?;
     let access_token = ensure_valid_token(&mut config, allow_insecure_http).await?;
     ensure_unlocked(&config)?;
     let api = ApiClient::from_config_with_flags(&config, allow_insecure_http)?;
-    let sync_response = api.sync(&access_token).await?;
-    Ok(SyncContext {
+    Ok(ApiContext {
         config,
+        access_token,
+        api,
+    })
+}
+
+async fn load_sync_context(allow_insecure_http: bool) -> Result<SyncContext> {
+    let ctx = load_api_context(allow_insecure_http).await?;
+    let sync_response = ctx.api.sync(&ctx.access_token).await?;
+    Ok(SyncContext {
+        config: ctx.config,
+        access_token: ctx.access_token,
+        api: ctx.api,
         sync_response,
     })
 }
@@ -537,6 +556,68 @@ fn find_cipher_output_by_name_or_id(
         [] => anyhow::bail!("Item '{name_or_id}' not found"),
         matches => anyhow::bail!("{}", ambiguous_item_name_message(name_or_id, matches.len())),
     }
+}
+
+async fn fetch_cipher_output_by_id(api_ctx: &ApiContext, cipher_id: &str) -> Result<CipherOutput> {
+    let cipher = api_ctx
+        .api
+        .cipher_by_id(&api_ctx.access_token, cipher_id)
+        .await?;
+    let keys = get_cipher_keys(&api_ctx.config, &cipher)?;
+    decrypt_cipher(&cipher, keys)
+}
+
+async fn fetch_filtered_cipher_outputs(
+    api: &ApiClient,
+    access_token: &str,
+    config: &Config,
+    org_id_filter: Option<&str>,
+    collection_id_filter: Option<&str>,
+    type_filter: Option<CipherType>,
+    folder_id_filter: Option<&str>,
+) -> Result<Vec<CipherOutput>> {
+    let cipher_type = type_filter.map(|value| value as u8);
+    let cipher_list = api
+        .ciphers_filtered(
+            access_token,
+            org_id_filter,
+            collection_id_filter,
+            cipher_type,
+        )
+        .await?;
+    let mut outputs = Vec::new();
+    let mut failures = Vec::new();
+    for cipher in cipher_list.data.iter().filter(|cipher| {
+        cipher_matches_filters(
+            cipher,
+            org_id_filter,
+            collection_id_filter,
+            folder_id_filter,
+        )
+    }) {
+        let output = get_cipher_keys(config, cipher)
+            .and_then(|keys| decrypt_cipher(cipher, keys))
+            .with_context(|| {
+                format!(
+                    "selected filtered item '{}' could not be decrypted",
+                    cipher.id
+                )
+            });
+        match output {
+            Ok(output) => outputs.push(output),
+            Err(err) => failures.push(format!("{}: {err:#}", cipher.id)),
+        }
+    }
+
+    if !failures.is_empty() {
+        anyhow::bail!(
+            "filtered run could not decrypt {} selected item(s): {}",
+            failures.len(),
+            failures.join("; ")
+        );
+    }
+
+    Ok(outputs)
 }
 
 fn get_cipher_keys<'a>(config: &'a Config, cipher: &Cipher) -> Result<&'a CryptoKeys> {
@@ -839,6 +920,16 @@ pub async fn get(
     collection_filter: Option<String>,
     opts: &CommandOptions,
 ) -> Result<()> {
+    if org_filter.is_none() && collection_filter.is_none() {
+        let api_ctx = load_api_context(opts.allow_insecure_http).await?;
+        if let Ok(output) = fetch_cipher_output_by_id(&api_ctx, item).await {
+            if format == "json" {
+                ensure_plaintext_json_allowed(opts)?;
+            }
+            return print_cipher_output(&output, format);
+        }
+    }
+
     let ctx = load_sync_context(opts.allow_insecure_http).await?;
     let (org_id_filter, collection_id_filter) = resolve_org_and_collection_filters(
         &ctx.sync_response,
@@ -856,8 +947,24 @@ pub async fn get(
         )
     };
 
-    let output =
-        find_cipher_output_by_name_or_id(&ctx.sync_response.ciphers, &ctx.config, item, matches)?;
+    let filtered_ciphers;
+    let ciphers = if org_id_filter.is_some() || collection_id_filter.is_some() {
+        filtered_ciphers = ctx
+            .api
+            .ciphers_filtered(
+                &ctx.access_token,
+                org_id_filter.as_deref(),
+                collection_id_filter.as_deref(),
+                None,
+            )
+            .await?
+            .data;
+        filtered_ciphers.as_slice()
+    } else {
+        ctx.sync_response.ciphers.as_slice()
+    };
+
+    let output = find_cipher_output_by_name_or_id(ciphers, &ctx.config, item, matches)?;
 
     if format == "json" {
         ensure_plaintext_json_allowed(opts)?;
@@ -1238,6 +1345,29 @@ pub async fn run_with_secrets(
             "At least one of --name, --org, --folder, or --collection must be specified."
         );
     }
+    if !search_by_uri
+        && !requested_items.is_empty()
+        && org_filter.is_none()
+        && folder_filter.is_none()
+        && collection_filter.is_none()
+    {
+        let api_ctx = load_api_context(opts.allow_insecure_http).await?;
+        let mut outputs = Vec::with_capacity(requested_items.len());
+        let mut all_items_found_by_id = true;
+        for item in requested_items {
+            match fetch_cipher_output_by_id(&api_ctx, item).await {
+                Ok(output) => outputs.push(output),
+                Err(_) => {
+                    all_items_found_by_id = false;
+                    break;
+                }
+            }
+        }
+        if all_items_found_by_id {
+            return run_with_decrypted_outputs(outputs, info_only, command);
+        }
+    }
+
     let ctx = load_sync_context(opts.allow_insecure_http).await?;
 
     let org_id_filter = org_filter
@@ -1318,6 +1448,21 @@ pub async fn run_with_secrets(
             .iter()
             .map(|name| find_by_name_or_id(name))
             .collect::<Result<Vec<_>>>()?
+    } else if folder_id_filter.is_none() {
+        let outputs = fetch_filtered_cipher_outputs(
+            &ctx.api,
+            &ctx.access_token,
+            &ctx.config,
+            org_id_filter.as_deref(),
+            collection_id_filter.as_deref(),
+            None,
+            None,
+        )
+        .await?;
+        if outputs.is_empty() {
+            anyhow::bail!("No item found matching the specified filters");
+        }
+        outputs
     } else {
         let mut outputs = Vec::new();
         let mut failures = Vec::new();
@@ -1356,6 +1501,14 @@ pub async fn run_with_secrets(
         outputs
     };
 
+    run_with_decrypted_outputs(outputs, info_only, command)
+}
+
+fn run_with_decrypted_outputs(
+    outputs: Vec<CipherOutput>,
+    info_only: bool,
+    command: &[String],
+) -> Result<CommandOutcome> {
     // Build environment variables from the ciphers
     let mut env_vars = Vec::new();
     for output in outputs {
@@ -3066,7 +3219,7 @@ mod tests {
     // Tests for interpolate command
     mod interpolate_tests {
         use super::*;
-        use wiremock::matchers::{method, path};
+        use wiremock::matchers::{method, path, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         fn set_temp_config_dir(temp_dir: &tempfile::TempDir) -> config::ConfigDirOverride {
@@ -3314,14 +3467,24 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            mount_sync_response(
-                &mock_server,
-                make_sync_response_with_logins(&[
-                    ("cipher-1", "MyLogin", "first-user", "first-pass"),
-                    ("cipher-2", "mylogin", "second-user", "second-pass"),
-                ]),
-            )
-            .await;
+            let sync_response = make_sync_response_with_logins(&[
+                ("cipher-1", "MyLogin", "first-user", "first-pass"),
+                ("cipher-2", "mylogin", "second-user", "second-pass"),
+            ]);
+            Mock::given(method("GET"))
+                .and(path("/api/ciphers/cipher-2"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(sync_response["ciphers"][1].clone()),
+                )
+                .expect(1)
+                .mount(&mock_server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .expect(0)
+                .mount(&mock_server)
+                .await;
             save_unlocked_test_config(&mock_server);
 
             let result = run_with_secrets(
@@ -3349,11 +3512,21 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            mount_sync_response(
-                &mock_server,
-                make_collection_response_with_missing_org_key(),
-            )
-            .await;
+            let full_response = make_collection_response_with_missing_org_key();
+            let mut sync_response = full_response.clone();
+            sync_response["ciphers"] = serde_json::json!([]);
+            mount_sync_response(&mock_server, sync_response).await;
+            let ciphers_response = serde_json::json!({
+                "object": "list",
+                "data": full_response["ciphers"].clone()
+            });
+            Mock::given(method("GET"))
+                .and(path("/api/ciphers"))
+                .and(query_param("collectionId", "DZ1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&ciphers_response))
+                .expect(1)
+                .mount(&mock_server)
+                .await;
             save_unlocked_test_config(&mock_server);
 
             let err = run_with_secrets(
@@ -4016,7 +4189,7 @@ mod tests {
     // Tests for get command
     mod get_tests {
         use super::*;
-        use wiremock::matchers::{method, path};
+        use wiremock::matchers::{method, path, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         fn set_temp_config_dir(temp_dir: &tempfile::TempDir) -> config::ConfigDirOverride {
@@ -4093,8 +4266,17 @@ mod tests {
             });
 
             Mock::given(method("GET"))
+                .and(path("/api/ciphers/cipher-1"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(sync_response["ciphers"][0].clone()),
+                )
+                .expect(1)
+                .mount(&mock_server)
+                .await;
+            Mock::given(method("GET"))
                 .and(path("/api/sync"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .expect(0)
                 .mount(&mock_server)
                 .await;
 
@@ -4179,6 +4361,88 @@ mod tests {
             )
             .await;
             assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_get_by_name_with_collection_filter_uses_filtered_ciphers() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let mut filtered_cipher = make_encrypted_login(
+                "cipher-1",
+                "GitHub",
+                "user",
+                "pass",
+                "https://github.com",
+                &keys,
+            );
+            filtered_cipher["collectionIds"] = serde_json::json!(["collection-1"]);
+            let sync_response = serde_json::json!({
+                "ciphers": [],
+                "folders": [],
+                "collections": [
+                    {
+                        "id": "collection-1",
+                        "name": "ignored-for-id-match",
+                        "organizationId": "org-1"
+                    }
+                ],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+            let ciphers_response = serde_json::json!({
+                "object": "list",
+                "data": [filtered_cipher]
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .expect(1)
+                .mount(&mock_server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/ciphers"))
+                .and(query_param("collectionId", "collection-1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&ciphers_response))
+                .expect(1)
+                .mount(&mock_server)
+                .await;
+
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let result = get(
+                "github",
+                "json",
+                None,
+                Some("collection-1".to_string()),
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    allow_plaintext_json: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+            assert!(result.is_ok(), "{result:?}");
         }
 
         #[tokio::test]

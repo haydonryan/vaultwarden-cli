@@ -9,7 +9,7 @@ use support::{
     env_lock, test_crypto_keys,
 };
 use vaultwarden_cli::config::Config;
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
@@ -173,7 +173,25 @@ async fn run_with_collection_scope_injects_all_matching_items() {
     let mock_server = MockServer::start().await;
 
     let sync_response = serde_json::json!({
-        "Ciphers": [
+        "Ciphers": [],
+        "Folders": [],
+        "Collections": [
+            {
+                "Id": "DZ1",
+                "Name": "ignored-for-id-match",
+                "OrganizationId": "org-1"
+            }
+        ],
+        "Profile": {
+            "Id": "user-1",
+            "Email": "user@example.com",
+            "Organizations": []
+        }
+    });
+
+    let ciphers_response = serde_json::json!({
+        "object": "list",
+        "data": [
             {
                 "Id": "cipher-1",
                 "Type": 1,
@@ -194,26 +212,22 @@ async fn run_with_collection_scope_injects_all_matching_items() {
                 },
                 "CollectionIds": ["DZ1"]
             }
-        ],
-        "Folders": [],
-        "Collections": [
-            {
-                "Id": "DZ1",
-                "Name": "ignored-for-id-match",
-                "OrganizationId": "org-1"
-            }
-        ],
-        "Profile": {
-            "Id": "user-1",
-            "Email": "user@example.com",
-            "Organizations": []
-        }
+        ]
     });
 
     Mock::given(method("GET"))
         .and(path("/api/sync"))
         .and(header("authorization", "Bearer access-token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/ciphers"))
+        .and(query_param("collectionId", "DZ1"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&ciphers_response))
         .expect(1)
         .mount(&mock_server)
         .await;

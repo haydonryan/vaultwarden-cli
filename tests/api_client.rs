@@ -6,7 +6,7 @@ use support::TestContext;
 use vaultwarden_cli::api::ApiClient;
 use vaultwarden_cli::config::Config;
 use vaultwarden_cli::models::CipherType;
-use wiremock::matchers::{body_string_contains, header, method, path};
+use wiremock::matchers::{body_string_contains, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
@@ -381,6 +381,67 @@ async fn api_client_ciphers_sends_bearer_token_and_parses_response() {
     assert_eq!(ciphers.data[0].id, "cipher-ssh");
     assert_eq!(ciphers.data[0].cipher_type(), Some(CipherType::SshKey));
     assert!(ciphers.data[0].ssh_key.is_some());
+}
+
+#[tokio::test]
+async fn api_client_cipher_by_id_sends_bearer_token_and_parses_response() {
+    let mock_server = MockServer::start().await;
+    let response = serde_json::json!({
+        "id": "cipher-ssh",
+        "type": 5,
+        "name": "2.encrypted-name",
+        "sshKey": {
+            "privateKey": "2.encrypted-private-key",
+            "publicKey": "2.encrypted-public-key",
+            "fingerprint": "2.encrypted-fingerprint"
+        }
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/api/ciphers/cipher-ssh"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::new_with_flags(&mock_server.uri(), true).unwrap();
+    let cipher = client
+        .cipher_by_id("access-token", "cipher-ssh")
+        .await
+        .unwrap();
+
+    assert_eq!(cipher.id, "cipher-ssh");
+    assert_eq!(cipher.cipher_type(), Some(CipherType::SshKey));
+    assert!(cipher.ssh_key.is_some());
+}
+
+#[tokio::test]
+async fn api_client_ciphers_filtered_sends_query_params() {
+    let mock_server = MockServer::start().await;
+    let response = serde_json::json!({
+        "object": "list",
+        "data": []
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/api/ciphers"))
+        .and(query_param("organizationId", "org-1"))
+        .and(query_param("collectionId", "col-1"))
+        .and(query_param("type", "5"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::new_with_flags(&mock_server.uri(), true).unwrap();
+    let ciphers = client
+        .ciphers_filtered("access-token", Some("org-1"), Some("col-1"), Some(5))
+        .await
+        .unwrap();
+
+    assert!(ciphers.data.is_empty());
 }
 
 #[tokio::test]
