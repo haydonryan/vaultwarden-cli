@@ -16,11 +16,5 @@ pub mod config;
 pub mod crypto;
 pub mod models;
 
-pub fn install_default_tls_provider() {
-    if rustls::crypto::CryptoProvider::get_default().is_none() {
-        drop(rustls::crypto::ring::default_provider().install_default());
-    }
-}
-
 #[cfg(test)]
 pub(crate) static KEYRING_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

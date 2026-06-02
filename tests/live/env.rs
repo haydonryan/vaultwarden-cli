@@ -182,7 +182,6 @@ impl LiveTestEnv {
     // ── Private helpers ────────────────────────────────────────────────────
 
     async fn create(server_url: String, admin_token: String) -> Result<Self> {
-        vaultwarden_cli::install_default_tls_provider();
         let http = Client::new();
 
         // Unique per-test credentials (8-hex suffix prevents collisions).
@@ -473,7 +472,6 @@ impl Drop for LiveTestEnv {
         let _ = std::thread::spawn(move || {
             if let Ok(rt) = tokio::runtime::Runtime::new() {
                 rt.block_on(async {
-                    vaultwarden_cli::install_default_tls_provider();
                     let timeout = std::time::Duration::from_secs(5);
                     let client = ClientBuilder::new()
                         .timeout(timeout)

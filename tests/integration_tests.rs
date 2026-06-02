@@ -13,7 +13,6 @@ mod api_tests {
     use super::*;
 
     fn http_client() -> reqwest::Client {
-        vaultwarden_cli::install_default_tls_provider();
         reqwest::Client::new()
     }
 
