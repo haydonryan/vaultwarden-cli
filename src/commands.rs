@@ -525,17 +525,18 @@ fn find_cipher_output_by_name_or_id(
     config: &Config,
     name_or_id: &str,
     matches_filters: impl Fn(&Cipher) -> bool,
+    profile: CipherDecryptionProfile,
 ) -> Result<CipherOutput> {
     if let Some(cipher) = ciphers
         .iter()
         .find(|c| c.id == name_or_id && matches_filters(c))
     {
         let keys = get_cipher_keys(config, cipher)?;
-        return decrypt_cipher(cipher, keys);
+        return decrypt_cipher_with_profile(cipher, keys, profile);
     }
 
     let name_lower = name_or_id.to_lowercase();
-    let mut matching_outputs = Vec::new();
+    let mut matching_ciphers = Vec::new();
     for cipher in ciphers {
         if !matches_filters(cipher) {
             continue;
@@ -544,29 +545,38 @@ fn find_cipher_output_by_name_or_id(
             Ok(k) => k,
             Err(_) => continue,
         };
-        if let Ok(output) = decrypt_cipher(cipher, keys)
+        if let Ok(output) =
+            decrypt_cipher_with_profile(cipher, keys, CipherDecryptionProfile::list_env_names())
             && output.name.to_lowercase() == name_lower
         {
-            matching_outputs.push(output);
+            matching_ciphers.push(cipher);
         }
     }
 
-    match matching_outputs.as_slice() {
-        [output] => Ok(output.clone()),
+    match matching_ciphers.as_slice() {
+        [cipher] => {
+            let keys = get_cipher_keys(config, cipher)?;
+            decrypt_cipher_with_profile(cipher, keys, profile)
+        }
         [] => anyhow::bail!("Item '{name_or_id}' not found"),
         matches => anyhow::bail!("{}", ambiguous_item_name_message(name_or_id, matches.len())),
     }
 }
 
-async fn fetch_cipher_output_by_id(api_ctx: &ApiContext, cipher_id: &str) -> Result<CipherOutput> {
+async fn fetch_cipher_output_by_id(
+    api_ctx: &ApiContext,
+    cipher_id: &str,
+    profile: CipherDecryptionProfile,
+) -> Result<CipherOutput> {
     let cipher = api_ctx
         .api
         .cipher_by_id(&api_ctx.access_token, cipher_id)
         .await?;
     let keys = get_cipher_keys(&api_ctx.config, &cipher)?;
-    decrypt_cipher(&cipher, keys)
+    decrypt_cipher_with_profile(&cipher, keys, profile)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn fetch_filtered_cipher_outputs(
     api: &ApiClient,
     access_token: &str,
@@ -575,6 +585,7 @@ async fn fetch_filtered_cipher_outputs(
     collection_id_filter: Option<&str>,
     type_filter: Option<CipherType>,
     folder_id_filter: Option<&str>,
+    profile: CipherDecryptionProfile,
 ) -> Result<Vec<CipherOutput>> {
     let cipher_type = type_filter.map(|value| value as u8);
     let cipher_list = api
@@ -596,7 +607,7 @@ async fn fetch_filtered_cipher_outputs(
         )
     }) {
         let output = get_cipher_keys(config, cipher)
-            .and_then(|keys| decrypt_cipher(cipher, keys))
+            .and_then(|keys| decrypt_cipher_with_profile(cipher, keys, profile))
             .with_context(|| {
                 format!(
                     "selected filtered item '{}' could not be decrypted",
@@ -650,56 +661,205 @@ fn try_decrypt_cipher_subfield(
 }
 
 fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
+    decrypt_cipher_with_profile(cipher, keys, CipherDecryptionProfile::full())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CipherDecryptionProfile {
+    username: bool,
+    password: bool,
+    uri: bool,
+    notes: bool,
+    field_names: bool,
+    field_values: bool,
+    ssh_public_key: bool,
+    ssh_private_key: bool,
+    ssh_fingerprint: bool,
+    decrypt_present_standard_values: bool,
+}
+
+impl CipherDecryptionProfile {
+    const fn full() -> Self {
+        Self {
+            username: true,
+            password: true,
+            uri: true,
+            notes: true,
+            field_names: true,
+            field_values: true,
+            ssh_public_key: true,
+            ssh_private_key: true,
+            ssh_fingerprint: true,
+            decrypt_present_standard_values: true,
+        }
+    }
+
+    const fn run_env() -> Self {
+        Self {
+            username: true,
+            password: true,
+            uri: false,
+            notes: false,
+            field_names: false,
+            field_values: false,
+            ssh_public_key: false,
+            ssh_private_key: false,
+            ssh_fingerprint: false,
+            decrypt_present_standard_values: true,
+        }
+    }
+
+    const fn list_env_names() -> Self {
+        Self {
+            username: true,
+            password: true,
+            uri: true,
+            notes: false,
+            field_names: true,
+            field_values: false,
+            ssh_public_key: true,
+            ssh_private_key: true,
+            ssh_fingerprint: true,
+            decrypt_present_standard_values: false,
+        }
+    }
+
+    const fn interpolation(component: &str) -> Self {
+        let component = component.as_bytes();
+        Self {
+            username: matches!(component, b"username"),
+            password: matches!(component, b"password"),
+            uri: matches!(component, b"uri"),
+            notes: matches!(component, b"notes" | b"note"),
+            field_names: true,
+            field_values: true,
+            ssh_public_key: matches!(component, b"ssh_public_key" | b"public_key" | b"publickey"),
+            ssh_private_key: matches!(
+                component,
+                b"ssh_private_key" | b"private_key" | b"privatekey"
+            ),
+            ssh_fingerprint: matches!(component, b"ssh_fingerprint" | b"fingerprint"),
+            decrypt_present_standard_values: true,
+        }
+    }
+}
+
+fn decrypt_optional_cipher_value(
+    keys: &CryptoKeys,
+    encrypted: Option<&str>,
+    should_include: bool,
+    should_decrypt: bool,
+) -> Result<Option<String>> {
+    if !should_include {
+        return Ok(None);
+    }
+    if should_decrypt {
+        try_decrypt(keys, encrypted)
+    } else {
+        Ok(encrypted.map(|_| String::new()))
+    }
+}
+
+fn decrypt_optional_cipher_subfield(
+    keys: &CryptoKeys,
+    encrypted: Option<&str>,
+    cipher_id: &str,
+    field_name: &str,
+    should_include: bool,
+    should_decrypt: bool,
+) -> Result<Option<String>> {
+    if !should_include {
+        return Ok(None);
+    }
+    if should_decrypt {
+        try_decrypt_cipher_subfield(keys, encrypted, cipher_id, field_name)
+    } else {
+        Ok(encrypted.map(|_| String::new()))
+    }
+}
+
+fn decrypt_cipher_with_profile(
+    cipher: &Cipher,
+    keys: &CryptoKeys,
+    profile: CipherDecryptionProfile,
+) -> Result<CipherOutput> {
     let name = cipher.get_name().context("Cipher has no name")?;
     let decrypted_name = keys.decrypt_to_string(name)?;
 
-    let decrypted_username = try_decrypt(keys, cipher.get_username())?;
-    let decrypted_password = try_decrypt(keys, cipher.get_password())?;
-    let decrypted_uri = try_decrypt(keys, cipher.get_uri())?;
-    let decrypted_notes = try_decrypt(keys, cipher.get_notes())?;
+    let decrypted_username = decrypt_optional_cipher_value(
+        keys,
+        cipher.get_username(),
+        profile.username,
+        profile.decrypt_present_standard_values,
+    )?;
+    let decrypted_password = decrypt_optional_cipher_value(
+        keys,
+        cipher.get_password(),
+        profile.password,
+        profile.decrypt_present_standard_values,
+    )?;
+    let decrypted_uri = decrypt_optional_cipher_value(
+        keys,
+        cipher.get_uri(),
+        profile.uri,
+        profile.decrypt_present_standard_values,
+    )?;
+    let decrypted_notes = decrypt_optional_cipher_value(
+        keys,
+        cipher.get_notes(),
+        profile.notes,
+        profile.decrypt_present_standard_values,
+    )?;
 
-    let decrypted_fields = cipher
-        .get_fields()
-        .map(|fields| {
-            fields
-                .iter()
-                .enumerate()
-                .filter_map(|(index, field)| {
-                    let encrypted_name = field.name.as_ref()?;
-                    Some((index, field, encrypted_name))
-                })
-                .map(|(index, field, encrypted_name)| {
-                    let name = keys.decrypt_to_string(encrypted_name).with_context(|| {
+    let decrypted_fields = if profile.field_names {
+        cipher
+            .get_fields()
+            .map(|fields| {
+                fields
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, field)| {
+                        let encrypted_name = field.name.as_ref()?;
+                        Some((index, field, encrypted_name))
+                    })
+                    .map(|(index, field, encrypted_name)| {
+                        let name = keys.decrypt_to_string(encrypted_name).with_context(|| {
                         format!(
                             "failed to decrypt custom field name at index {index} for cipher {}",
                             cipher.id
                         )
                     })?;
-                    let value = field
-                        .value
-                        .as_ref()
-                        .map(|encrypted_value| {
-                            keys.decrypt_to_string(encrypted_value).with_context(|| {
+                        let value = field
+                            .value
+                            .as_ref()
+                            .map(|encrypted_value| {
+                                if !profile.field_values {
+                                    return Ok(String::new());
+                                }
+                                keys.decrypt_to_string(encrypted_value).with_context(|| {
                                 format!(
                                     "failed to decrypt custom field '{name}' value for cipher {}",
                                     cipher.id
                                 )
                             })
+                            })
+                            .transpose()?
+                            .unwrap_or_default();
+                        Ok(FieldOutput {
+                            name,
+                            value,
+                            hidden: field.r#type == 1,
                         })
-                        .transpose()?
-                        .unwrap_or_default();
-                    Ok(FieldOutput {
-                        name,
-                        value,
-                        hidden: field.r#type == 1,
                     })
-                })
-                .collect::<Result<Vec<_>>>()
-        })
-        .transpose()?;
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?
+    } else {
+        None
+    };
 
     // Decrypt SSH key fields if present
-    let ssh_public_key = try_decrypt_cipher_subfield(
+    let ssh_public_key = decrypt_optional_cipher_subfield(
         keys,
         cipher
             .ssh_key
@@ -707,8 +867,10 @@ fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
             .and_then(|s| s.public_key.as_deref()),
         &cipher.id,
         "SSH public key",
+        profile.ssh_public_key,
+        profile.decrypt_present_standard_values,
     )?;
-    let ssh_private_key = try_decrypt_cipher_subfield(
+    let ssh_private_key = decrypt_optional_cipher_subfield(
         keys,
         cipher
             .ssh_key
@@ -716,8 +878,10 @@ fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
             .and_then(|s| s.private_key.as_deref()),
         &cipher.id,
         "SSH private key",
+        profile.ssh_private_key,
+        profile.decrypt_present_standard_values,
     )?;
-    let ssh_fingerprint = try_decrypt_cipher_subfield(
+    let ssh_fingerprint = decrypt_optional_cipher_subfield(
         keys,
         cipher
             .ssh_key
@@ -725,6 +889,8 @@ fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
             .and_then(|s| s.fingerprint.as_deref()),
         &cipher.id,
         "SSH fingerprint",
+        profile.ssh_fingerprint,
+        profile.decrypt_present_standard_values,
     )?;
 
     Ok(CipherOutput {
@@ -879,7 +1045,12 @@ pub async fn list(
             }
         };
 
-        match decrypt_cipher(cipher, keys) {
+        let profile = if json_output || search_lower.is_some() {
+            CipherDecryptionProfile::full()
+        } else {
+            CipherDecryptionProfile::list_env_names()
+        };
+        match decrypt_cipher_with_profile(cipher, keys, profile) {
             Ok(output) => {
                 if let Some(ref term) = search_lower
                     && !output_matches_search(&output, term)
@@ -941,7 +1112,9 @@ pub async fn get(
 ) -> Result<()> {
     if org_filter.is_none() && collection_filter.is_none() {
         let api_ctx = load_api_context(opts.allow_insecure_http).await?;
-        if let Ok(output) = fetch_cipher_output_by_id(&api_ctx, item).await {
+        if let Ok(output) =
+            fetch_cipher_output_by_id(&api_ctx, item, CipherDecryptionProfile::full()).await
+        {
             if format == "json" {
                 ensure_plaintext_json_allowed(opts)?;
             }
@@ -983,7 +1156,13 @@ pub async fn get(
         ctx.sync_response.ciphers.as_slice()
     };
 
-    let output = find_cipher_output_by_name_or_id(ciphers, &ctx.config, item, matches)?;
+    let output = find_cipher_output_by_name_or_id(
+        ciphers,
+        &ctx.config,
+        item,
+        matches,
+        CipherDecryptionProfile::full(),
+    )?;
 
     if format == "json" {
         ensure_plaintext_json_allowed(opts)?;
@@ -1091,24 +1270,23 @@ fn track_missing_placeholder(
 fn build_interpolation_indexes(
     ciphers: &[Cipher],
     config: &Config,
-) -> (
-    HashMap<String, Vec<CipherOutput>>,
-    HashMap<String, CipherOutput>,
-) {
-    let mut by_name: HashMap<String, Vec<CipherOutput>> = HashMap::new();
-    let mut by_id: HashMap<String, CipherOutput> = HashMap::new();
+) -> (HashMap<String, Vec<String>>, HashMap<String, String>) {
+    let mut by_name: HashMap<String, Vec<String>> = HashMap::new();
+    let mut by_id: HashMap<String, String> = HashMap::new();
 
     for cipher in ciphers {
         let keys = match get_cipher_keys(config, cipher) {
             Ok(k) => k,
             Err(_) => continue,
         };
-        if let Ok(output) = decrypt_cipher(cipher, keys) {
-            by_id.insert(output.id.clone(), output.clone());
+        if let Ok(output) =
+            decrypt_cipher_with_profile(cipher, keys, CipherDecryptionProfile::list_env_names())
+        {
+            by_id.insert(output.id.clone(), output.id.clone());
             by_name
                 .entry(output.name.to_lowercase())
                 .or_default()
-                .push(output);
+                .push(output.id);
         }
     }
 
@@ -1118,16 +1296,40 @@ fn build_interpolation_indexes(
 fn resolve_interpolation_placeholder(
     raw_name: &str,
     component: &str,
-    by_name: &HashMap<String, Vec<CipherOutput>>,
-    by_id: &HashMap<String, CipherOutput>,
+    ciphers: &[Cipher],
+    config: &Config,
+    by_name: &HashMap<String, Vec<String>>,
+    by_id: &HashMap<String, String>,
 ) -> Result<String> {
-    if let Some(cipher) = by_id.get(raw_name) {
-        return resolve_component(cipher, component);
+    if let Some(cipher_id) = by_id.get(raw_name) {
+        let cipher = ciphers
+            .iter()
+            .find(|cipher| cipher.id == *cipher_id)
+            .context("indexed item not found")?;
+        let keys = get_cipher_keys(config, cipher)?;
+        let output = decrypt_cipher_with_profile(
+            cipher,
+            keys,
+            CipherDecryptionProfile::interpolation(&component.to_lowercase()),
+        )?;
+        return resolve_component(&output, component);
     }
 
     let key = raw_name.to_lowercase();
     match by_name.get(&key).map(Vec::as_slice) {
-        Some([cipher]) => resolve_component(cipher, component),
+        Some([cipher_id]) => {
+            let cipher = ciphers
+                .iter()
+                .find(|cipher| cipher.id == *cipher_id)
+                .context("indexed item not found")?;
+            let keys = get_cipher_keys(config, cipher)?;
+            let output = decrypt_cipher_with_profile(
+                cipher,
+                keys,
+                CipherDecryptionProfile::interpolation(&component.to_lowercase()),
+            )?;
+            resolve_component(&output, component)
+        }
         Some(matches) => {
             anyhow::bail!("{}", ambiguous_item_name_message(raw_name, matches.len()));
         }
@@ -1143,13 +1345,13 @@ pub async fn interpolate(
     skip_missing: bool,
     opts: &CommandOptions,
 ) -> Result<()> {
-    let ctx = load_sync_context(opts.allow_insecure_http).await?;
-    let (by_name, by_id) = build_interpolation_indexes(&ctx.sync_response.ciphers, &ctx.config);
-
+    let api_ctx = load_api_context(opts.allow_insecure_http).await?;
     let input =
         fs::read_to_string(file).with_context(|| format!("Failed to read file '{file}'"))?;
     static PLACEHOLDER_RE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\(\(([^\s()]+)\)\)").expect("valid regex"));
+    let sync_response = api_ctx.api.sync(&api_ctx.access_token).await?;
+    let (by_name, by_id) = build_interpolation_indexes(&sync_response.ciphers, &api_ctx.config);
     let mut missing: Vec<String> = Vec::new();
     let mut unmatched_placeholders: Vec<String> = Vec::new();
 
@@ -1158,7 +1360,14 @@ pub async fn interpolate(
         let placeholder = &caps[1];
         match parse_placeholder(placeholder) {
             Ok((raw_name, component)) => {
-                match resolve_interpolation_placeholder(&raw_name, &component, &by_name, &by_id) {
+                match resolve_interpolation_placeholder(
+                    &raw_name,
+                    &component,
+                    &sync_response.ciphers,
+                    &api_ctx.config,
+                    &by_name,
+                    &by_id,
+                ) {
                     Ok(value) => value,
                     Err(err) => track_missing_placeholder(
                         placeholder,
@@ -1374,7 +1583,9 @@ pub async fn run_with_secrets(
         let mut outputs = Vec::with_capacity(requested_items.len());
         let mut all_items_found_by_id = true;
         for item in requested_items {
-            match fetch_cipher_output_by_id(&api_ctx, item).await {
+            match fetch_cipher_output_by_id(&api_ctx, item, CipherDecryptionProfile::run_env())
+                .await
+            {
                 Ok(output) => outputs.push(output),
                 Err(_) => {
                     all_items_found_by_id = false;
@@ -1441,6 +1652,7 @@ pub async fn run_with_secrets(
             &ctx.config,
             name_or_id,
             matches_filters,
+            CipherDecryptionProfile::run_env(),
         )
     };
 
@@ -1476,6 +1688,7 @@ pub async fn run_with_secrets(
             collection_id_filter.as_deref(),
             None,
             None,
+            CipherDecryptionProfile::run_env(),
         )
         .await?;
         if outputs.is_empty() {
@@ -1492,7 +1705,9 @@ pub async fn run_with_secrets(
             .filter(|cipher| matches_filters(cipher))
         {
             let output = get_cipher_keys(&ctx.config, cipher)
-                .and_then(|keys| decrypt_cipher(cipher, keys))
+                .and_then(|keys| {
+                    decrypt_cipher_with_profile(cipher, keys, CipherDecryptionProfile::run_env())
+                })
                 .with_context(|| {
                     format!(
                         "selected filtered item '{}' could not be decrypted",
@@ -2011,7 +2226,7 @@ mod tests {
     // Tests for decrypt_cipher helper
     mod decrypt_cipher_tests {
         use super::*;
-        use crate::models::{Cipher, FieldData, SshKeyData};
+        use crate::models::{Cipher, FieldData, LoginData, SshKeyData, UriData};
 
         fn create_test_cipher(id: &str, cipher_type: u8) -> Cipher {
             Cipher {
@@ -2051,6 +2266,78 @@ mod tests {
             let mut cipher = create_test_cipher(id, cipher_type);
             cipher.name = Some(encrypt_for_decrypt_cipher_test("Test Item", keys));
             cipher
+        }
+
+        #[test]
+        fn test_list_env_name_profile_skips_secret_value_decryption() {
+            let keys = test_crypto_keys();
+            let mut cipher = create_named_test_cipher("test-123", 1, &keys);
+            cipher.login = Some(LoginData {
+                username: Some("not-encrypted".to_string()),
+                password: Some("also-not-encrypted".to_string()),
+                totp: None,
+                uris: Some(vec![UriData {
+                    uri: Some("bad-uri".to_string()),
+                    r#match: None,
+                }]),
+            });
+
+            let output = decrypt_cipher_with_profile(
+                &cipher,
+                &keys,
+                CipherDecryptionProfile::list_env_names(),
+            )
+            .expect("list env-name profile should not decrypt present secret values");
+
+            assert_eq!(output.name, "Test Item");
+            assert_eq!(output.username.as_deref(), Some(""));
+            assert_eq!(output.password.as_deref(), Some(""));
+            assert_eq!(output.uri.as_deref(), Some(""));
+        }
+
+        #[test]
+        fn test_run_env_profile_skips_unused_uri_decryption() {
+            let keys = test_crypto_keys();
+            let mut cipher = create_named_test_cipher("test-123", 1, &keys);
+            cipher.login = Some(LoginData {
+                username: Some(encrypt_for_decrypt_cipher_test("alice", &keys)),
+                password: Some(encrypt_for_decrypt_cipher_test("secret", &keys)),
+                totp: None,
+                uris: Some(vec![UriData {
+                    uri: Some("not-encrypted".to_string()),
+                    r#match: None,
+                }]),
+            });
+
+            let output =
+                decrypt_cipher_with_profile(&cipher, &keys, CipherDecryptionProfile::run_env())
+                    .expect("run env profile should ignore URI decryption failures");
+
+            assert_eq!(output.username.as_deref(), Some("alice"));
+            assert_eq!(output.password.as_deref(), Some("secret"));
+            assert_eq!(output.uri, None);
+        }
+
+        #[test]
+        fn test_interpolation_profile_decrypts_only_requested_component() {
+            let keys = test_crypto_keys();
+            let mut cipher = create_named_test_cipher("test-123", 1, &keys);
+            cipher.login = Some(LoginData {
+                username: Some("not-encrypted".to_string()),
+                password: Some(encrypt_for_decrypt_cipher_test("secret", &keys)),
+                totp: None,
+                uris: None,
+            });
+
+            let output = decrypt_cipher_with_profile(
+                &cipher,
+                &keys,
+                CipherDecryptionProfile::interpolation("password"),
+            )
+            .expect("password interpolation should not decrypt username");
+
+            assert_eq!(output.username, None);
+            assert_eq!(output.password.as_deref(), Some("secret"));
         }
 
         #[test]
