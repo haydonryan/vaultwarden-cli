@@ -744,11 +744,24 @@ async fn list_with_type_filter_shows_only_matching_items() {
             "Organizations": []
         }
     });
+    let ciphers_response = serde_json::json!({
+        "object": "list",
+        "data": sync_response["Ciphers"].clone()
+    });
 
     Mock::given(method("GET"))
         .and(path("/api/sync"))
         .and(header("authorization", "Bearer access-token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/ciphers"))
+        .and(query_param("type", "1"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&ciphers_response))
         .expect(1)
         .mount(&mock_server)
         .await;
@@ -1020,7 +1033,7 @@ async fn list_json_requires_opt_in_when_stdout_is_captured() {
 }
 
 #[tokio::test]
-async fn list_with_type_filter_uses_sync_ciphers_without_secondary_fetch() {
+async fn list_with_type_filter_uses_server_side_type_query() {
     let ctx = TestContext::new();
     let keys = test_crypto_keys();
     let mock_server = MockServer::start().await;
@@ -1053,6 +1066,10 @@ async fn list_with_type_filter_uses_sync_ciphers_without_secondary_fetch() {
             "Organizations": []
         }
     });
+    let ciphers_response = serde_json::json!({
+        "object": "list",
+        "data": sync_response["Ciphers"].clone()
+    });
 
     Mock::given(method("GET"))
         .and(path("/api/sync"))
@@ -1064,9 +1081,10 @@ async fn list_with_type_filter_uses_sync_ciphers_without_secondary_fetch() {
 
     Mock::given(method("GET"))
         .and(path("/api/ciphers"))
+        .and(query_param("type", "5"))
         .and(header("authorization", "Bearer access-token"))
-        .respond_with(ResponseTemplate::new(500))
-        .expect(0)
+        .respond_with(ResponseTemplate::new(200).set_body_json(&ciphers_response))
+        .expect(1)
         .mount(&mock_server)
         .await;
 

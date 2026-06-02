@@ -824,10 +824,38 @@ pub async fn list(
         org_filter.as_deref(),
         collection_filter.as_deref(),
     )?;
+    let cipher_type_filter = type_filter
+        .as_deref()
+        .map(CipherType::from_str)
+        .transpose()
+        .map_err(|_err| {
+            anyhow::anyhow!(
+                "Invalid type filter: {}. Use: login, note, card, identity, ssh",
+                type_filter.as_deref().unwrap_or_default()
+            )
+        })?;
 
-    let mut ciphers: Vec<&Cipher> = ctx
-        .sync_response
-        .ciphers
+    let filtered_ciphers;
+    let ciphers_source = if org_id_filter.is_some()
+        || collection_id_filter.is_some()
+        || cipher_type_filter.is_some()
+    {
+        filtered_ciphers = ctx
+            .api
+            .ciphers_filtered(
+                &ctx.access_token,
+                org_id_filter.as_deref(),
+                collection_id_filter.as_deref(),
+                cipher_type_filter.map(|value| value as u8),
+            )
+            .await?
+            .data;
+        filtered_ciphers.as_slice()
+    } else {
+        ctx.sync_response.ciphers.as_slice()
+    };
+
+    let ciphers: Vec<&Cipher> = ciphers_source
         .iter()
         .filter(|c| {
             cipher_matches_filters(
@@ -835,18 +863,9 @@ pub async fn list(
                 org_id_filter.as_deref(),
                 collection_id_filter.as_deref(),
                 None,
-            )
+            ) && cipher_type_filter.is_none_or(|cipher_type| c.cipher_type() == Some(cipher_type))
         })
         .collect();
-
-    // Apply type filter (supports both type 5 and 6 for SSH keys)
-    if let Some(type_str) = &type_filter {
-        if let Ok(cipher_type) = CipherType::from_str(type_str) {
-            ciphers.retain(|c| c.cipher_type() == Some(cipher_type));
-        } else {
-            anyhow::bail!("Invalid type filter: {type_str}. Use: login, note, card, identity, ssh");
-        }
-    }
 
     // Decrypt and filter
     let search_lower = search.as_ref().map(|s| s.to_lowercase());
@@ -3825,7 +3844,7 @@ mod tests {
     // Tests for list command
     mod list_tests {
         use super::*;
-        use wiremock::matchers::{method, path};
+        use wiremock::matchers::{method, path, query_param};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         fn set_temp_config_dir(temp_dir: &tempfile::TempDir) -> config::ConfigDirOverride {
@@ -3924,6 +3943,15 @@ mod tests {
                 .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
                 .mount(&mock_server)
                 .await;
+            Mock::given(method("GET"))
+                .and(path("/api/ciphers"))
+                .and(query_param("type", "1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "object": "list",
+                    "data": sync_response["ciphers"].clone()
+                })))
+                .mount(&mock_server)
+                .await;
 
             let config = Config {
                 server: Some(mock_server.uri()),
@@ -3980,6 +4008,15 @@ mod tests {
             Mock::given(method("GET"))
                 .and(path("/api/sync"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/ciphers"))
+                .and(query_param("type", "1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "object": "list",
+                    "data": sync_response["ciphers"].clone()
+                })))
                 .mount(&mock_server)
                 .await;
 
@@ -4040,6 +4077,15 @@ mod tests {
                 .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
                 .mount(&mock_server)
                 .await;
+            Mock::given(method("GET"))
+                .and(path("/api/ciphers"))
+                .and(query_param("type", "2"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "object": "list",
+                    "data": sync_response["ciphers"].clone()
+                })))
+                .mount(&mock_server)
+                .await;
 
             let config = Config {
                 server: Some(mock_server.uri()),
@@ -4095,6 +4141,15 @@ mod tests {
             Mock::given(method("GET"))
                 .and(path("/api/sync"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/ciphers"))
+                .and(query_param("type", "2"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "object": "list",
+                    "data": sync_response["ciphers"].clone()
+                })))
                 .mount(&mock_server)
                 .await;
 
