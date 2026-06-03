@@ -19,7 +19,10 @@ coverage:
     echo "coverage report: $RUN_ROOT/out/tarpaulin-report.json"
 
 benchmark:
+    #!/usr/bin/env bash
+    set -euo pipefail
     cargo bench
+    ./scripts/benchmark-dhat.sh
 
 pre-commit:
     #!/usr/bin/env bash
