@@ -18,15 +18,15 @@ directories = "6.0"
 keyring-core = "1"
 regex = "1.12"
 base64 = "0.22"
-aes = "0.8"
-cbc = "0.1"
-hkdf = "0.12"
-sha2 = "0.10"
-hmac = "0.12"
-pbkdf2 = { version = "0.12", features = ["sha2"] }
-sha1 = "0.10"
+aes = "0.9"
+cbc = "0.2"
+hkdf = "0.13"
+sha2 = "0.11"
+hmac = "0.13"
+pbkdf2 = { version = "0.13", features = ["sha2"] }
+sha1 = "0.11"
 rpassword = "7.5"
-rsa = { version = "0.9", features = ["getrandom", "sha2"] }
+rsa = { version = "0.10.0-rc.18", features = ["getrandom", "sha1", "sha2"] }
 zeroize = { version = "1.8", features = ["derive"] }
 fs4 = "1.1"
 
