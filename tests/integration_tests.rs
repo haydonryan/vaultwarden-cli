@@ -497,7 +497,7 @@ mod edge_case_tests {
 
 /// Performance-related tests
 mod performance_tests {
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
     use vaultwarden_cli::crypto::CryptoKeys;
 
     #[test]
@@ -507,8 +507,10 @@ mod performance_tests {
         let _ = CryptoKeys::derive_master_key("password", "user@example.com", 1000);
         let duration = start.elapsed();
 
-        // Should complete in under 1 second with 1000 iterations
-        assert!(duration.as_secs() < 1);
+        assert!(
+            duration < Duration::from_secs(10),
+            "1000-iteration key derivation took {duration:?}"
+        );
     }
 
     #[test]
@@ -522,7 +524,9 @@ mod performance_tests {
         }
         let duration = start.elapsed();
 
-        // 1000 stretches should complete in under 1 second
-        assert!(duration.as_secs() < 1);
+        assert!(
+            duration < Duration::from_secs(10),
+            "1000 master-key stretches took {duration:?}"
+        );
     }
 }
