@@ -145,16 +145,38 @@ impl TestContext {
     }
 
     pub fn write_saved_user_keys(&self, keys: &CryptoKeys) -> Result<()> {
+        self.write_saved_keys(keys, &[])
+    }
+
+    pub fn write_saved_keys(
+        &self,
+        user_keys: &CryptoKeys,
+        org_keys: &[(&str, &CryptoKeys)],
+    ) -> Result<()> {
+        let org_keys = org_keys
+            .iter()
+            .map(|(id, keys)| {
+                (
+                    (*id).to_string(),
+                    serde_json::json!({
+                        "enc_key": BASE64.encode(&keys.enc_key),
+                        "mac_key": BASE64.encode(&keys.mac_key)
+                    }),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+
         self.write_raw_keys(&format!(
             r#"{{
                 "user_keys": {{
                     "enc_key": "{}",
                     "mac_key": "{}"
                 }},
-                "org_keys": {{}}
+                "org_keys": {}
             }}"#,
-            BASE64.encode(&keys.enc_key),
-            BASE64.encode(&keys.mac_key)
+            BASE64.encode(&user_keys.enc_key),
+            BASE64.encode(&user_keys.mac_key),
+            serde_json::Value::Object(org_keys)
         ))
     }
 

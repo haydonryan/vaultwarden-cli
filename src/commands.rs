@@ -2167,6 +2167,39 @@ mod tests {
         }
 
         #[test]
+        fn test_cipher_matches_filters_rejects_nonmatching_folder() {
+            let cipher = Cipher {
+                id: "cipher-1".to_string(),
+                r#type: 1,
+                organization_id: None,
+                name: None,
+                notes: None,
+                folder_id: Some("folder-1".to_string()),
+                login: None,
+                card: None,
+                identity: None,
+                secure_note: None,
+                ssh_key: None,
+                collection_ids: Vec::new(),
+                fields: None,
+                data: None,
+            };
+
+            assert!(cipher_matches_filters(
+                &cipher,
+                None,
+                None,
+                Some("folder-1")
+            ));
+            assert!(!cipher_matches_filters(
+                &cipher,
+                None,
+                None,
+                Some("folder-2")
+            ));
+        }
+
+        #[test]
         fn test_resolve_collection_id_matches_exact_id() {
             let collection = Collection {
                 id: "col-1".to_string(),

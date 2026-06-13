@@ -1111,6 +1111,287 @@ async fn list_with_type_filter_uses_server_side_type_query() {
 }
 
 #[tokio::test]
+async fn list_with_org_filter_uses_server_side_org_query() {
+    let ctx = TestContext::new();
+    let keys = test_crypto_keys();
+    let mock_server = MockServer::start().await;
+
+    let filtered_cipher = serde_json::json!({
+        "Id": "cipher-org",
+        "Type": 1,
+        "Name": encrypt_string_for_test("Org Login", &keys),
+        "Login": {
+            "Username": encrypt_string_for_test("org-user", &keys)
+        },
+        "OrganizationId": "org-1",
+        "CollectionIds": []
+    });
+    let sync_response = serde_json::json!({
+        "Ciphers": [],
+        "Folders": [],
+        "Collections": [],
+        "Profile": {
+            "Id": "user-1",
+            "Email": "user@example.com",
+            "Organizations": [
+                {
+                    "Id": "org-1",
+                    "Name": "Engineering"
+                }
+            ]
+        }
+    });
+    let ciphers_response = serde_json::json!({
+        "object": "list",
+        "data": [filtered_cipher]
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/api/sync"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/ciphers"))
+        .and(query_param("organizationId", "org-1"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&ciphers_response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    ctx.write_config(&Config {
+        server: Some(mock_server.uri()),
+        access_token: Some("access-token".to_string()),
+        token_expiry: Some(i64::MAX),
+        ..Default::default()
+    })
+    .unwrap();
+    ctx.write_saved_keys(&keys, &[("org-1", &keys)]).unwrap();
+
+    ctx.binary()
+        .arg("--allow-insecure-http")
+        .arg("list")
+        .arg("--org")
+        .arg("org-1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ORG_LOGIN_USERNAME"));
+}
+
+#[tokio::test]
+async fn list_with_collection_filter_uses_server_side_collection_query() {
+    let ctx = TestContext::new();
+    let keys = test_crypto_keys();
+    let mock_server = MockServer::start().await;
+
+    let filtered_cipher = serde_json::json!({
+        "Id": "cipher-collection",
+        "Type": 1,
+        "Name": encrypt_string_for_test("Collection Login", &keys),
+        "Login": {
+            "Username": encrypt_string_for_test("collection-user", &keys)
+        },
+        "OrganizationId": null,
+        "CollectionIds": ["collection-1"]
+    });
+    let sync_response = serde_json::json!({
+        "Ciphers": [],
+        "Folders": [],
+        "Collections": [
+            {
+                "Id": "collection-1",
+                "Name": "ignored-for-id-match",
+                "OrganizationId": "org-1"
+            }
+        ],
+        "Profile": {
+            "Id": "user-1",
+            "Email": "user@example.com",
+            "Organizations": []
+        }
+    });
+    let ciphers_response = serde_json::json!({
+        "object": "list",
+        "data": [filtered_cipher]
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/api/sync"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/ciphers"))
+        .and(query_param("collectionId", "collection-1"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&ciphers_response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    ctx.write_config(&Config {
+        server: Some(mock_server.uri()),
+        access_token: Some("access-token".to_string()),
+        token_expiry: Some(i64::MAX),
+        ..Default::default()
+    })
+    .unwrap();
+    ctx.write_saved_user_keys(&keys).unwrap();
+
+    ctx.binary()
+        .arg("--allow-insecure-http")
+        .arg("list")
+        .arg("--collection")
+        .arg("collection-1")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("COLLECTION_LOGIN_USERNAME"));
+}
+
+#[tokio::test]
+async fn list_skips_cipher_when_org_keys_are_missing() {
+    let ctx = TestContext::new();
+    let keys = test_crypto_keys();
+    let mock_server = MockServer::start().await;
+
+    let sync_response = serde_json::json!({
+        "Ciphers": [
+            {
+                "Id": "cipher-good",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Alpha Login", &keys),
+                "Login": {
+                    "Username": encrypt_string_for_test("alice", &keys)
+                },
+                "OrganizationId": null,
+                "CollectionIds": []
+            },
+            {
+                "Id": "cipher-org",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Org Login", &keys),
+                "Login": {
+                    "Username": encrypt_string_for_test("org-user", &keys)
+                },
+                "OrganizationId": "org-1",
+                "CollectionIds": []
+            }
+        ],
+        "Folders": [],
+        "Collections": [],
+        "Profile": {
+            "Id": "user-1",
+            "Email": "user@example.com",
+            "Organizations": []
+        }
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/api/sync"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    ctx.write_config(&Config {
+        server: Some(mock_server.uri()),
+        access_token: Some("access-token".to_string()),
+        token_expiry: Some(i64::MAX),
+        ..Default::default()
+    })
+    .unwrap();
+    ctx.write_saved_user_keys(&keys).unwrap();
+
+    ctx.binary()
+        .arg("--allow-insecure-http")
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ALPHA_LOGIN_USERNAME"))
+        .stdout(predicate::str::contains("ORG_LOGIN_USERNAME").not())
+        .stderr(
+            predicate::str::contains("Warning: No keys for cipher cipher-org").and(
+                predicate::str::contains("Organization key not available for org org-1"),
+            ),
+        );
+}
+
+#[tokio::test]
+async fn list_skips_cipher_when_decryption_fails() {
+    let ctx = TestContext::new();
+    let keys = test_crypto_keys();
+    let mock_server = MockServer::start().await;
+
+    let sync_response = serde_json::json!({
+        "Ciphers": [
+            {
+                "Id": "cipher-good",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Alpha Login", &keys),
+                "Login": {
+                    "Username": encrypt_string_for_test("alice", &keys)
+                },
+                "OrganizationId": null,
+                "CollectionIds": []
+            },
+            {
+                "Id": "cipher-bad",
+                "Type": 1,
+                "Name": "not-encrypted",
+                "Login": {
+                    "Username": encrypt_string_for_test("bad-user", &keys)
+                },
+                "OrganizationId": null,
+                "CollectionIds": []
+            }
+        ],
+        "Folders": [],
+        "Collections": [],
+        "Profile": {
+            "Id": "user-1",
+            "Email": "user@example.com",
+            "Organizations": []
+        }
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/api/sync"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    ctx.write_config(&Config {
+        server: Some(mock_server.uri()),
+        access_token: Some("access-token".to_string()),
+        token_expiry: Some(i64::MAX),
+        ..Default::default()
+    })
+    .unwrap();
+    ctx.write_saved_user_keys(&keys).unwrap();
+
+    ctx.binary()
+        .arg("--allow-insecure-http")
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ALPHA_LOGIN_USERNAME"))
+        .stdout(predicate::str::contains("BAD_USER").not())
+        .stderr(predicate::str::contains(
+            "Warning: Failed to decrypt cipher cipher-bad",
+        ));
+}
+
+#[tokio::test]
 async fn list_uses_sync_ciphers_without_ciphers_endpoint_fallback() {
     let ctx = TestContext::new();
     let keys = test_crypto_keys();
