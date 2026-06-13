@@ -1500,12 +1500,7 @@ fn format_unmatched_placeholder_warning(placeholders: &[String]) -> Option<Strin
 fn write_interpolated_output(output: &str, output_file: Option<&str>) -> Result<()> {
     if let Some(path) = output_file {
         let path = std::path::Path::new(path);
-        // Use write_secure instead of fs::write + set_permissions to avoid the
-        // TOCTOU race: fs::write creates the file at umask mode (typically 0o644)
-        // before a separate chmod call narrows it, leaving a brief window where
-        // the secret-bearing file is world-readable. write_secure uses fchmod on
-        // the open file descriptor before writing any data, closing that window.
-        crate::config::write_secure(path, output.as_bytes()).with_context(|| {
+        write_atomic_owner_only(path, output.as_bytes()).with_context(|| {
             format!(
                 "Failed to write interpolated output to '{}'",
                 path.display()
@@ -1516,6 +1511,72 @@ fn write_interpolated_output(output: &str, output_file: Option<&str>) -> Result<
         print!("{output}");
         Ok(())
     }
+}
+
+fn write_atomic_owner_only(path: &std::path::Path, content: &[u8]) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let file_name = path
+        .file_name()
+        .context("Interpolated output path must name a file")?
+        .to_string_lossy();
+    let process_id = std::process::id();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    for attempt in 0..100u32 {
+        let temp_path = parent.join(format!(".{file_name}.{process_id}.{nonce}.{attempt}.tmp"));
+        match write_atomic_owner_only_once(path, &temp_path, content) {
+            Ok(()) => return Ok(()),
+            Err(err) if temp_path.exists() => {
+                drop(fs::remove_file(&temp_path));
+                if err
+                    .downcast_ref::<io::Error>()
+                    .is_some_and(|io_err| io_err.kind() == io::ErrorKind::AlreadyExists)
+                {
+                    continue;
+                }
+                return Err(err);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    anyhow::bail!(
+        "Failed to create unique temporary output file in {}",
+        parent.display()
+    )
+}
+
+fn write_atomic_owner_only_once(
+    path: &std::path::Path,
+    temp_path: &std::path::Path,
+    content: &[u8],
+) -> Result<()> {
+    #[cfg(unix)]
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+
+    let mut file = options.open(temp_path)?;
+    #[cfg(unix)]
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    file.write_all(content)?;
+    file.flush()?;
+    file.sync_all()?;
+    drop(file);
+
+    fs::rename(temp_path, path)?;
+
+    if let Ok(parent) = File::open(path.parent().unwrap_or_else(|| std::path::Path::new("."))) {
+        drop(parent.sync_all());
+    }
+
+    Ok(())
 }
 
 fn cipher_to_env_vars(output: &CipherOutput) -> Vec<(String, String)> {
@@ -6217,6 +6278,41 @@ mod tests {
             write_interpolated_output("rendered: true\n", Some(path.to_str().unwrap())).unwrap();
 
             assert_eq!(fs::read_to_string(path).unwrap(), "rendered: true\n");
+        }
+
+        #[test]
+        fn test_write_interpolated_output_replaces_existing_file_atomically() {
+            let temp_dir = TempDir::new().unwrap();
+            let path = temp_dir.path().join("config.yml");
+            fs::write(&path, "rendered: false\n").unwrap();
+
+            write_interpolated_output("rendered: true\n", Some(path.to_str().unwrap())).unwrap();
+
+            assert_eq!(fs::read_to_string(&path).unwrap(), "rendered: true\n");
+            let leftovers: Vec<_> = fs::read_dir(temp_dir.path())
+                .unwrap()
+                .filter_map(std::result::Result::ok)
+                .map(|entry| entry.file_name())
+                .filter(|name| name.to_string_lossy().contains(".tmp"))
+                .collect();
+            assert!(
+                leftovers.is_empty(),
+                "temporary files left behind: {leftovers:?}"
+            );
+        }
+
+        #[test]
+        fn test_write_interpolated_output_can_replace_input_path_after_read() {
+            let temp_dir = TempDir::new().unwrap();
+            let path = temp_dir.path().join("config.yml");
+            fs::write(&path, "source: ((MyLogin.username))\n").unwrap();
+            let rendered = fs::read_to_string(&path)
+                .unwrap()
+                .replace("((MyLogin.username))", "myuser");
+
+            write_interpolated_output(&rendered, Some(path.to_str().unwrap())).unwrap();
+
+            assert_eq!(fs::read_to_string(&path).unwrap(), "source: myuser\n");
         }
 
         #[test]
