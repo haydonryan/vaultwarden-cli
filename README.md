@@ -34,6 +34,8 @@ Extract the archive and place `vaultwarden-cli` somewhere on your `PATH`.
 
 ### From Source
 
+Requires Rust 1.85+.
+
 ```bash
 git clone https://github.com/haydonryan/vaultwarden-cli.git
 cd vaultwarden-cli
