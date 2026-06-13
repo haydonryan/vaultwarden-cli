@@ -643,6 +643,9 @@ impl Config {
     }
 
     pub fn clear(&mut self) -> Result<()> {
+        self.server = None;
+        self.client_id = None;
+        self.email = None;
         self.access_token = None;
         self.refresh_token = None;
         self.token_expiry = None;

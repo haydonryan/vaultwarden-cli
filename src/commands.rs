@@ -2959,6 +2959,9 @@ mod tests {
             let loaded = Config::load().unwrap();
             assert!(!loaded.is_logged_in());
             assert!(!loaded.is_unlocked());
+            assert!(loaded.server.is_none());
+            assert!(loaded.client_id.is_none());
+            assert!(loaded.email.is_none());
             assert!(loaded.access_token.is_none());
             assert!(loaded.refresh_token.is_none());
             assert!(loaded.token_expiry.is_none());

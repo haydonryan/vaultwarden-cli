@@ -199,7 +199,7 @@ fn config_save_keys_round_trips_when_config_dir_exists() {
 }
 
 #[test]
-fn config_clear_removes_runtime_state_and_saved_keys_but_keeps_server_settings() {
+fn config_clear_removes_account_metadata_runtime_state_and_saved_keys() {
     let _guard = env_lock();
     let _unavailable_keyring = unavailable_keyring();
     let _allow_key_file = allow_insecure_key_file_fallback();
@@ -241,9 +241,9 @@ fn config_clear_removes_runtime_state_and_saved_keys_but_keeps_server_settings()
     assert!(!ctx.keys_path().exists());
 
     let loaded = ctx.load_config().unwrap();
-    assert_eq!(loaded.server.as_deref(), Some("https://vault.example.com"));
-    assert_eq!(loaded.client_id.as_deref(), Some("client-id"));
-    assert_eq!(loaded.email.as_deref(), Some("user@example.com"));
+    assert!(loaded.server.is_none());
+    assert!(loaded.client_id.is_none());
+    assert!(loaded.email.is_none());
     assert!(loaded.access_token.is_none());
     assert!(loaded.refresh_token.is_none());
     assert!(loaded.token_expiry.is_none());
