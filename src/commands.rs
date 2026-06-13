@@ -491,6 +491,7 @@ fn cipher_matches_filters(
     true
 }
 
+#[allow(dead_code)]
 fn find_cipher_output(
     ciphers: &[Cipher],
     config: &Config,
@@ -512,6 +513,74 @@ fn find_cipher_output(
         }
     }
     None
+}
+
+fn cipher_uri_matches(uri: &str, keys: &CryptoKeys, cipher: &Cipher) -> bool {
+    let uri_lower = uri.to_lowercase();
+
+    let uri_matches = |cipher_uri: &str| -> bool {
+        try_decrypt(keys, Some(cipher_uri))
+            .ok()
+            .flatten()
+            .is_some_and(|decrypted| decrypted.to_lowercase().contains(&uri_lower))
+    };
+
+    if let Some(login_uris) = cipher.login.as_ref().and_then(|l| l.uris.as_ref()) {
+        for uri_data in login_uris {
+            if let Some(uri_value) = uri_data.uri.as_deref() && uri_matches(uri_value) {
+                return true;
+            }
+        }
+    }
+
+    if let Some(data) = cipher.data.as_ref() {
+        if let Some(data_uri) = data.uri.as_deref() && uri_matches(data_uri) {
+            return true;
+        }
+
+        if let Some(data_uris) = data.uris.as_ref() {
+            for uri_data in data_uris {
+                if let Some(uri_value) = uri_data.uri.as_deref() && uri_matches(uri_value) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+fn ambiguous_uri_message(uri: &str, count: usize) -> String {
+    format!(
+        "URI '{uri}' is ambiguous; {count} vault items match case-insensitively. Use an item id to disambiguate."
+    )
+}
+
+fn find_cipher_output_by_uri(
+    ciphers: &[Cipher],
+    config: &Config,
+    uri: &str,
+    matches_filters: impl Fn(&Cipher) -> bool,
+    profile: CipherDecryptionProfile,
+) -> Result<CipherOutput> {
+    let matches: Vec<(&Cipher, &CryptoKeys)> = ciphers
+        .iter()
+        .filter(|cipher| matches_filters(cipher))
+        .filter_map(|cipher| {
+            let keys = get_cipher_keys(config, cipher).ok()?;
+            if cipher_uri_matches(uri, keys, cipher) {
+                Some((cipher, keys))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    match matches.as_slice() {
+        [(cipher, keys)] => decrypt_cipher_with_profile(cipher, keys, profile),
+        [] => anyhow::bail!("No item found with URI containing '{uri}'"),
+        matches => anyhow::bail!("{}", ambiguous_uri_message(uri, matches.len())),
+    }
 }
 
 fn ambiguous_item_name_message(raw_name: &str, count: usize) -> String {
@@ -660,6 +729,7 @@ fn try_decrypt_cipher_subfield(
         .transpose()
 }
 
+#[allow(dead_code)]
 fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
     decrypt_cipher_with_profile(cipher, keys, CipherDecryptionProfile::full())
 }
@@ -1185,15 +1255,10 @@ pub async fn get_by_uri(
         collection_filter.as_deref(),
     )?;
 
-    let uri_lower = uri.to_lowercase();
-    let output = find_cipher_output(
+    let output = find_cipher_output_by_uri(
         &ctx.sync_response.ciphers,
         &ctx.config,
-        |o| {
-            o.uri
-                .as_ref()
-                .is_some_and(|u| u.to_lowercase().contains(&uri_lower))
-        },
+        uri,
         |c| {
             cipher_matches_filters(
                 c,
@@ -1202,8 +1267,9 @@ pub async fn get_by_uri(
                 None,
             )
         },
+        CipherDecryptionProfile::full(),
     )
-    .context(format!("No item found with URI containing '{uri}'"))?;
+    ?;
 
     if format == "json" {
         ensure_plaintext_json_allowed(opts)?;
@@ -1660,19 +1726,15 @@ pub async fn run_with_secrets(
         let uri = requested_items
             .first()
             .context("URI search requires a URI argument")?;
-        let uri_lower = uri.to_lowercase();
         vec![
-            find_cipher_output(
+            find_cipher_output_by_uri(
                 &ctx.sync_response.ciphers,
                 &ctx.config,
-                |o| {
-                    o.uri
-                        .as_ref()
-                        .is_some_and(|u| u.to_lowercase().contains(&uri_lower))
-                },
+                uri,
                 matches_filters,
+                CipherDecryptionProfile::run_env(),
             )
-            .context(format!("No item found with URI containing '{uri}'"))?,
+            ?,
         ]
     } else if !requested_items.is_empty() {
         requested_items
@@ -1806,6 +1868,62 @@ mod tests {
     use tokio::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::const_new(());
+
+    fn make_encrypted_login_with_uris(
+        id: &str,
+        name: &str,
+        username: &str,
+        password: &str,
+        uris: &[&str],
+        keys: &CryptoKeys,
+    ) -> serde_json::Value {
+        let enc_name = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+            name.as_bytes(),
+            &keys.enc_key,
+            &keys.mac_key,
+        );
+        let enc_user = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+            username.as_bytes(),
+            &keys.enc_key,
+            &keys.mac_key,
+        );
+        let enc_pass = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+            password.as_bytes(),
+            &keys.enc_key,
+            &keys.mac_key,
+        );
+        let encrypted_uris = uris
+            .iter()
+            .map(|uri| {
+                serde_json::json!({
+                    "uri": crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                        uri.as_bytes(),
+                        &keys.enc_key,
+                        &keys.mac_key,
+                    ),
+                    "match": 0
+                })
+            })
+            .collect::<Vec<_>>();
+
+        serde_json::json!({
+            "id": id,
+            "type": 1,
+            "name": enc_name,
+            "login": {
+                "username": enc_user,
+                "password": enc_pass,
+                "uris": if encrypted_uris.is_empty() {
+                    None::<Vec<serde_json::Value>>
+                } else {
+                    Some(encrypted_uris)
+                },
+                "totp": null
+            },
+            "collectionIds": [],
+            "organizationId": null
+        })
+    }
 
     mod time_tests {
         use super::*;
@@ -3800,6 +3918,148 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_run_with_secrets_matches_secondary_uri() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let sync_response = serde_json::json!({
+                "ciphers": [
+                    make_encrypted_login_with_uris(
+                        "cipher-1",
+                        "MyLogin",
+                        "user",
+                        "pass",
+                        &["https://example.net/login", "https://example.com/login"],
+                        &keys
+                    ),
+                ],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let result = run_with_secrets(
+                &[String::from("example.com/login")],
+                true,
+                None,
+                None,
+                None,
+                false,
+                &[String::from("true")],
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+            assert!(matches!(result, Ok(CommandOutcome::Success)));
+        }
+
+        #[tokio::test]
+        async fn test_run_with_secrets_reports_ambiguous_uri_matches() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let sync_response = serde_json::json!({
+                "ciphers": [
+                    make_encrypted_login_with_uris(
+                        "cipher-1",
+                        "Primary App",
+                        "user",
+                        "pass",
+                        &["https://example.com/login"],
+                        &keys
+                    ),
+                    make_encrypted_login_with_uris(
+                        "cipher-2",
+                        "Secondary App",
+                        "other-user",
+                        "other-pass",
+                        &["https://backup.example.com", "https://example.com/help"],
+                        &keys
+                    ),
+                ],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let err = run_with_secrets(
+                &[String::from("example.com")],
+                true,
+                None,
+                None,
+                None,
+                false,
+                &[String::from("true")],
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("ambiguous URI search should return an error");
+
+            let message = err.to_string();
+            assert!(message.contains("URI 'example.com' is ambiguous"));
+            assert!(message.contains("2 vault items match case-insensitively"));
+        }
+
+        #[tokio::test]
         async fn test_run_with_secrets_allows_id_to_disambiguate_duplicate_names() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
@@ -5075,40 +5335,147 @@ mod tests {
             uri: &str,
             keys: &CryptoKeys,
         ) -> serde_json::Value {
-            let enc_name = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
-                name.as_bytes(),
-                &keys.enc_key,
-                &keys.mac_key,
-            );
-            let enc_user = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
-                username.as_bytes(),
-                &keys.enc_key,
-                &keys.mac_key,
-            );
-            let enc_pass = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
-                password.as_bytes(),
-                &keys.enc_key,
-                &keys.mac_key,
-            );
-            let enc_uri = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
-                uri.as_bytes(),
-                &keys.enc_key,
-                &keys.mac_key,
-            );
+            make_encrypted_login_with_uris(id, name, username, password, &[uri], keys)
+        }
 
-            serde_json::json!({
-                "id": id,
-                "type": 1,
-                "name": enc_name,
-                "login": {
-                    "username": enc_user,
-                    "password": enc_pass,
-                    "uris": [{"uri": enc_uri, "match": 0}],
-                    "totp": null
+        #[tokio::test]
+        async fn test_get_by_uri_matches_secondary_uri() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let sync_response = serde_json::json!({
+                "ciphers": [
+                    make_encrypted_login_with_uris(
+                        "cipher-1",
+                        "GitHub",
+                        "user",
+                        "pass",
+                        &["https://example.net/login", "https://github.com/login"],
+                        &keys
+                    ),
+                ],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let result = get_by_uri(
+                "github.com/login",
+                "json",
+                None,
+                None,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    allow_plaintext_json: true,
+                    ..Default::default()
                 },
-                "collectionIds": [],
-                "organizationId": null
-            })
+            )
+            .await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_get_by_uri_reports_ambiguous_when_multiple_items_match() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+
+            let sync_response = serde_json::json!({
+                "ciphers": [
+                    make_encrypted_login_with_uris(
+                        "cipher-1",
+                        "GitHub",
+                        "user",
+                        "pass",
+                        &["https://github.com/login", "https://help.example.com"],
+                        &keys
+                    ),
+                    make_encrypted_login_with_uris(
+                        "cipher-2",
+                        "Other App",
+                        "other-user",
+                        "other-pass",
+                        &["https://backup.example.com", "https://github.com/help"],
+                        &keys
+                    ),
+                ],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+
+            Mock::given(method("GET"))
+                .and(path("/api/sync"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+                .mount(&mock_server)
+                .await;
+
+            let config = Config {
+                server: Some(mock_server.uri()),
+                access_token: Some("token".to_string()),
+                token_expiry: Some(i64::MAX),
+                email: Some("user@example.com".to_string()),
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+            config.save().unwrap();
+            config.save_keys().unwrap();
+
+            let err = get_by_uri(
+                "github.com",
+                "json",
+                None,
+                None,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    allow_plaintext_json: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("ambiguous URI match should return an error");
+
+            let message = err.to_string();
+            assert!(message.contains("URI 'github.com' is ambiguous"));
+            assert!(message.contains("2 vault items match case-insensitively"));
         }
 
         #[tokio::test]
