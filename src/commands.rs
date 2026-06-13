@@ -527,20 +527,26 @@ fn cipher_uri_matches(uri: &str, keys: &CryptoKeys, cipher: &Cipher) -> bool {
 
     if let Some(login_uris) = cipher.login.as_ref().and_then(|l| l.uris.as_ref()) {
         for uri_data in login_uris {
-            if let Some(uri_value) = uri_data.uri.as_deref() && uri_matches(uri_value) {
+            if let Some(uri_value) = uri_data.uri.as_deref()
+                && uri_matches(uri_value)
+            {
                 return true;
             }
         }
     }
 
     if let Some(data) = cipher.data.as_ref() {
-        if let Some(data_uri) = data.uri.as_deref() && uri_matches(data_uri) {
+        if let Some(data_uri) = data.uri.as_deref()
+            && uri_matches(data_uri)
+        {
             return true;
         }
 
         if let Some(data_uris) = data.uris.as_ref() {
             for uri_data in data_uris {
-                if let Some(uri_value) = uri_data.uri.as_deref() && uri_matches(uri_value) {
+                if let Some(uri_value) = uri_data.uri.as_deref()
+                    && uri_matches(uri_value)
+                {
                     return true;
                 }
             }
@@ -1004,7 +1010,10 @@ fn resolve_collection_id(
         return Ok(c.id.clone());
     }
 
-    // Try decrypted name match — collection names are encrypted with the org key
+    // Try decrypted name match — collection names are encrypted with the org key.
+    // A collection name can exist in multiple organizations, so unscoped name
+    // matches must not depend on sync ordering.
+    let mut matches = Vec::new();
     for col in collections {
         if let Some(oid) = org_id_filter
             && col.organization_id != oid
@@ -1018,11 +1027,18 @@ fn resolve_collection_id(
         if let Ok(name) = keys.decrypt_to_string(&col.name)
             && name.eq_ignore_ascii_case(collection_filter)
         {
-            return Ok(col.id.clone());
+            matches.push(col);
         }
     }
 
-    anyhow::bail!("Collection '{collection_filter}' not found")
+    match matches.as_slice() {
+        [col] => Ok(col.id.clone()),
+        [] => anyhow::bail!("Collection '{collection_filter}' not found"),
+        matches => anyhow::bail!(
+            "Collection '{collection_filter}' is ambiguous; {} collections match case-insensitively. Use a collection id or --org to disambiguate.",
+            matches.len()
+        ),
+    }
 }
 
 fn output_matches_search(output: &CipherOutput, search_lower: &str) -> bool {
@@ -1268,8 +1284,7 @@ pub async fn get_by_uri(
             )
         },
         CipherDecryptionProfile::full(),
-    )
-    ?;
+    )?;
 
     if format == "json" {
         ensure_plaintext_json_allowed(opts)?;
@@ -1726,16 +1741,13 @@ pub async fn run_with_secrets(
         let uri = requested_items
             .first()
             .context("URI search requires a URI argument")?;
-        vec![
-            find_cipher_output_by_uri(
-                &ctx.sync_response.ciphers,
-                &ctx.config,
-                uri,
-                matches_filters,
-                CipherDecryptionProfile::run_env(),
-            )
-            ?,
-        ]
+        vec![find_cipher_output_by_uri(
+            &ctx.sync_response.ciphers,
+            &ctx.config,
+            uri,
+            matches_filters,
+            CipherDecryptionProfile::run_env(),
+        )?]
     } else if !requested_items.is_empty() {
         requested_items
             .iter()
@@ -2358,6 +2370,43 @@ mod tests {
             let collection_id =
                 resolve_collection_id(&collections, "shared", Some("org-1"), &config).unwrap();
             assert_eq!(collection_id, "col-1");
+        }
+
+        #[test]
+        fn test_resolve_collection_id_rejects_ambiguous_decrypted_name_without_org_scope() {
+            let org_1_keys = CryptoKeys {
+                enc_key: vec![1u8; 32],
+                mac_key: vec![2u8; 32],
+            };
+            let org_2_keys = CryptoKeys {
+                enc_key: vec![3u8; 32],
+                mac_key: vec![4u8; 32],
+            };
+            let mut config = Config::default();
+            config
+                .org_crypto_keys
+                .insert("org-1".to_string(), org_1_keys.clone());
+            config
+                .org_crypto_keys
+                .insert("org-2".to_string(), org_2_keys.clone());
+
+            let collections = vec![
+                Collection {
+                    id: "col-1".to_string(),
+                    name: encrypt_for_test("Shared", &org_1_keys),
+                    organization_id: "org-1".to_string(),
+                },
+                Collection {
+                    id: "col-2".to_string(),
+                    name: encrypt_for_test("shared", &org_2_keys),
+                    organization_id: "org-2".to_string(),
+                },
+            ];
+
+            let err = resolve_collection_id(&collections, "shared", None, &config).unwrap_err();
+            let message = err.to_string();
+            assert!(message.contains("Collection 'shared' is ambiguous"));
+            assert!(message.contains("Use a collection id or --org to disambiguate"));
         }
 
         #[test]
