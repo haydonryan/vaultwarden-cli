@@ -346,6 +346,9 @@ mod tests {
     use std::sync::{Mutex, MutexGuard};
     use tempfile::TempDir;
     use vaultwarden_cli::config::{Config, ConfigDirOverride};
+    use vaultwarden_cli::crypto::CryptoKeys;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -358,13 +361,18 @@ mod tests {
 
     impl TestEnv {
         fn new() -> Self {
-            let guard = ENV_LOCK.lock().expect("env lock poisoned");
+            let guard = ENV_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let temp_dir = TempDir::new().expect("create temp dir");
             let config_root = temp_dir.path().join("config-root");
             std::fs::create_dir_all(&config_root).expect("create config root");
             let config_dir = config_root.join("vaultwarden-cli");
 
             let config_dir_override = Config::scoped_config_dir_override_for_thread(&config_dir);
+            unsafe {
+                std::env::set_var("VAULTWARDEN_ALLOW_INSECURE_KEY_FILE", "true");
+            }
 
             Self {
                 _guard: guard,
@@ -377,6 +385,64 @@ mod tests {
         fn config_dir(&self) -> std::path::PathBuf {
             self.config_dir.clone()
         }
+
+        fn write_config(&self, config: &Config) {
+            std::fs::create_dir_all(&self.config_dir).expect("create config dir");
+            config.save().expect("save config");
+            if config.crypto_keys.is_some() || !config.org_crypto_keys.is_empty() {
+                config.save_keys().expect("save keys");
+            }
+        }
+
+        fn fixture_file(&self, name: &str, contents: &str) -> String {
+            let path = self._temp_dir.path().join(name);
+            std::fs::write(&path, contents).expect("write fixture");
+            path.to_string_lossy().into_owned()
+        }
+    }
+
+    impl Drop for TestEnv {
+        fn drop(&mut self) {
+            unsafe {
+                std::env::remove_var("VAULTWARDEN_ALLOW_INSECURE_KEY_FILE");
+            }
+        }
+    }
+
+    fn logged_in_config(server: String) -> Config {
+        Config {
+            server: Some(server),
+            access_token: Some("access-token".to_string()),
+            token_expiry: Some(i64::MAX),
+            crypto_keys: Some(CryptoKeys {
+                enc_key: vec![0; 32],
+                mac_key: vec![0; 32],
+            }),
+            ..Default::default()
+        }
+    }
+
+    async fn mock_empty_sync() -> MockServer {
+        let mock_server = MockServer::start().await;
+        let sync_response = serde_json::json!({
+            "Ciphers": [],
+            "Folders": [],
+            "Collections": [],
+            "Profile": {
+                "Id": "user-1",
+                "Email": "user@example.com",
+                "Organizations": []
+            }
+        });
+
+        Mock::given(method("GET"))
+            .and(path("/api/sync"))
+            .and(header("authorization", "Bearer access-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+            .mount(&mock_server)
+            .await;
+
+        mock_server
     }
 
     #[test]
@@ -453,6 +519,176 @@ mod tests {
         let err = run_cli(cli).await.unwrap_err();
 
         assert!(err.to_string().contains("Failed to parse config"));
+    }
+
+    #[tokio::test]
+    async fn test_run_cli_dispatches_list_with_insecure_http_flag() {
+        let env = TestEnv::new();
+        let mock_server = mock_empty_sync().await;
+        env.write_config(&logged_in_config(mock_server.uri()));
+        let cli = Cli::parse_from(["vaultwarden-cli", "--allow-insecure-http", "list"]);
+
+        run_cli(cli).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_run_cli_rejects_list_without_insecure_http_flag() {
+        let env = TestEnv::new();
+        let mock_server = mock_empty_sync().await;
+        env.write_config(&logged_in_config(mock_server.uri()));
+        let cli = Cli::parse_from(["vaultwarden-cli", "list"]);
+
+        let err = run_cli(cli).await.unwrap_err();
+
+        assert!(err.to_string().contains("Insecure server URL rejected"));
+    }
+
+    #[tokio::test]
+    async fn test_run_cli_dispatches_get_through_sync_lookup() {
+        let env = TestEnv::new();
+        let mock_server = mock_empty_sync().await;
+        env.write_config(&logged_in_config(mock_server.uri()));
+        let cli = Cli::parse_from([
+            "vaultwarden-cli",
+            "--allow-insecure-http",
+            "get",
+            "missing-item",
+            "--format",
+            "env",
+            "--collection",
+            "missing-collection",
+        ]);
+
+        let err = run_cli(cli).await.unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Collection 'missing-collection' not found")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_cli_dispatches_get_uri_through_sync_lookup() {
+        let env = TestEnv::new();
+        let mock_server = mock_empty_sync().await;
+        env.write_config(&logged_in_config(mock_server.uri()));
+        let cli = Cli::parse_from([
+            "vaultwarden-cli",
+            "--allow-insecure-http",
+            "get-uri",
+            "https://example.com",
+            "--format",
+            "env",
+        ]);
+
+        let err = run_cli(cli).await.unwrap_err();
+
+        let err = err.to_string();
+        assert!(!err.is_empty());
+        assert!(err.to_lowercase().contains("uri"));
+    }
+
+    #[tokio::test]
+    async fn test_run_cli_dispatches_run_with_explicit_name() {
+        let env = TestEnv::new();
+        let mock_server = mock_empty_sync().await;
+        env.write_config(&logged_in_config(mock_server.uri()));
+        let cli = Cli::parse_from([
+            "vaultwarden-cli",
+            "--allow-insecure-http",
+            "run",
+            "--name",
+            "missing-item",
+            "--info",
+        ]);
+
+        let err = run_cli(cli).await.unwrap_err();
+
+        assert!(err.to_string().contains("Item 'missing-item' not found"));
+    }
+
+    #[tokio::test]
+    async fn test_run_cli_uses_positional_run_items_only_without_explicit_selector() {
+        let env = TestEnv::new();
+        let mock_server = mock_empty_sync().await;
+        env.write_config(&logged_in_config(mock_server.uri()));
+        let cli = Cli::parse_from([
+            "vaultwarden-cli",
+            "--allow-insecure-http",
+            "run",
+            "implicit-item",
+            "--name",
+            "explicit-item",
+            "--info",
+        ]);
+
+        let err = run_cli(cli).await.unwrap_err();
+
+        assert!(err.to_string().contains("Item 'explicit-item' not found"));
+        assert!(!err.to_string().contains("implicit-item"));
+    }
+
+    #[tokio::test]
+    async fn test_run_cli_dispatches_run_uri() {
+        let env = TestEnv::new();
+        let mock_server = mock_empty_sync().await;
+        env.write_config(&logged_in_config(mock_server.uri()));
+        let cli = Cli::parse_from([
+            "vaultwarden-cli",
+            "--allow-insecure-http",
+            "run-uri",
+            "https://example.com",
+            "--info",
+        ]);
+
+        let err = run_cli(cli).await.unwrap_err();
+
+        let err = err.to_string();
+        assert!(!err.is_empty());
+        assert!(err.to_lowercase().contains("uri"));
+    }
+
+    #[tokio::test]
+    async fn test_run_cli_dispatches_interpolate() {
+        let env = TestEnv::new();
+        let mock_server = mock_empty_sync().await;
+        env.write_config(&logged_in_config(mock_server.uri()));
+        let file = env.fixture_file("input.yml", "plain: value\n");
+        let cli = Cli::parse_from([
+            "vaultwarden-cli",
+            "--allow-insecure-http",
+            "interpolate",
+            "--file",
+            &file,
+        ]);
+
+        run_cli(cli).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_run_cli_sets_insecure_mac_library_state() {
+        let _env = TestEnv::new();
+        vaultwarden_cli::crypto::set_allow_insecure_mac(false);
+        let cli = Cli::parse_from(["vaultwarden-cli", "--allow-insecure-mac", "status"]);
+
+        run_cli(cli).await.unwrap();
+
+        assert!(vaultwarden_cli::crypto::allow_insecure_mac());
+        vaultwarden_cli::crypto::set_allow_insecure_mac(false);
+    }
+
+    #[test]
+    fn test_cli_plaintext_json_flag_reaches_command_options() {
+        let cli = Cli::parse_from([
+            "vaultwarden-cli",
+            "--allow-plaintext-json",
+            "list",
+            "--json",
+        ]);
+        let opts =
+            commands::CommandOptions::for_cli(cli.allow_insecure_http, cli.allow_plaintext_json);
+
+        assert!(opts.allow_plaintext_json);
     }
 
     #[test]
