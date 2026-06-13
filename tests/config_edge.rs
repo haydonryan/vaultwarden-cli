@@ -6,6 +6,7 @@ use support::{
     TestContext, allow_insecure_key_file_fallback, env_lock, mock_keyring, unavailable_keyring,
 };
 use vaultwarden_cli::config::{self, Config, KeyPersistenceOutcome};
+use vaultwarden_cli::crypto::CryptoKeys;
 
 #[test]
 fn config_load_fails_for_invalid_config_json() {
@@ -125,6 +126,71 @@ fn config_save_keys_warns_when_client_id_is_none() {
 }
 
 #[test]
+fn warning_capture_drain_clears_messages_and_drop_restores_stderr_mode() {
+    let _guard = env_lock();
+    let _unavailable_keyring = unavailable_keyring();
+    let ctx = TestContext::new();
+    ctx.create_config_dir();
+
+    let config = ctx.scoped_config(Config {
+        crypto_keys: Some(CryptoKeys {
+            enc_key: vec![7u8; 32],
+            mac_key: vec![9u8; 32],
+        }),
+        ..Default::default()
+    });
+
+    let capture = config::capture_warnings();
+    config
+        .save_keys()
+        .expect("save_keys should succeed without persistence");
+    let warnings = capture.drain();
+    assert!(
+        warnings.iter().any(|warning| warning.contains("client_id")),
+        "expected missing client_id warning, got: {warnings:?}"
+    );
+    assert!(
+        capture.drain().is_empty(),
+        "drain should clear captured warnings"
+    );
+    drop(capture);
+
+    config
+        .save_keys()
+        .expect("save_keys should use stderr after capture drops");
+    let next_capture = config::capture_warnings();
+    assert!(
+        next_capture.drain().is_empty(),
+        "warnings emitted after drop should not remain captured"
+    );
+}
+
+#[test]
+fn scoped_config_dir_override_cleans_up_static_paths_and_lock_path() {
+    let _guard = env_lock();
+    let override_ctx = TestContext::new();
+    let env_ctx = TestContext::new();
+    env_ctx.set_process_env();
+
+    {
+        let _override = Config::scoped_config_dir_override_for_thread(override_ctx.config_dir());
+        assert_eq!(Config::config_path().unwrap(), override_ctx.config_path());
+        assert_eq!(Config::keys_path().unwrap(), override_ctx.keys_path());
+        assert_eq!(Config::tokens_path().unwrap(), override_ctx.tokens_path());
+        assert_eq!(
+            Config::token_refresh_lock_path().unwrap(),
+            override_ctx.config_dir().join("token-refresh.lock")
+        );
+    }
+
+    assert_eq!(Config::config_path().unwrap(), env_ctx.config_path());
+    assert_eq!(
+        Config::token_refresh_lock_path().unwrap(),
+        env_ctx.config_dir().join("token-refresh.lock")
+    );
+}
+
+#[test]
 fn config_save_keys_defaults_to_no_persist_without_keyring() {
     let _guard = env_lock();
     let _unavailable_keyring = unavailable_keyring();
@@ -153,6 +219,135 @@ fn config_save_keys_defaults_to_no_persist_without_keyring() {
     assert!(
         warnings.iter().any(|w| w.contains("not persisted")),
         "expected no-persist warning, got: {warnings:?}"
+    );
+}
+
+#[test]
+fn config_save_keys_removes_stale_legacy_file_after_keyring_success() {
+    let _guard = env_lock();
+    let _mock_keyring = mock_keyring();
+    let ctx = TestContext::new();
+    ctx.write_raw_keys(r#"{"stale":true}"#).unwrap();
+
+    let config = ctx.scoped_config(Config {
+        client_id: Some("client-id".to_string()),
+        crypto_keys: Some(CryptoKeys {
+            enc_key: vec![7u8; 32],
+            mac_key: vec![9u8; 32],
+        }),
+        ..Default::default()
+    });
+
+    let outcome = config
+        .save_keys()
+        .expect("keys should save to mock keyring");
+
+    assert_eq!(outcome, KeyPersistenceOutcome::SystemKeyring);
+    assert!(
+        !ctx.keys_path().exists(),
+        "stale legacy keys.json should be removed after keyring save"
+    );
+}
+
+#[test]
+fn config_save_keys_removes_stale_legacy_file_when_no_persist_is_required() {
+    let _guard = env_lock();
+    let _unavailable_keyring = unavailable_keyring();
+    let _disallow_key_file =
+        support::ScopedEnvVar::set("VAULTWARDEN_ALLOW_INSECURE_KEY_FILE", "false");
+    let ctx = TestContext::new();
+    ctx.write_raw_keys(r#"{"stale":true}"#).unwrap();
+
+    let config = ctx.scoped_config(Config {
+        client_id: Some("client-id".to_string()),
+        crypto_keys: Some(CryptoKeys {
+            enc_key: vec![7u8; 32],
+            mac_key: vec![9u8; 32],
+        }),
+        ..Default::default()
+    });
+
+    let capture = config::capture_warnings();
+    let outcome = config
+        .save_keys()
+        .expect("no-persist fallback should not fail");
+    let warnings = capture.drain();
+
+    assert_eq!(outcome, KeyPersistenceOutcome::NotPersisted);
+    assert!(
+        !ctx.keys_path().exists(),
+        "stale legacy keys.json should be removed when key persistence is disabled"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("not persisted")),
+        "expected no-persist warning, got: {warnings:?}"
+    );
+}
+
+#[test]
+fn config_load_saved_keys_removes_legacy_file_unless_insecure_fallback_is_allowed() {
+    let _guard = env_lock();
+    let _unavailable_keyring = unavailable_keyring();
+    let _disallow_key_file =
+        support::ScopedEnvVar::set("VAULTWARDEN_ALLOW_INSECURE_KEY_FILE", "false");
+    let ctx = TestContext::new();
+    ctx.write_saved_user_keys(&CryptoKeys {
+        enc_key: vec![1u8; 32],
+        mac_key: vec![2u8; 32],
+    })
+    .unwrap();
+
+    let mut config = ctx.scoped_config(Config {
+        client_id: Some("client-id".to_string()),
+        ..Default::default()
+    });
+    let capture = config::capture_warnings();
+    config
+        .load_saved_keys()
+        .expect("legacy file should be ignored and removed");
+    let warnings = capture.drain();
+
+    assert!(config.crypto_keys.is_none());
+    assert!(
+        !ctx.keys_path().exists(),
+        "legacy keys.json should be removed unless explicitly allowed"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("Ignored and removed legacy plaintext keys.json")),
+        "expected legacy removal warning, got: {warnings:?}"
+    );
+}
+
+#[test]
+fn config_load_saved_keys_accepts_legacy_file_when_insecure_fallback_is_allowed() {
+    let _guard = env_lock();
+    let _unavailable_keyring = unavailable_keyring();
+    let _allow_key_file = allow_insecure_key_file_fallback();
+    let ctx = TestContext::new();
+    ctx.write_saved_user_keys(&CryptoKeys {
+        enc_key: vec![1u8; 32],
+        mac_key: vec![2u8; 32],
+    })
+    .unwrap();
+
+    let mut config = ctx.scoped_config(Config {
+        client_id: Some("client-id".to_string()),
+        ..Default::default()
+    });
+    config
+        .load_saved_keys()
+        .expect("legacy file should load when explicitly allowed");
+
+    let keys = config.crypto_keys.expect("legacy user keys should load");
+    assert_eq!(keys.enc_key, vec![1u8; 32]);
+    assert_eq!(keys.mac_key, vec![2u8; 32]);
+    assert!(
+        ctx.keys_path().exists(),
+        "allowed legacy keys.json should remain in place"
     );
 }
 
