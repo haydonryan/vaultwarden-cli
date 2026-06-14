@@ -28,7 +28,7 @@ pbkdf2 = { version = "0.13", features = ["sha2"] }
 sha1 = "0.11"
 rpassword = "7.5"
 rsa = { version = "0.10.0-rc.18", features = ["getrandom", "sha1", "sha2"] }
-zeroize = { version = "1.8", features = ["derive"] }
+zeroize = { version = "1.9", features = ["derive"] }
 fs4 = "1.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
