@@ -82,7 +82,27 @@ impl ApiClient {
             );
         }
 
+        // Identify this client to the server. Vaultwarden's `ClientVersion` request
+        // guard (src/auth.rs) parses the `Bitwarden-Client-Version` header as a
+        // `semver::Version` and logs an ERROR for every request that omits it
+        // ("No Bitwarden-Client-Version header provided"). That guard is consumed as
+        // `Option<ClientVersion>`, so the request still succeeds — but each one spams
+        // the server's error log. Sending our own crate version (a valid semver) makes
+        // the guard resolve cleanly, so these requests are no longer logged as errors.
+        // Both the version and the User-Agent name come from Cargo.toml (no hardcoding).
+        let mut default_headers = reqwest::header::HeaderMap::new();
+        default_headers.insert(
+            reqwest::header::HeaderName::from_static("bitwarden-client-version"),
+            reqwest::header::HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
+        );
+
         let client = Client::builder()
+            .user_agent(concat!(
+                env!("CARGO_PKG_NAME"),
+                "/",
+                env!("CARGO_PKG_VERSION")
+            ))
+            .default_headers(default_headers)
             .timeout(std::time::Duration::from_secs(60))
             .connect_timeout(std::time::Duration::from_secs(15))
             .build()
