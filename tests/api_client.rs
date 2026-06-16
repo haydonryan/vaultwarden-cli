@@ -472,3 +472,32 @@ async fn api_client_check_server_reports_transport_errors() {
 
     assert!(err.to_string().contains("Failed to check server status"));
 }
+
+#[tokio::test]
+async fn api_client_sends_client_identification_headers() {
+    let mock_server = MockServer::start().await;
+
+    // The mock only matches when the request carries both client-identification
+    // headers, so `.expect(1)` fails at teardown if either is missing. The
+    // expected values come from crate metadata, matching how `ApiClient` builds
+    // them (`CARGO_PKG_VERSION` / `CARGO_PKG_NAME`) rather than hardcoded strings.
+    Mock::given(method("GET"))
+        .and(path("/alive"))
+        .and(header(
+            "bitwarden-client-version",
+            env!("CARGO_PKG_VERSION"),
+        ))
+        .and(header(
+            "user-agent",
+            concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")),
+        ))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::new_with_flags(&mock_server.uri(), true).unwrap();
+    let is_alive = client.check_server().await.unwrap();
+
+    assert!(is_alive);
+}
