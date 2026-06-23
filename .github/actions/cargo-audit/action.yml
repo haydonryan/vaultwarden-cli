@@ -1,0 +1,11 @@
+name: "Cargo Audit"
+description: "Install and run cargo-audit for security vulnerability scanning"
+runs:
+  using: "composite"
+  steps:
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+      shell: bash
+    - name: Run cargo audit
+      run: cargo audit
+      shell: bash
