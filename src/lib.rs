@@ -17,7 +17,9 @@ pub mod crypto;
 pub mod models;
 
 pub fn install_rustls_crypto_provider() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    match rustls::crypto::ring::default_provider().install_default() {
+        Ok(()) | Err(_) => {}
+    }
 }
 
 #[cfg(test)]
