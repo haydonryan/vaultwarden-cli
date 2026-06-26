@@ -1,6 +1,6 @@
 [package]
 name = "vaultwarden-cli"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2024"
 rust-version = "1.88"
 description = "CLI client for Vaultwarden - retrieve secrets for batch files and environment variables"
