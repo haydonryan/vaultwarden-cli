@@ -256,6 +256,101 @@ async fn run_with_collection_scope_injects_all_matching_items() {
 }
 
 #[tokio::test]
+async fn run_with_org_scope_includes_ssh_key_env_vars() {
+    let ctx = TestContext::new();
+    let keys = test_crypto_keys();
+    let mock_server = MockServer::start().await;
+
+    let sync_response = serde_json::json!({
+        "Ciphers": [],
+        "Folders": [],
+        "Collections": [],
+        "Profile": {
+            "Id": "user-1",
+            "Email": "user@example.com",
+            "Organizations": [
+                {
+                    "Id": "org-1",
+                    "Name": "HNR Global"
+                }
+            ]
+        }
+    });
+
+    let ciphers_response = serde_json::json!({
+        "object": "list",
+        "data": [
+            {
+                "Id": "cipher-login",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Deploy Login", &keys),
+                "Login": {
+                    "Username": encrypt_string_for_test("alice", &keys),
+                    "Password": encrypt_string_for_test("login-secret", &keys)
+                },
+                "OrganizationId": "org-1",
+                "CollectionIds": []
+            },
+            {
+                "Id": "cipher-ssh",
+                "Type": 5,
+                "Name": encrypt_string_for_test("Deploy Key", &keys),
+                "SshKey": {
+                    "PublicKey": encrypt_string_for_test("ssh-ed25519 AAAA", &keys),
+                    "PrivateKey": encrypt_string_for_test("PRIVATE-KEY", &keys),
+                    "Fingerprint": encrypt_string_for_test("SHA256:abc123", &keys)
+                },
+                "OrganizationId": "org-1",
+                "CollectionIds": []
+            }
+        ]
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/api/sync"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/ciphers"))
+        .and(query_param("organizationId", "org-1"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&ciphers_response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    ctx.write_config(&Config {
+        server: Some(mock_server.uri()),
+        access_token: Some("access-token".to_string()),
+        token_expiry: Some(i64::MAX),
+        ..Default::default()
+    })
+    .unwrap();
+    ctx.write_saved_keys(&keys, &[("org-1", &keys)]).unwrap();
+
+    ctx.binary()
+        .arg("--allow-insecure-http")
+        .arg("run")
+        .arg("--org")
+        .arg("HNR Global")
+        .arg("--info")
+        .arg("--")
+        .arg("echo")
+        .arg("test")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DEPLOY_LOGIN_USERNAME"))
+        .stdout(predicate::str::contains("DEPLOY_LOGIN_PASSWORD"))
+        .stdout(predicate::str::contains("DEPLOY_KEY_SSH_PUBLIC_KEY"))
+        .stdout(predicate::str::contains("DEPLOY_KEY_SSH_PRIVATE_KEY"))
+        .stdout(predicate::str::contains("DEPLOY_KEY_SSH_FINGERPRINT"));
+}
+
+#[tokio::test]
 async fn run_with_multiple_name_flags_injects_multiple_items() {
     let ctx = TestContext::new();
     let keys = test_crypto_keys();

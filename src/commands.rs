@@ -778,9 +778,9 @@ impl CipherDecryptionProfile {
             notes: false,
             field_names: false,
             field_values: false,
-            ssh_public_key: false,
-            ssh_private_key: false,
-            ssh_fingerprint: false,
+            ssh_public_key: true,
+            ssh_private_key: true,
+            ssh_fingerprint: true,
             decrypt_present_standard_values: true,
         }
     }
