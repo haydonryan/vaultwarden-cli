@@ -13,6 +13,7 @@ mod api_tests {
     use super::*;
 
     fn http_client() -> reqwest::Client {
+        vaultwarden_cli::install_rustls_crypto_provider();
         reqwest::Client::new()
     }
 

@@ -57,6 +57,8 @@ impl ApiClient {
     /// `allow_insecure_http`: if true, permit http:// URLs (CLI flag overrides env var).
     /// If false, falls back to the `VAULTWARDEN_ALLOW_HTTP` env var.
     pub fn new_with_flags(base_url: &str, allow_insecure_http: bool) -> Result<Self> {
+        crate::install_rustls_crypto_provider();
+
         // Validate server URL scheme to prevent SSRF and credential leakage
         let trimmed = base_url.trim_end_matches('/');
         if !trimmed.starts_with("https://") && !trimmed.starts_with("http://") {

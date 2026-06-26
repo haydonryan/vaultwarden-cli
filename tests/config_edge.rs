@@ -193,6 +193,7 @@ fn scoped_config_dir_override_cleans_up_static_paths_and_lock_path() {
 #[test]
 fn config_save_keys_defaults_to_no_persist_without_keyring() {
     let _guard = env_lock();
+    let _deny_key_file = support::ScopedEnvVar::set("VAULTWARDEN_ALLOW_INSECURE_KEY_FILE", "false");
     let _unavailable_keyring = unavailable_keyring();
     let ctx = TestContext::new();
     ctx.create_config_dir();

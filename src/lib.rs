@@ -16,5 +16,9 @@ pub mod config;
 pub mod crypto;
 pub mod models;
 
+pub fn install_rustls_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 #[cfg(test)]
 pub(crate) static KEYRING_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

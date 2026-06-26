@@ -5829,6 +5829,9 @@ mod tests {
         #[test]
         fn test_ensure_valid_token_errors_when_expired_without_refresh() {
             let _guard = tokio_test::block_on(ENV_LOCK.lock());
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
             let mut config = Config {
                 access_token: Some("expired-token".to_string()), // secrets-ignore: test fixture
                 token_expiry: Some(0),
