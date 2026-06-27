@@ -45,6 +45,7 @@ pre-commit:
 
 release *args:
     git pull --rebase
+    just check
     cargo release {{args}}
 
 bump version:
