@@ -33,7 +33,7 @@ zeroize = { version = "1.9", features = ["derive"] }
 fs4 = "1.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust"] }
+dbus-secret-service-keyring-store = { version = "1", features = ["crypto-rust", "vendored"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1", features = ["keychain"] }
