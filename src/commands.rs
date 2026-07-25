@@ -6592,4 +6592,349 @@ mod tests {
             ensure_plaintext_json_allowed(&opts).unwrap();
         }
     }
+
+    mod token_expiry_from_lifetime_tests {
+        use super::*;
+
+        #[test]
+        fn rejects_zero_expires_in() {
+            let err = token_expiry_from_lifetime(1_000_000, 0).unwrap_err();
+            assert!(err.to_string().contains("expires_in must be positive"));
+        }
+
+        #[test]
+        fn rejects_negative_expires_in() {
+            let err = token_expiry_from_lifetime(1_000_000, -1).unwrap_err();
+            assert!(err.to_string().contains("expires_in must be positive"));
+        }
+
+        #[test]
+        fn rejects_overflowing_expires_in() {
+            let err = token_expiry_from_lifetime(i64::MAX, 1).unwrap_err();
+            assert!(err.to_string().contains("expires_in is too large"));
+        }
+
+        #[test]
+        fn returns_valid_expiry() {
+            let expiry = token_expiry_from_lifetime(1_000, 3600).unwrap();
+            assert_eq!(expiry, 4_600);
+        }
+    }
+
+    mod token_needs_refresh_no_expiry_tests {
+        use super::*;
+
+        #[test]
+        fn returns_false_when_no_expiry_set() {
+            let config = Config::default();
+            assert!(!token_needs_refresh(&config).unwrap());
+        }
+    }
+
+    mod find_cipher_output_tests {
+        use super::*;
+        use crate::models::Cipher;
+
+        fn minimal_cipher(id: &str) -> Cipher {
+            Cipher {
+                id: id.to_string(),
+                r#type: 1,
+                organization_id: None,
+                name: None,
+                notes: None,
+                folder_id: None,
+                collection_ids: Vec::new(),
+                login: None,
+                card: None,
+                identity: None,
+                secure_note: None,
+                ssh_key: None,
+                fields: None,
+                data: None,
+            }
+        }
+
+        #[test]
+        fn returns_none_when_no_ciphers() {
+            let config = Config::default();
+            let result = find_cipher_output(&[], &config, |_| true, |_| true);
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn returns_none_when_predicate_never_matches() {
+            let keys = CryptoKeys {
+                enc_key: vec![1u8; 32],
+                mac_key: vec![2u8; 32],
+            };
+            let config = Config {
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+
+            let cipher = minimal_cipher("test-id");
+            let result = find_cipher_output(&[cipher], &config, |_| false, |_| true);
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn returns_some_when_cipher_matches() {
+            let keys = CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            };
+            let encrypted_name = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                b"Test App",
+                &keys.enc_key,
+                &keys.mac_key,
+            );
+            let config = Config {
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+
+            let cipher = Cipher {
+                id: "test-id".to_string(),
+                r#type: 1,
+                name: Some(encrypted_name),
+                organization_id: None,
+                notes: None,
+                folder_id: None,
+                collection_ids: Vec::new(),
+                login: None,
+                card: None,
+                identity: None,
+                secure_note: None,
+                ssh_key: None,
+                fields: None,
+                data: None,
+            };
+            let result = find_cipher_output(&[cipher], &config, |_output| true, |_c| true);
+            assert!(result.is_some());
+            assert_eq!(result.unwrap().name, "Test App");
+        }
+
+        #[test]
+        fn skips_ciphers_that_fail_filter() {
+            let keys = CryptoKeys {
+                enc_key: vec![1u8; 32],
+                mac_key: vec![2u8; 32],
+            };
+            let config = Config {
+                crypto_keys: Some(keys),
+                ..Default::default()
+            };
+
+            let cipher = minimal_cipher("test-id");
+            let result = find_cipher_output(&[cipher], &config, |_| true, |_| false);
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn skips_ciphers_whose_keys_cannot_be_resolved() {
+            let config = Config::default();
+            let mut cipher = minimal_cipher("org-cipher");
+            cipher.organization_id = Some("missing-org".to_string());
+
+            let result = find_cipher_output(&[cipher], &config, |_| true, |_| true);
+            assert!(result.is_none());
+        }
+    }
+
+    mod cipher_uri_matches_tests {
+        use super::*;
+        use crate::models::{Cipher, LoginData, UriData};
+
+        fn keys() -> CryptoKeys {
+            CryptoKeys {
+                enc_key: vec![0x42u8; 32],
+                mac_key: vec![0x43u8; 32],
+            }
+        }
+
+        fn encrypted_uri(keys: &CryptoKeys, uri: &str) -> String {
+            crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                uri.as_bytes(),
+                &keys.enc_key,
+                &keys.mac_key,
+            )
+        }
+
+        fn cipher_with_login_uris(keys: &CryptoKeys, uris: &[&str]) -> Cipher {
+            Cipher {
+                id: "cipher-1".to_string(),
+                r#type: 1,
+                organization_id: None,
+                name: None,
+                notes: None,
+                folder_id: None,
+                collection_ids: Vec::new(),
+                login: Some(LoginData {
+                    uris: Some(
+                        uris.iter()
+                            .map(|u| UriData {
+                                uri: Some(encrypted_uri(keys, u)),
+                                r#match: None,
+                            })
+                            .collect(),
+                    ),
+                    username: None,
+                    password: None,
+                    totp: None,
+                }),
+                card: None,
+                identity: None,
+                secure_note: None,
+                ssh_key: None,
+                fields: None,
+                data: None,
+            }
+        }
+
+        #[test]
+        fn matches_uri_through_login_uris() {
+            let keys = keys();
+            let cipher = cipher_with_login_uris(&keys, &["https://example.com/login"]);
+            assert!(cipher_uri_matches("example.com", &keys, &cipher));
+        }
+
+        #[test]
+        fn returns_false_when_no_uris_present() {
+            let keys = keys();
+            let cipher = Cipher {
+                id: "cipher-1".to_string(),
+                r#type: 1,
+                organization_id: None,
+                name: None,
+                notes: None,
+                folder_id: None,
+                collection_ids: Vec::new(),
+                login: None,
+                card: None,
+                identity: None,
+                secure_note: None,
+                ssh_key: None,
+                fields: None,
+                data: None,
+            };
+            assert!(!cipher_uri_matches("anything", &keys, &cipher));
+        }
+
+        #[test]
+        fn uri_match_is_case_insensitive() {
+            let keys = keys();
+            let cipher = cipher_with_login_uris(&keys, &["https://EXAMPLE.COM/Login"]);
+            assert!(cipher_uri_matches("example.com", &keys, &cipher));
+        }
+    }
+
+    mod find_cipher_output_by_uri_tests {
+        use super::*;
+        use crate::models::Cipher;
+
+        #[test]
+        fn errors_when_no_ciphers_match_uri() {
+            let config = Config::default();
+            let ciphers: Vec<Cipher> = vec![];
+            let err = find_cipher_output_by_uri(
+                &ciphers,
+                &config,
+                "missing.com",
+                |_| true,
+                CipherDecryptionProfile::full(),
+            )
+            .unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("No item found with URI containing")
+            );
+        }
+    }
+
+    mod resolve_collection_id_missing_keys_tests {
+        use super::*;
+        use crate::models::Collection;
+
+        #[test]
+        fn errors_when_org_keys_unavailable_for_decrypted_name() {
+            let config = Config::default();
+            let collection = Collection {
+                id: "col-1".to_string(),
+                name: "2.encrypted-data".to_string(),
+                organization_id: "org-missing".to_string(),
+            };
+
+            let err =
+                resolve_collection_id(&[collection], "display-name", None, &config).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("Collection 'display-name' not found")
+            );
+        }
+    }
+
+    mod run_with_decrypted_outputs_tests {
+        use super::*;
+
+        #[test]
+        fn info_only_prints_env_var_names() {
+            let output = CipherOutput {
+                id: "cipher-1".to_string(),
+                cipher_type: "login".to_string(),
+                name: "My App".to_string(),
+                username: Some("user".to_string()),
+                password: Some("pass".to_string()),
+                uri: Some("https://example.com".to_string()),
+                notes: None,
+                fields: None,
+                ssh_public_key: None,
+                ssh_private_key: None,
+                ssh_fingerprint: None,
+            };
+
+            let result = run_with_decrypted_outputs(vec![output], true, &[]);
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap().exit_code(), 0);
+        }
+
+        #[test]
+        fn errors_when_no_command_and_not_info_only() {
+            let output = CipherOutput {
+                id: "cipher-1".to_string(),
+                cipher_type: "login".to_string(),
+                name: "My App".to_string(),
+                username: Some("user".to_string()),
+                password: Some("pass".to_string()),
+                uri: None,
+                notes: None,
+                fields: None,
+                ssh_public_key: None,
+                ssh_private_key: None,
+                ssh_fingerprint: None,
+            };
+
+            let err = run_with_decrypted_outputs(vec![output], false, &[]).unwrap_err();
+            assert!(err.to_string().contains("No command specified"));
+        }
+
+        #[test]
+        fn info_only_with_empty_env_vars_still_succeeds() {
+            let output = CipherOutput {
+                id: "cipher-1".to_string(),
+                cipher_type: "login".to_string(),
+                name: "Empty".to_string(),
+                username: None,
+                password: None,
+                uri: None,
+                notes: None,
+                fields: None,
+                ssh_public_key: None,
+                ssh_private_key: None,
+                ssh_fingerprint: None,
+            };
+
+            let result = run_with_decrypted_outputs(vec![output], true, &[]);
+            assert!(result.is_ok());
+        }
+    }
 }
