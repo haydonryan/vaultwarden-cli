@@ -5,7 +5,7 @@ mod support;
 use support::TestContext;
 use vaultwarden_cli::api::ApiClient;
 use vaultwarden_cli::config::Config;
-use vaultwarden_cli::models::CipherType;
+use vaultwarden_cli::models::{CipherData, CipherType};
 use wiremock::matchers::{body_string_contains, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -379,8 +379,19 @@ async fn api_client_ciphers_sends_bearer_token_and_parses_response() {
 
     assert_eq!(ciphers.data.len(), 1);
     assert_eq!(ciphers.data[0].id, "cipher-ssh");
-    assert_eq!(ciphers.data[0].r#type, CipherType::SshKey);
-    assert!(ciphers.data[0].ssh_key.is_some());
+    assert_eq!(
+        ciphers.data[0]
+            .cipher_data
+            .as_ref()
+            .map(|cd| cd.cipher_type()),
+        Some(CipherType::SshKey)
+    );
+    assert!(
+        ciphers.data[0]
+            .cipher_data
+            .as_ref()
+            .is_some_and(|cd| matches!(cd, CipherData::SshKey(_)))
+    );
 }
 
 #[tokio::test]
@@ -412,8 +423,16 @@ async fn api_client_cipher_by_id_sends_bearer_token_and_parses_response() {
         .unwrap();
 
     assert_eq!(cipher.id, "cipher-ssh");
-    assert_eq!(cipher.r#type, CipherType::SshKey);
-    assert!(cipher.ssh_key.is_some());
+    assert_eq!(
+        cipher.cipher_data.as_ref().map(|cd| cd.cipher_type()),
+        Some(CipherType::SshKey)
+    );
+    assert!(
+        cipher
+            .cipher_data
+            .as_ref()
+            .is_some_and(|cd| matches!(cd, CipherData::SshKey(_)))
+    );
 }
 
 #[tokio::test]

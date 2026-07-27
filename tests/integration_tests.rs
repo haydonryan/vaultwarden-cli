@@ -376,8 +376,20 @@ mod model_integration_tests {
         assert_eq!(response.profile.organizations.len(), 1);
 
         // Check cipher types
-        assert_eq!(response.ciphers[0].r#type, CipherType::Login);
-        assert_eq!(response.ciphers[1].r#type, CipherType::SecureNote);
+        assert_eq!(
+            response.ciphers[0]
+                .cipher_data
+                .as_ref()
+                .map(|cd| cd.cipher_type()),
+            Some(CipherType::Login)
+        );
+        assert_eq!(
+            response.ciphers[1]
+                .cipher_data
+                .as_ref()
+                .map(|cd| cd.cipher_type()),
+            Some(CipherType::SecureNote)
+        );
     }
 
     #[test]
