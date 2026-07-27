@@ -1,7 +1,7 @@
 #![allow(clippy::pedantic, clippy::nursery)]
 
 use clap::{Parser, Subcommand};
-use vaultwarden_cli::commands;
+use vaultwarden_cli::commands::{self, OutputFormat};
 
 type Result<T> = std::result::Result<T, anyhow::Error>;
 
@@ -89,9 +89,9 @@ enum Commands {
         /// Item ID or name to retrieve
         item: String,
 
-        /// Output format (json, env, value, username)
-        #[arg(short, long, default_value = "json")]
-        format: String,
+        /// Output format
+        #[arg(short, long, default_value_t = OutputFormat::Json)]
+        format: OutputFormat,
 
         /// Output only the username (shorthand for --format username)
         #[arg(short, long)]
@@ -116,9 +116,9 @@ enum Commands {
         /// URI to search for (e.g., github.com)
         uri: String,
 
-        /// Output format (json, env, value, username)
-        #[arg(short, long, default_value = "json")]
-        format: String,
+        /// Output format
+        #[arg(short, long, default_value_t = OutputFormat::Json)]
+        format: OutputFormat,
 
         /// Output only the username (shorthand for --format username)
         #[arg(short, long)]
@@ -202,11 +202,11 @@ enum Commands {
     },
 }
 
-const fn effective_format(format: &str, username: bool, password: bool) -> &str {
+const fn effective_format(format: OutputFormat, username: bool, password: bool) -> OutputFormat {
     if username {
-        "username"
+        OutputFormat::Username
     } else if password {
-        "value"
+        OutputFormat::Value
     } else {
         format
     }
@@ -274,7 +274,7 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
             collection,
         } => commands::get(
             &item,
-            effective_format(&format, username, password),
+            effective_format(format, username, password),
             org,
             collection,
             &opts,
@@ -290,7 +290,7 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
             collection,
         } => commands::get_by_uri(
             &uri,
-            effective_format(&format, username, password),
+            effective_format(format, username, password),
             org,
             collection,
             &opts,
@@ -444,18 +444,30 @@ mod tests {
 
     #[test]
     fn test_effective_format_username_override() {
-        assert_eq!(effective_format("json", true, false), "username");
+        assert_eq!(
+            effective_format(OutputFormat::Json, true, false),
+            OutputFormat::Username
+        );
     }
 
     #[test]
     fn test_effective_format_password_override() {
-        assert_eq!(effective_format("json", false, true), "value");
+        assert_eq!(
+            effective_format(OutputFormat::Json, false, true),
+            OutputFormat::Value
+        );
     }
 
     #[test]
     fn test_effective_format_no_override() {
-        assert_eq!(effective_format("env", false, false), "env");
-        assert_eq!(effective_format("json", false, false), "json");
+        assert_eq!(
+            effective_format(OutputFormat::Env, false, false),
+            OutputFormat::Env
+        );
+        assert_eq!(
+            effective_format(OutputFormat::Json, false, false),
+            OutputFormat::Json
+        );
     }
 
     #[test]
@@ -742,7 +754,7 @@ mod tests {
         assert_eq!(item, "item-name");
         assert!(username);
         assert!(!password);
-        assert_eq!(format, "json");
+        assert_eq!(format, OutputFormat::Json);
         assert_eq!(org, None);
         assert_eq!(collection, None);
     }
@@ -764,7 +776,7 @@ mod tests {
         assert_eq!(item, "item-name");
         assert!(!username);
         assert!(password);
-        assert_eq!(format, "json"); // default
+        assert_eq!(format, OutputFormat::Json); // default
         assert_eq!(org, None);
         assert_eq!(collection, None);
     }
@@ -810,7 +822,7 @@ mod tests {
             panic!("expected GetUri command");
         };
         assert_eq!(uri, "example.com");
-        assert_eq!(format, "env");
+        assert_eq!(format, OutputFormat::Env);
         assert!(!username);
         assert!(!password);
         assert_eq!(org, None);

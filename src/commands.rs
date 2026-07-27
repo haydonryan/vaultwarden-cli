@@ -108,6 +108,27 @@ impl CommandOutcome {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum OutputFormat {
+    Json,
+    Env,
+    Value,
+    Password,
+    Username,
+}
+
+impl std::fmt::Display for OutputFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Json => write!(f, "json"),
+            Self::Env => write!(f, "env"),
+            Self::Value => write!(f, "value"),
+            Self::Password => write!(f, "password"),
+            Self::Username => write!(f, "username"),
+        }
+    }
+}
+
 impl CommandOptions {
     #[must_use]
     pub fn for_cli(allow_insecure_http: bool, allow_plaintext_json: bool) -> Self {
@@ -1187,7 +1208,7 @@ fn format_list_output(outputs: &[CipherOutput], json_output: bool) -> Result<Vec
 
 pub async fn get(
     item: &str,
-    format: &str,
+    format: OutputFormat,
     org_filter: Option<String>,
     collection_filter: Option<String>,
     opts: &CommandOptions,
@@ -1197,7 +1218,7 @@ pub async fn get(
         if let Ok(output) =
             fetch_cipher_output_by_id(&api_ctx, item, CipherDecryptionProfile::full()).await
         {
-            if format == "json" {
+            if format == OutputFormat::Json {
                 ensure_plaintext_json_allowed(opts)?;
             }
             return print_cipher_output(&output, format);
@@ -1246,7 +1267,7 @@ pub async fn get(
         CipherDecryptionProfile::full(),
     )?;
 
-    if format == "json" {
+    if format == OutputFormat::Json {
         ensure_plaintext_json_allowed(opts)?;
     }
     print_cipher_output(&output, format)
@@ -1254,7 +1275,7 @@ pub async fn get(
 
 pub async fn get_by_uri(
     uri: &str,
-    format: &str,
+    format: OutputFormat,
     org_filter: Option<String>,
     collection_filter: Option<String>,
     opts: &CommandOptions,
@@ -1282,7 +1303,7 @@ pub async fn get_by_uri(
         CipherDecryptionProfile::full(),
     )?;
 
-    if format == "json" {
+    if format == OutputFormat::Json {
         ensure_plaintext_json_allowed(opts)?;
     }
     print_cipher_output(&output, format)
@@ -1614,10 +1635,10 @@ fn get_field_string(field: &Option<String>, name: &str) -> Result<String> {
         .map(std::string::ToString::to_string)
 }
 
-fn format_cipher_output(output: &CipherOutput, format: &str) -> Result<String> {
+fn format_cipher_output(output: &CipherOutput, format: OutputFormat) -> Result<String> {
     match format {
-        "json" => Ok(serde_json::to_string_pretty(output)?),
-        "env" => {
+        OutputFormat::Json => Ok(serde_json::to_string_pretty(output)?),
+        OutputFormat::Env => {
             let lines = cipher_to_env_vars(output)
                 .into_iter()
                 .map(|(name, value)| {
@@ -1630,18 +1651,17 @@ fn format_cipher_output(output: &CipherOutput, format: &str) -> Result<String> {
                 .collect::<Result<String>>()?;
             Ok(lines)
         }
-        "value" | "password" => get_field_string(&output.password, "password"),
-        "username" => get_field_string(&output.username, "username"),
-        _ => {
-            anyhow::bail!("Unknown format: {format}. Use: json, env, value, username");
+        OutputFormat::Value | OutputFormat::Password => {
+            get_field_string(&output.password, "password")
         }
+        OutputFormat::Username => get_field_string(&output.username, "username"),
     }
 }
 
-fn print_cipher_output(output: &CipherOutput, format: &str) -> Result<()> {
+fn print_cipher_output(output: &CipherOutput, format: OutputFormat) -> Result<()> {
     let text = format_cipher_output(output, format)?;
     match format {
-        "json" => println!("{text}"),
+        OutputFormat::Json => println!("{text}"),
         _ => print!("{text}"),
     }
     Ok(())
@@ -5000,7 +5020,7 @@ mod tests {
 
             let result = get(
                 "cipher-1",
-                "json",
+                OutputFormat::Json,
                 None,
                 None,
                 &CommandOptions {
@@ -5054,7 +5074,7 @@ mod tests {
 
             let result = get(
                 "github",
-                "json",
+                OutputFormat::Json,
                 None,
                 None,
                 &CommandOptions {
@@ -5133,7 +5153,7 @@ mod tests {
 
             let result = get(
                 "github",
-                "json",
+                OutputFormat::Json,
                 None,
                 Some("collection-1".to_string()),
                 &CommandOptions {
@@ -5187,7 +5207,7 @@ mod tests {
 
             let result = get(
                 "github.com",
-                "json",
+                OutputFormat::Json,
                 None,
                 None,
                 &CommandOptions {
@@ -5244,7 +5264,7 @@ mod tests {
 
             let err = get(
                 "github",
-                "json",
+                OutputFormat::Json,
                 None,
                 None,
                 &CommandOptions {
@@ -5303,7 +5323,7 @@ mod tests {
 
             let result = get(
                 "cipher-2",
-                "json",
+                OutputFormat::Json,
                 None,
                 None,
                 &CommandOptions {
@@ -5356,7 +5376,7 @@ mod tests {
 
             let result = get(
                 "missing",
-                "json",
+                OutputFormat::Json,
                 None,
                 None,
                 &CommandOptions {
@@ -5440,7 +5460,7 @@ mod tests {
 
             let result = get_by_uri(
                 "github.com/login",
-                "json",
+                OutputFormat::Json,
                 None,
                 None,
                 &CommandOptions {
@@ -5509,7 +5529,7 @@ mod tests {
 
             let err = get_by_uri(
                 "github.com",
-                "json",
+                OutputFormat::Json,
                 None,
                 None,
                 &CommandOptions {
@@ -5567,7 +5587,7 @@ mod tests {
 
             let result = get_by_uri(
                 "github.com",
-                "json",
+                OutputFormat::Json,
                 None,
                 None,
                 &CommandOptions {
@@ -5621,7 +5641,7 @@ mod tests {
 
             let result = get_by_uri(
                 "github.com",
-                "json",
+                OutputFormat::Json,
                 None,
                 None,
                 &CommandOptions {
@@ -5673,7 +5693,7 @@ mod tests {
 
             let result = get_by_uri(
                 "missing.com",
-                "json",
+                OutputFormat::Json,
                 None,
                 None,
                 &CommandOptions {
@@ -6297,7 +6317,7 @@ mod tests {
         #[test]
         fn test_format_cipher_output_json() {
             let output = sample_output();
-            let json = format_cipher_output(&output, "json").unwrap();
+            let json = format_cipher_output(&output, OutputFormat::Json).unwrap();
             assert!(json.contains("\"id\": \"cipher-1\""));
             assert!(json.contains("\"type\": \"login\""));
             assert!(json.contains("\"name\": \"My App\""));
@@ -6307,7 +6327,7 @@ mod tests {
         #[test]
         fn test_format_cipher_output_env() {
             let output = sample_output();
-            let env = format_cipher_output(&output, "env").unwrap();
+            let env = format_cipher_output(&output, OutputFormat::Env).unwrap();
             assert!(env.contains("export MY_APP_URI='https://example.com'\n"));
             assert!(env.contains("export MY_APP_USERNAME='user'\n"));
             assert!(env.contains("export MY_APP_PASSWORD='pass'\n"));
@@ -6326,7 +6346,7 @@ mod tests {
                 ..sample_output()
             };
 
-            let env = format_cipher_output(&output, "env").unwrap();
+            let env = format_cipher_output(&output, OutputFormat::Env).unwrap();
 
             assert!(env.contains("export ITEM_123_CAF_USERNAME='user'\n"));
             assert!(env.contains("export ITEM_123_CAF_ITEM_9_TOKEN='tok-123'\n"));
@@ -6350,7 +6370,7 @@ mod tests {
                     fields: None,
                     ..sample_output()
                 };
-                let env = format_cipher_output(&output, "env").unwrap();
+                let env = format_cipher_output(&output, OutputFormat::Env).unwrap();
                 let script = format!("{env}\nprintf %s \"${env_name}\"");
 
                 let output = Command::new("sh").arg("-c").arg(script).output().unwrap();
@@ -6373,7 +6393,7 @@ mod tests {
                 ..sample_output()
             };
 
-            let env = format_cipher_output(&output, "env").unwrap();
+            let env = format_cipher_output(&output, OutputFormat::Env).unwrap();
 
             assert!(
                 env.contains(
@@ -6391,7 +6411,7 @@ mod tests {
                 ..sample_output()
             };
 
-            let env = format_cipher_output(&output, "env").unwrap();
+            let env = format_cipher_output(&output, OutputFormat::Env).unwrap();
 
             assert!(env.contains("export MY_APP_PASSWORD='line one\nline two\rline three'\n"));
         }
@@ -6404,7 +6424,7 @@ mod tests {
                 ..sample_output()
             };
 
-            let err = format_cipher_output(&output, "env").unwrap_err();
+            let err = format_cipher_output(&output, OutputFormat::Env).unwrap_err();
 
             assert!(
                 err.to_string()
@@ -6429,38 +6449,32 @@ mod tests {
         #[test]
         fn test_format_cipher_output_value() {
             let output = sample_output();
-            let value = format_cipher_output(&output, "value").unwrap();
+            let value = format_cipher_output(&output, OutputFormat::Value).unwrap();
             assert_eq!(value, "pass");
         }
 
         #[test]
         fn test_format_cipher_output_password_alias() {
             let output = sample_output();
-            let value = format_cipher_output(&output, "password").unwrap();
+            let value = format_cipher_output(&output, OutputFormat::Password).unwrap();
             assert_eq!(value, "pass");
         }
 
         #[test]
         fn test_format_cipher_output_username() {
             let output = sample_output();
-            let value = format_cipher_output(&output, "username").unwrap();
+            let value = format_cipher_output(&output, OutputFormat::Username).unwrap();
             assert_eq!(value, "user");
         }
 
         #[test]
-        fn test_format_cipher_output_unknown_format() {
-            let output = sample_output();
-            let err = format_cipher_output(&output, "xml").unwrap_err();
-            assert!(err.to_string().contains("Unknown format: xml"));
-        }
-
         #[test]
         fn test_format_cipher_output_missing_password() {
             let output = CipherOutput {
                 password: None,
                 ..sample_output()
             };
-            let err = format_cipher_output(&output, "value").unwrap_err();
+            let err = format_cipher_output(&output, OutputFormat::Value).unwrap_err();
             assert!(err.to_string().contains("Item has no password"));
         }
 
@@ -6470,7 +6484,7 @@ mod tests {
                 username: None,
                 ..sample_output()
             };
-            let err = format_cipher_output(&output, "username").unwrap_err();
+            let err = format_cipher_output(&output, OutputFormat::Username).unwrap_err();
             assert!(err.to_string().contains("Item has no username"));
         }
     }
