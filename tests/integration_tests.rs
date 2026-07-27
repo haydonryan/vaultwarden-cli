@@ -364,10 +364,10 @@ mod model_integration_tests {
         assert_eq!(response.profile.organizations.len(), 1);
 
         // Check cipher types
-        assert_eq!(response.ciphers[0].cipher_type(), Some(CipherType::Login));
+        assert_eq!(response.ciphers[0].r#type, CipherType::Login);
         assert_eq!(
-            response.ciphers[1].cipher_type(),
-            Some(CipherType::SecureNote)
+            response.ciphers[1].r#type,
+            CipherType::SecureNote
         );
     }
 
@@ -482,8 +482,8 @@ mod edge_case_tests {
             "Type": 99
         }"#;
 
-        let cipher: Cipher = serde_json::from_str(json).unwrap();
-        assert_eq!(cipher.cipher_type(), None);
+        let result: Result<Cipher, _> = serde_json::from_str(json);
+        assert!(result.is_err());
     }
 
     #[test]

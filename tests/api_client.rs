@@ -379,7 +379,7 @@ async fn api_client_ciphers_sends_bearer_token_and_parses_response() {
 
     assert_eq!(ciphers.data.len(), 1);
     assert_eq!(ciphers.data[0].id, "cipher-ssh");
-    assert_eq!(ciphers.data[0].cipher_type(), Some(CipherType::SshKey));
+    assert_eq!(ciphers.data[0].r#type, CipherType::SshKey);
     assert!(ciphers.data[0].ssh_key.is_some());
 }
 
@@ -412,7 +412,7 @@ async fn api_client_cipher_by_id_sends_bearer_token_and_parses_response() {
         .unwrap();
 
     assert_eq!(cipher.id, "cipher-ssh");
-    assert_eq!(cipher.cipher_type(), Some(CipherType::SshKey));
+    assert_eq!(cipher.r#type, CipherType::SshKey);
     assert!(cipher.ssh_key.is_some());
 }
 
@@ -437,7 +437,7 @@ async fn api_client_ciphers_filtered_sends_query_params() {
 
     let client = ApiClient::new_with_flags(&mock_server.uri(), true).unwrap();
     let ciphers = client
-        .ciphers_filtered("access-token", Some("org-1"), Some("col-1"), Some(5))
+        .ciphers_filtered("access-token", Some("org-1"), Some("col-1"), Some(CipherType::SshKey))
         .await
         .unwrap();
 

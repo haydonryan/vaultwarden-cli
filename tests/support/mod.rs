@@ -16,7 +16,7 @@ use tempfile::TempDir;
 use vaultwarden_cli::config::Config;
 use vaultwarden_cli::crypto::{CryptoKeys, MasterKey};
 use vaultwarden_cli::models::{
-    Cipher, CipherData, Collection, FieldData, Folder, LoginData, Organization, Profile,
+    Cipher, CipherType, Collection, FieldData, FieldType, Folder, KdfType, LoginData, NestedCipherData, Organization, Profile, UriMatchType,
     SyncResponse, TokenResponse, UriData,
 };
 
@@ -354,7 +354,7 @@ pub fn token_response(access_token: &str) -> TokenResponse {
         scope: Some("api".to_string()),
         key: Some("2.encrypted-key".to_string()),
         private_key: Some("2.encrypted-private-key".to_string()),
-        kdf: Some(0),
+        kdf: Some(KdfType::Pbkdf2),
         kdf_iterations: Some(600000),
     }
 }
@@ -396,7 +396,7 @@ pub fn folder(id: &str, name: &str) -> Folder {
 pub fn login_cipher(id: &str, name: &str, username: &str, password: &str, uri: &str) -> Cipher {
     Cipher {
         id: id.to_string(),
-        r#type: 1,
+        r#type: CipherType::Login,
         organization_id: None,
         name: Some(name.to_string()),
         notes: None,
@@ -407,7 +407,7 @@ pub fn login_cipher(id: &str, name: &str, username: &str, password: &str, uri: &
             totp: None,
             uris: Some(vec![UriData {
                 uri: Some(uri.to_string()),
-                r#match: Some(0),
+                r#match: Some(UriMatchType::Domain),
             }]),
         }),
         card: None,
@@ -429,7 +429,7 @@ pub fn nested_login_cipher(
 ) -> Cipher {
     Cipher {
         id: id.to_string(),
-        r#type: 1,
+        r#type: CipherType::Login,
         organization_id: None,
         name: None,
         notes: None,
@@ -441,7 +441,7 @@ pub fn nested_login_cipher(
         ssh_key: None,
         collection_ids: Vec::new(),
         fields: None,
-        data: Some(CipherData {
+        data: Some(NestedCipherData {
             name: Some(name.to_string()),
             notes: None,
             username: Some(username.to_string()),
@@ -458,7 +458,7 @@ pub fn field(name: &str, value: &str, hidden: bool) -> FieldData {
     FieldData {
         name: Some(name.to_string()),
         value: Some(value.to_string()),
-        r#type: u8::from(hidden),
+        r#type: if hidden { FieldType::Hidden } else { FieldType::Text },
     }
 }
 

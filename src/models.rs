@@ -1,6 +1,96 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::str::FromStr;
 
+// ── Newtype IDs ─────────────────────────────────────────────────────────────────
+macro_rules! newtype_id {
+    ($name:ident) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+        pub struct $name(pub String);
+    };
+}
+
+newtype_id!(CipherId);
+newtype_id!(OrgId);
+newtype_id!(CollectionId);
+newtype_id!(FolderId);
+newtype_id!(UserId);
+
+// ── KDF Type enum ───────────────────────────────────────────────────────────────
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum KdfType {
+    Pbkdf2 = 0,
+    Argon2id = 1,
+}
+impl std::fmt::Display for KdfType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self { Self::Pbkdf2 => write!(f, "pbkdf2"), Self::Argon2id => write!(f, "argon2id") }
+    }
+}
+impl<'de> Deserialize<'de> for KdfType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        match value {
+            Some(serde_json::Value::Number(n)) => match n.as_u64() {
+                Some(0) => Ok(Self::Pbkdf2), Some(1) => Ok(Self::Argon2id), _ => Ok(Self::Pbkdf2),
+            },
+            _ => Ok(Self::Pbkdf2),
+        }
+    }
+}
+
+// ── FieldType enum ──────────────────────────────────────────────────────────────
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum FieldType {
+    Text = 0, Hidden = 1, Boolean = 2, Linked = 3,
+}
+impl FieldType {
+    #[must_use] pub const fn is_hidden(self) -> bool { matches!(self, Self::Hidden) }
+}
+impl std::fmt::Display for FieldType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self { Self::Text => write!(f, "text"), Self::Hidden => write!(f, "hidden"), Self::Boolean => write!(f, "boolean"), Self::Linked => write!(f, "linked") }
+    }
+}
+impl<'de> Deserialize<'de> for FieldType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(serde_json::Value::Number(n)) => match n.as_u64().and_then(|n| u8::try_from(n).ok()) {
+                Some(0) => Self::Text, Some(1) => Self::Hidden, Some(2) => Self::Boolean, Some(3) => Self::Linked, _ => Self::Hidden,
+            },
+            Some(serde_json::Value::String(s)) => match s.parse::<u8>() {
+                Ok(0) => Self::Text, Ok(1) => Self::Hidden, Ok(2) => Self::Boolean, Ok(3) => Self::Linked, _ => Self::Hidden,
+            },
+            _ => Self::Hidden,
+        })
+    }
+}
+
+// ── UriMatchType enum ───────────────────────────────────────────────────────────
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum UriMatchType {
+    Domain = 0, Host = 1, StartsWith = 2, Exact = 3, RegularExpression = 4, Never = 5,
+}
+impl std::fmt::Display for UriMatchType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self { Self::Domain => write!(f, "domain"), Self::Host => write!(f, "host"), Self::StartsWith => write!(f, "starts_with"), Self::Exact => write!(f, "exact"), Self::RegularExpression => write!(f, "regex"), Self::Never => write!(f, "never") }
+    }
+}
+impl<'de> Deserialize<'de> for UriMatchType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        match value {
+            Some(serde_json::Value::Number(n)) => match n.as_u64() {
+                Some(0) => Ok(Self::Domain), Some(1) => Ok(Self::Host), Some(2) => Ok(Self::StartsWith), Some(3) => Ok(Self::Exact), Some(4) => Ok(Self::RegularExpression), Some(5) => Ok(Self::Never), _ => Ok(Self::Domain),
+            },
+            Some(serde_json::Value::String(s)) => match s.parse::<u8>() {
+                Ok(0) => Ok(Self::Domain), Ok(1) => Ok(Self::Host), Ok(2) => Ok(Self::StartsWith), Ok(3) => Ok(Self::Exact), Ok(4) => Ok(Self::RegularExpression), Ok(5) => Ok(Self::Never), _ => Ok(Self::Domain),
+            },
+            _ => Ok(Self::Domain),
+        }
+    }
+}
+
 // OAuth2 Token Response
 #[derive(Debug, Clone, Deserialize)]
 pub struct TokenResponse {
@@ -14,7 +104,7 @@ pub struct TokenResponse {
     #[serde(alias = "PrivateKey", alias = "privateKey")]
     pub private_key: Option<String>,
     #[serde(alias = "Kdf", alias = "kdf")]
-    pub kdf: Option<u8>,
+    pub kdf: Option<KdfType>,
     #[serde(alias = "KdfIterations", alias = "kdfIterations")]
     pub kdf_iterations: Option<u32>,
 }
@@ -83,7 +173,7 @@ pub struct Collection {
 }
 
 // Cipher types
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[repr(u8)]
 pub enum CipherType {
     Login = 1,
@@ -104,6 +194,19 @@ impl std::fmt::Display for CipherType {
         }
     }
 }
+impl<'de> Deserialize<'de> for CipherType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where D: Deserializer<'de>,
+    {
+        let n = u8::deserialize(deserializer)?;
+        match n {
+            1 => Ok(Self::Login), 2 => Ok(Self::SecureNote), 3 => Ok(Self::Card),
+            4 => Ok(Self::Identity), 5 | 6 => Ok(Self::SshKey),
+            _ => Err(serde::de::Error::custom("unknown cipher type value")),
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("invalid cipher type")]
@@ -140,7 +243,7 @@ pub struct Cipher {
     #[serde(alias = "Id", alias = "id")]
     pub id: String,
     #[serde(alias = "Type", alias = "type")]
-    pub r#type: u8,
+    pub r#type: CipherType,
     #[serde(alias = "OrganizationId", alias = "organizationId")]
     pub organization_id: Option<String>,
     #[serde(alias = "Name", alias = "name")]
@@ -165,12 +268,12 @@ pub struct Cipher {
     pub fields: Option<Vec<FieldData>>,
     // Handle nested data structure (Vaultwarden format)
     #[serde(alias = "Data", alias = "data")]
-    pub data: Option<CipherData>,
+    pub data: Option<NestedCipherData>,
 }
 
 // Nested cipher data (Vaultwarden returns data in this nested format)
 #[derive(Debug, Clone, Deserialize)]
-pub struct CipherData {
+pub struct NestedCipherData {
     #[serde(alias = "Name", alias = "name")]
     pub name: Option<String>,
     #[serde(alias = "Notes", alias = "notes")]
@@ -190,27 +293,10 @@ pub struct CipherData {
 }
 
 impl Cipher {
-    #[must_use]
-    pub const fn cipher_type(&self) -> Option<CipherType> {
-        if self.ssh_key.is_some() {
-            return Some(CipherType::SshKey);
-        }
-
-        match self.r#type {
-            1 => Some(CipherType::Login),
-            2 => Some(CipherType::SecureNote),
-            3 => Some(CipherType::Card),
-            4 => Some(CipherType::Identity),
-            5 => Some(CipherType::SshKey),
-            6 => Some(CipherType::SshKey), // Some versions use type 6
-            _ => None,
-        }
-    }
-
     fn resolve_field<'a>(
         &'a self,
         direct: Option<&'a str>,
-        nested: impl FnOnce(&'a CipherData) -> Option<&'a str>,
+        nested: impl FnOnce(&'a NestedCipherData) -> Option<&'a str>,
     ) -> Option<&'a str> {
         direct.or_else(|| self.data.as_ref().and_then(nested))
     }
@@ -290,7 +376,7 @@ pub struct UriData {
     #[serde(alias = "Uri", alias = "uri")]
     pub uri: Option<String>,
     #[serde(alias = "Match", alias = "match")]
-    pub r#match: Option<u8>,
+    pub r#match: Option<UriMatchType>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -354,34 +440,8 @@ pub struct FieldData {
     pub name: Option<String>,
     #[serde(alias = "Value", alias = "value")]
     pub value: Option<String>,
-    #[serde(
-        alias = "Type",
-        alias = "type",
-        default = "default_field_type",
-        deserialize_with = "deserialize_field_type"
-    )]
-    pub r#type: u8, // 0=Text, 1=Hidden, 2=Boolean, 3=Linked
-}
-
-fn default_field_type() -> u8 {
-    1
-}
-
-fn deserialize_field_type<'de, D>(deserializer: D) -> Result<u8, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    Ok(match value {
-        Some(serde_json::Value::Number(number)) => number
-            .as_u64()
-            .and_then(|n| u8::try_from(n).ok())
-            .unwrap_or_else(default_field_type),
-        Some(serde_json::Value::String(value)) => {
-            value.parse::<u8>().unwrap_or_else(|_| default_field_type())
-        }
-        _ => default_field_type(),
-    })
+    #[serde(alias = "Type", alias = "type")]
+    pub r#type: FieldType,
 }
 
 // Simplified cipher output for display (decrypted)
@@ -510,7 +570,7 @@ mod tests {
         fn create_test_cipher() -> Cipher {
             Cipher {
                 id: "test-id".to_string(),
-                r#type: 1,
+                r#type: CipherType::Login,
                 organization_id: None,
                 name: Some("encrypted-name".to_string()),
                 notes: Some("encrypted-notes".to_string()),
@@ -532,7 +592,7 @@ mod tests {
                 fields: Some(vec![FieldData {
                     name: Some("field-name".to_string()),
                     value: Some("field-value".to_string()),
-                    r#type: 0,
+                    r#type: FieldType::Text,
                 }]),
                 data: None,
             }
@@ -541,7 +601,7 @@ mod tests {
         fn create_cipher_with_nested_data() -> Cipher {
             Cipher {
                 id: "test-id".to_string(),
-                r#type: 1,
+                r#type: CipherType::Login,
                 organization_id: None,
                 name: None,
                 notes: None,
@@ -553,7 +613,7 @@ mod tests {
                 secure_note: None,
                 ssh_key: None,
                 fields: None,
-                data: Some(CipherData {
+                data: Some(NestedCipherData {
                     name: Some("nested-name".to_string()),
                     notes: Some("nested-notes".to_string()),
                     username: Some("nested-username".to_string()),
@@ -564,44 +624,16 @@ mod tests {
                     fields: Some(vec![FieldData {
                         name: Some("nested-field".to_string()),
                         value: Some("nested-value".to_string()),
-                        r#type: 1,
+                        r#type: FieldType::Hidden,
                     }]),
                 }),
             }
         }
 
         #[test]
-        fn test_cipher_type_method() {
-            let mut cipher = create_test_cipher();
-
-            cipher.r#type = 1;
-            assert_eq!(cipher.cipher_type(), Some(CipherType::Login));
-
-            cipher.ssh_key = Some(SshKeyData {
-                private_key: Some("encrypted-private-key".to_string()),
-                public_key: Some("encrypted-public-key".to_string()),
-                fingerprint: Some("encrypted-fingerprint".to_string()),
-            });
-            assert_eq!(cipher.cipher_type(), Some(CipherType::SshKey));
-            cipher.ssh_key = None;
-
-            cipher.r#type = 2;
-            assert_eq!(cipher.cipher_type(), Some(CipherType::SecureNote));
-
-            cipher.r#type = 3;
-            assert_eq!(cipher.cipher_type(), Some(CipherType::Card));
-
-            cipher.r#type = 4;
-            assert_eq!(cipher.cipher_type(), Some(CipherType::Identity));
-
-            cipher.r#type = 5;
-            assert_eq!(cipher.cipher_type(), Some(CipherType::SshKey));
-
-            cipher.r#type = 6;
-            assert_eq!(cipher.cipher_type(), Some(CipherType::SshKey));
-
-            cipher.r#type = 99;
-            assert_eq!(cipher.cipher_type(), None);
+        fn test_cipher_type_is_enum() {
+            let cipher = create_test_cipher();
+            assert_eq!(cipher.r#type, CipherType::Login);
         }
 
         #[test]
@@ -627,7 +659,7 @@ mod tests {
         fn test_get_name_none() {
             let cipher = Cipher {
                 id: "test".to_string(),
-                r#type: 1,
+                r#type: CipherType::Login,
                 organization_id: None,
                 name: None,
                 notes: None,
@@ -684,7 +716,7 @@ mod tests {
         fn test_get_uri_from_nested_uris_array() {
             let cipher = Cipher {
                 id: "test".to_string(),
-                r#type: 1,
+                r#type: CipherType::Login,
                 organization_id: None,
                 name: None,
                 notes: None,
@@ -696,7 +728,7 @@ mod tests {
                 secure_note: None,
                 ssh_key: None,
                 fields: None,
-                data: Some(CipherData {
+                data: Some(NestedCipherData {
                     name: None,
                     notes: None,
                     username: None,
@@ -798,7 +830,7 @@ mod tests {
 
             let cipher: Cipher = serde_json::from_str(json).unwrap();
             assert_eq!(cipher.id, "cipher-123");
-            assert_eq!(cipher.r#type, 1);
+            assert_eq!(cipher.r#type, CipherType::Login);
             assert_eq!(cipher.get_name(), Some("My Login"));
             assert_eq!(cipher.get_username(), Some("user@example.com"));
             assert_eq!(cipher.get_password(), Some("secret123"));
@@ -925,10 +957,10 @@ mod tests {
 
             let fields: Vec<FieldData> = serde_json::from_str(json).unwrap();
             assert_eq!(fields.len(), 4);
-            assert_eq!(fields[0].r#type, 0); // Text
-            assert_eq!(fields[1].r#type, 1); // Hidden
-            assert_eq!(fields[2].r#type, 2); // Boolean
-            assert_eq!(fields[3].r#type, 3); // Linked
+            assert_eq!(fields[0].r#type, FieldType::Text);
+            assert_eq!(fields[1].r#type, FieldType::Hidden);
+            assert_eq!(fields[2].r#type, FieldType::Boolean);
+            assert_eq!(fields[3].r#type, FieldType::Linked);
         }
 
         #[test]
@@ -937,7 +969,7 @@ mod tests {
 
             let field: FieldData = serde_json::from_str(json).unwrap();
 
-            assert_eq!(field.r#type, 1);
+            assert_eq!(field.r#type, FieldType::Hidden);
         }
 
         #[test]
@@ -946,7 +978,7 @@ mod tests {
 
             let field: FieldData = serde_json::from_str(json).unwrap();
 
-            assert_eq!(field.r#type, 1);
+            assert_eq!(field.r#type, FieldType::Hidden);
         }
 
         #[test]
@@ -964,7 +996,7 @@ mod tests {
             let fields = cipher.fields.unwrap();
 
             assert_eq!(fields.len(), 1);
-            assert_eq!(fields[0].r#type, 1);
+            assert_eq!(fields[0].r#type, FieldType::Hidden);
         }
 
         #[test]
@@ -1057,17 +1089,16 @@ mod tests {
 
         #[test]
         fn test_cipher_type_serialization() {
-            // CipherType with repr(u8) serializes to numbers
             let cipher_type = CipherType::Login;
             let json = serde_json::to_string(&cipher_type).unwrap();
-            // Should be either "Login" (string) or a number representation
-            assert!(json == "\"Login\"" || json == "1");
+            assert_eq!(json, "\"Login\"");
+        }
 
-            // Test that we can deserialize CipherType from a struct context
-            // (as it comes from the API in a Cipher object)
+        #[test]
+        fn test_cipher_type_deserialization_from_u8() {
             let cipher_json = r#"{"Id": "test", "Type": 1}"#;
             let cipher: Cipher = serde_json::from_str(cipher_json).unwrap();
-            assert_eq!(cipher.cipher_type(), Some(CipherType::Login));
+            assert_eq!(cipher.r#type, CipherType::Login);
         }
     }
 }

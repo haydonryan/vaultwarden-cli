@@ -679,7 +679,7 @@ async fn fetch_filtered_cipher_outputs(
     folder_id_filter: Option<&str>,
     profile: CipherDecryptionProfile,
 ) -> Result<Vec<CipherOutput>> {
-    let cipher_type = type_filter.map(|value| value as u8);
+    let cipher_type = type_filter;
     let cipher_list = api
         .ciphers_filtered(
             access_token,
@@ -941,7 +941,7 @@ fn decrypt_cipher_with_profile(
                         Ok(FieldOutput {
                             name,
                             value,
-                            hidden: field.r#type == 1,
+                            hidden: field.r#type.is_hidden(),
                         })
                     })
                     .collect::<Result<Vec<_>>>()
@@ -988,9 +988,7 @@ fn decrypt_cipher_with_profile(
 
     Ok(CipherOutput {
         id: cipher.id.clone(),
-        cipher_type: cipher
-            .cipher_type()
-            .map_or_else(|| "unknown".into(), |t| t.to_string()),
+        cipher_type: cipher.r#type.to_string(),
         name: decrypted_name,
         username: decrypted_username,
         password: decrypted_password, // secrets-ignore: derived test data
@@ -1115,7 +1113,7 @@ pub async fn list(
                 &ctx.access_token,
                 org_id_filter.as_deref(),
                 collection_id_filter.as_deref(),
-                cipher_type_filter.map(|value| value as u8),
+                cipher_type_filter,
             )
             .await?
             .data;
@@ -1132,7 +1130,7 @@ pub async fn list(
                 org_id_filter.as_deref(),
                 collection_id_filter.as_deref(),
                 None,
-            ) && cipher_type_filter.is_none_or(|cipher_type| c.cipher_type() == Some(cipher_type))
+            ) && cipher_type_filter.is_none_or(|cipher_type| c.r#type == cipher_type)
         })
         .collect();
 
@@ -2350,7 +2348,7 @@ mod tests {
         fn test_cipher_matches_filters_allows_no_filters() {
             let cipher = Cipher {
                 id: "cipher-1".to_string(),
-                r#type: 1,
+                r#type: CipherType::Login,
                 organization_id: Some("org-1".to_string()),
                 name: None,
                 notes: None,
@@ -2372,7 +2370,7 @@ mod tests {
         fn test_cipher_matches_filters_checks_org_and_collection() {
             let cipher = Cipher {
                 id: "cipher-1".to_string(),
-                r#type: 1,
+                r#type: CipherType::Login,
                 organization_id: Some("org-1".to_string()),
                 name: None,
                 notes: None,
@@ -2411,7 +2409,7 @@ mod tests {
         fn test_cipher_matches_filters_rejects_nonmatching_folder() {
             let cipher = Cipher {
                 id: "cipher-1".to_string(),
-                r#type: 1,
+                r#type: CipherType::Login,
                 organization_id: None,
                 name: None,
                 notes: None,
@@ -2528,9 +2526,9 @@ mod tests {
     // Tests for decrypt_cipher helper
     mod decrypt_cipher_tests {
         use super::*;
-        use crate::models::{Cipher, FieldData, LoginData, SshKeyData, UriData};
+        use crate::models::{Cipher, FieldData, FieldType, LoginData, SshKeyData, UriData};
 
-        fn create_test_cipher(id: &str, cipher_type: u8) -> Cipher {
+        fn create_test_cipher(id: &str, cipher_type: CipherType) -> Cipher {
             Cipher {
                 id: id.to_string(),
                 r#type: cipher_type,
@@ -2561,7 +2559,7 @@ mod tests {
             )
         }
 
-        fn create_named_test_cipher(id: &str, cipher_type: u8, keys: &CryptoKeys) -> Cipher {
+        fn create_named_test_cipher(id: &str, cipher_type: CipherType, keys: &CryptoKeys) -> Cipher {
             let mut cipher = create_test_cipher(id, cipher_type);
             cipher.name = Some(encrypt_for_decrypt_cipher_test("Test Item", keys));
             cipher
@@ -2570,7 +2568,7 @@ mod tests {
         #[test]
         fn test_list_env_name_profile_skips_secret_value_decryption() {
             let keys = test_crypto_keys();
-            let mut cipher = create_named_test_cipher("test-123", 1, &keys);
+            let mut cipher = create_named_test_cipher("test-123", CipherType::Login, &keys);
             cipher.login = Some(LoginData {
                 username: Some("not-encrypted".to_string()),
                 password: Some("also-not-encrypted".to_string()),
@@ -2597,7 +2595,7 @@ mod tests {
         #[test]
         fn test_run_env_profile_skips_unused_uri_decryption() {
             let keys = test_crypto_keys();
-            let mut cipher = create_named_test_cipher("test-123", 1, &keys);
+            let mut cipher = create_named_test_cipher("test-123", CipherType::Login, &keys);
             cipher.login = Some(LoginData {
                 username: Some(encrypt_for_decrypt_cipher_test("alice", &keys)),
                 password: Some(encrypt_for_decrypt_cipher_test("secret", &keys)),
@@ -2620,7 +2618,7 @@ mod tests {
         #[test]
         fn test_interpolation_profile_decrypts_only_requested_component() {
             let keys = test_crypto_keys();
-            let mut cipher = create_named_test_cipher("test-123", 1, &keys);
+            let mut cipher = create_named_test_cipher("test-123", CipherType::Login, &keys);
             cipher.login = Some(LoginData {
                 username: Some("not-encrypted".to_string()),
                 password: Some(encrypt_for_decrypt_cipher_test("secret", &keys)),
@@ -2641,7 +2639,7 @@ mod tests {
 
         #[test]
         fn test_decrypt_cipher_no_name_fails() {
-            let cipher = create_test_cipher("test-123", 1);
+            let cipher = create_test_cipher("test-123", CipherType::Login);
             let keys = CryptoKeys::from_key_bytes([0u8; 32], [0u8; 32]);
 
             let result = decrypt_cipher(&cipher, &keys);
@@ -2651,34 +2649,21 @@ mod tests {
 
         #[test]
         fn test_cipher_type_to_string() {
-            // Test that cipher types are converted correctly
-            let mut cipher = create_test_cipher("test", 1);
-            assert_eq!(cipher.cipher_type().unwrap().to_string(), "login");
-
-            cipher.r#type = 2;
-            assert_eq!(cipher.cipher_type().unwrap().to_string(), "note");
-
-            cipher.r#type = 3;
-            assert_eq!(cipher.cipher_type().unwrap().to_string(), "card");
-
-            cipher.r#type = 4;
-            assert_eq!(cipher.cipher_type().unwrap().to_string(), "identity");
-
-            cipher.r#type = 5;
-            assert_eq!(cipher.cipher_type().unwrap().to_string(), "ssh");
-
-            cipher.r#type = 6;
-            assert_eq!(cipher.cipher_type().unwrap().to_string(), "ssh");
+            assert_eq!(CipherType::Login.to_string(), "login");
+            assert_eq!(CipherType::SecureNote.to_string(), "note");
+            assert_eq!(CipherType::Card.to_string(), "card");
+            assert_eq!(CipherType::Identity.to_string(), "identity");
+            assert_eq!(CipherType::SshKey.to_string(), "ssh");
         }
 
         #[test]
         fn test_decrypt_cipher_errors_on_invalid_custom_field_name() {
             let keys = test_crypto_keys();
-            let mut cipher = create_named_test_cipher("cipher-1", 1, &keys);
+            let mut cipher = create_named_test_cipher("cipher-1", CipherType::Login, &keys);
             cipher.fields = Some(vec![FieldData {
                 name: Some("not encrypted".to_string()),
                 value: Some(encrypt_for_decrypt_cipher_test("secret", &keys)),
-                r#type: 1,
+                r#type: FieldType::Hidden,
             }]);
 
             let err = decrypt_cipher(&cipher, &keys).unwrap_err();
@@ -2690,11 +2675,11 @@ mod tests {
         #[test]
         fn test_decrypt_cipher_errors_on_invalid_custom_field_value() {
             let keys = test_crypto_keys();
-            let mut cipher = create_named_test_cipher("cipher-1", 1, &keys);
+            let mut cipher = create_named_test_cipher("cipher-1", CipherType::Login, &keys);
             cipher.fields = Some(vec![FieldData {
                 name: Some(encrypt_for_decrypt_cipher_test("api token", &keys)),
                 value: Some("not encrypted".to_string()),
-                r#type: 1,
+                r#type: FieldType::Hidden,
             }]);
 
             let err = decrypt_cipher(&cipher, &keys).unwrap_err();
@@ -2706,7 +2691,7 @@ mod tests {
         #[test]
         fn test_decrypt_cipher_errors_on_invalid_ssh_public_key() {
             let keys = test_crypto_keys();
-            let mut cipher = create_named_test_cipher("cipher-ssh", 5, &keys);
+            let mut cipher = create_named_test_cipher("cipher-ssh", CipherType::SshKey, &keys);
             cipher.ssh_key = Some(SshKeyData {
                 public_key: Some("not encrypted".to_string()),
                 private_key: Some(encrypt_for_decrypt_cipher_test("private", &keys)),
@@ -2722,7 +2707,7 @@ mod tests {
         #[test]
         fn test_decrypt_cipher_errors_on_invalid_ssh_private_key() {
             let keys = test_crypto_keys();
-            let mut cipher = create_named_test_cipher("cipher-ssh", 5, &keys);
+            let mut cipher = create_named_test_cipher("cipher-ssh", CipherType::SshKey, &keys);
             cipher.ssh_key = Some(SshKeyData {
                 public_key: Some(encrypt_for_decrypt_cipher_test("public", &keys)),
                 private_key: Some("not encrypted".to_string()),
@@ -2738,7 +2723,7 @@ mod tests {
         #[test]
         fn test_decrypt_cipher_errors_on_invalid_ssh_fingerprint() {
             let keys = test_crypto_keys();
-            let mut cipher = create_named_test_cipher("cipher-ssh", 5, &keys);
+            let mut cipher = create_named_test_cipher("cipher-ssh", CipherType::SshKey, &keys);
             cipher.ssh_key = Some(SshKeyData {
                 public_key: Some(encrypt_for_decrypt_cipher_test("public", &keys)),
                 private_key: Some(encrypt_for_decrypt_cipher_test("private", &keys)),
@@ -3736,7 +3721,7 @@ mod tests {
 
             let ciphers = vec![Cipher {
                 id: "cipher-1".to_string(),
-                r#type: 1,
+                r#type: CipherType::Login,
                 organization_id: None,
                 name: Some(encrypted_name),
                 notes: None,
@@ -3775,7 +3760,7 @@ mod tests {
 
             let ciphers = vec![Cipher {
                 id: "cipher-1".to_string(),
-                r#type: 1,
+                r#type: CipherType::Login,
                 organization_id: None,
                 name: Some(encrypted_name),
                 notes: None,
@@ -5921,7 +5906,7 @@ mod tests {
         fn create_minimal_cipher(org_id: Option<&str>) -> Cipher {
             Cipher {
                 id: "test".to_string(),
-                r#type: 1,
+                r#type: CipherType::Login,
                 organization_id: org_id.map(std::string::ToString::to_string),
                 name: None,
                 notes: None,
@@ -6468,7 +6453,6 @@ mod tests {
         }
 
         #[test]
-        #[test]
         fn test_format_cipher_output_missing_password() {
             let output = CipherOutput {
                 password: None,
@@ -6566,7 +6550,7 @@ mod tests {
         fn minimal_cipher(id: &str) -> Cipher {
             Cipher {
                 id: id.to_string(),
-                r#type: 1,
+                r#type: CipherType::Login,
                 organization_id: None,
                 name: None,
                 notes: None,
@@ -6618,7 +6602,7 @@ mod tests {
 
             let cipher = Cipher {
                 id: "test-id".to_string(),
-                r#type: 1,
+                r#type: CipherType::Login,
                 name: Some(encrypted_name),
                 organization_id: None,
                 notes: None,
@@ -6680,7 +6664,7 @@ mod tests {
         fn cipher_with_login_uris(keys: &CryptoKeys, uris: &[&str]) -> Cipher {
             Cipher {
                 id: "cipher-1".to_string(),
-                r#type: 1,
+                r#type: CipherType::Login,
                 organization_id: None,
                 name: None,
                 notes: None,
@@ -6720,7 +6704,7 @@ mod tests {
             let keys = keys();
             let cipher = Cipher {
                 id: "cipher-1".to_string(),
-                r#type: 1,
+                r#type: CipherType::Login,
                 organization_id: None,
                 name: None,
                 notes: None,

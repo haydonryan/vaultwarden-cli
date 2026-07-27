@@ -1,3 +1,4 @@
+use crate::models::CipherType;
 use crate::config::Config;
 use crate::models::{CipherListResponse, SyncResponse, TokenResponse};
 use anyhow::{Context, Result};
@@ -211,7 +212,7 @@ impl ApiClient {
         access_token: &str,
         organization_id: Option<&str>,
         collection_id: Option<&str>,
-        cipher_type: Option<u8>,
+        cipher_type: Option<CipherType>,
     ) -> Result<CipherListResponse> {
         let mut params = Vec::new();
         if let Some(value) = organization_id {
@@ -221,7 +222,7 @@ impl ApiClient {
             params.push(("collectionId", value.to_string()));
         }
         if let Some(value) = cipher_type {
-            params.push(("type", value.to_string()));
+            params.push(("type", (value as u8).to_string()));
         }
 
         self.get_json_with_query(
