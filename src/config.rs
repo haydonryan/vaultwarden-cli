@@ -12,7 +12,7 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use crate::crypto::CryptoKeys;
+use crate::crypto::{CryptoKeys, KdfIterations};
 
 // ── Warning capture (for testability) ───────────────────────────────────────
 //
@@ -92,6 +92,27 @@ pub struct ConfigDirOverride {
 impl Drop for ConfigDirOverride {
     fn drop(&mut self) {
         Config::clear_config_dir_override_for_process();
+    }
+}
+
+// ── Optional KdfIterations deserialization (graceful fallback for zero) ────
+
+/// Deserialize `Option<KdfIterations>`, mapping `0` and invalid values to
+/// `None` instead of failing.
+fn deserialize_optional_kdf_iterations<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<KdfIterations>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::<serde_json::Value>::deserialize(deserializer)?;
+    match opt {
+        None => Ok(None),
+        Some(serde_json::Value::Number(n)) => {
+            let val = n.as_u64().and_then(|v| u32::try_from(v).ok());
+            Ok(val.and_then(KdfIterations::new))
+        }
+        Some(_) => Ok(None),
     }
 }
 
@@ -270,12 +291,6 @@ impl<S: SessionState> std::ops::Deref for Session<S> {
     }
 }
 
-impl<S: SessionState> std::ops::DerefMut for Session<S> {
-    fn deref_mut(&mut self) -> &mut Config {
-        &mut self.config
-    }
-}
-
 // ── Session state transitions ──────────────────────────────────────────────
 
 impl Config {
@@ -362,7 +377,12 @@ pub struct Config {
     pub token_expiry: Option<i64>,
     pub encrypted_key: Option<String>,
     pub encrypted_private_key: Option<String>,
-    pub kdf_iterations: Option<u32>,
+    /// PBKDF2 iteration count. Uses `KdfIterations` newtype to enforce
+    /// non-zero at construction.  Falls back to `None` (which callers
+    /// typically treat as the Bitwarden default of 600 000) when the JSON
+    /// value is missing, null, or zero.
+    #[serde(default, deserialize_with = "deserialize_optional_kdf_iterations")]
+    pub kdf_iterations: Option<KdfIterations>,
     // Organization encrypted keys: org_id -> encrypted_key
     #[serde(default)]
     pub org_keys: HashMap<String, String>,
@@ -1286,7 +1306,7 @@ mod tests {
             assert_eq!(config.server, Some("https://vault.example.com".to_string()));
             assert_eq!(config.client_id, Some("user.client-123".to_string()));
             assert_eq!(config.email, Some("user@example.com".to_string()));
-            assert_eq!(config.kdf_iterations, Some(600000));
+            assert_eq!(config.kdf_iterations.map(KdfIterations::get), Some(600000));
             // Legacy token values present in JSON are deserialized so callers
             // can detect and migrate them into keyring / tokens.json.
             assert_eq!(config.access_token, Some("test-token".to_string()));
@@ -1393,7 +1413,7 @@ mod tests {
                 client_id: Some("test-client".to_string()),
                 email: Some("test@example.com".to_string()),
                 access_token: Some("test-token".to_string()),
-                kdf_iterations: Some(100000),
+                kdf_iterations: KdfIterations::new(100000),
                 ..Default::default()
             };
 

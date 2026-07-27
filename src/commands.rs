@@ -194,7 +194,7 @@ pub async fn login(
     config.refresh_token = token_response.refresh_token;
     config.token_expiry = Some(expiry);
     config.encrypted_key = token_response.key;
-    config.kdf_iterations = token_response.kdf_iterations;
+    config.kdf_iterations = token_response.kdf_iterations.and_then(KdfIterations::new);
 
     // Fetch profile to get email for key derivation
     let sync_response = api.sync(&token_response.access_token).await?;
@@ -247,8 +247,6 @@ pub async fn unlock(
         .encrypted_key
         .as_ref()
         .context("Encrypted key not found. Please login again.")?;
-    let iterations = config.kdf_iterations.unwrap_or(600000);
-
     // Get password - either from argument or prompt
     let password = if let Some(p) = password {
         p
@@ -262,11 +260,7 @@ pub async fn unlock(
 
     // Derive master key from password and email
     // SAFETY: unwrap_or_default() falls back to 600_000 if iterations is 0.
-    let master_key = MasterKey::derive(
-        &password,
-        email,
-        KdfIterations::new(iterations).unwrap_or_default(),
-    );
+    let master_key = MasterKey::derive(&password, email, config.kdf_iterations.unwrap_or_default());
 
     // Decrypt the symmetric key
     let crypto_keys = master_key
@@ -774,6 +768,10 @@ struct CipherDecryptionProfile {
     ssh_private_key: bool,
     ssh_fingerprint: bool,
     decrypt_present_standard_values: bool,
+    /// Private sentinel to prevent direct field construction.
+    /// Use `CipherDecryptionProfile::full()`, `::run_env()`,
+    /// `::list_env_names()`, or `::interpolation()` instead.
+    _private: (),
 }
 
 impl CipherDecryptionProfile {
@@ -789,6 +787,7 @@ impl CipherDecryptionProfile {
             ssh_private_key: true,
             ssh_fingerprint: true,
             decrypt_present_standard_values: true,
+            _private: (),
         }
     }
 
@@ -804,6 +803,7 @@ impl CipherDecryptionProfile {
             ssh_private_key: true,
             ssh_fingerprint: true,
             decrypt_present_standard_values: true,
+            _private: (),
         }
     }
 
@@ -819,6 +819,7 @@ impl CipherDecryptionProfile {
             ssh_private_key: true,
             ssh_fingerprint: true,
             decrypt_present_standard_values: false,
+            _private: (),
         }
     }
 
@@ -838,6 +839,7 @@ impl CipherDecryptionProfile {
             ),
             ssh_fingerprint: matches!(component, b"ssh_fingerprint" | b"fingerprint"),
             decrypt_present_standard_values: true,
+            _private: (),
         }
     }
 }
@@ -3121,7 +3123,7 @@ mod tests {
                 config.encrypted_private_key,
                 Some("2.encrypted-private-key".to_string())
             );
-            assert_eq!(config.kdf_iterations, Some(600000));
+            assert_eq!(config.kdf_iterations.map(KdfIterations::get), Some(600000));
             assert_eq!(config.org_keys.get("org-1"), Some(&"2.org-key".to_string()));
             let token_expiry = config.token_expiry.unwrap();
             assert!(token_expiry >= before_login + 3600);
@@ -3490,7 +3492,7 @@ mod tests {
                 token_expiry: Some(i64::MAX),
                 email: Some("user@example.com".to_string()),
                 encrypted_key: Some(encrypted_key),
-                kdf_iterations: Some(100000),
+                kdf_iterations: KdfIterations::new(100000),
                 ..Default::default()
             };
             config.save().unwrap();
@@ -3527,7 +3529,7 @@ mod tests {
                 token_expiry: Some(i64::MAX),
                 email: Some("user@example.com".to_string()),
                 encrypted_key: Some(encrypted_key),
-                kdf_iterations: Some(100000),
+                kdf_iterations: KdfIterations::new(100000),
                 ..Default::default()
             };
             config.save().unwrap();
@@ -3584,7 +3586,7 @@ mod tests {
                 email: Some("user@example.com".to_string()),
                 encrypted_key: Some(encrypted_key),
                 encrypted_private_key: Some(encrypted_private_key),
-                kdf_iterations: Some(100000),
+                kdf_iterations: KdfIterations::new(100000),
                 ..Default::default()
             };
             config

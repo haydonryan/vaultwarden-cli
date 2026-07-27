@@ -9,6 +9,7 @@ use support::{
     env_lock, test_crypto_keys,
 };
 use vaultwarden_cli::config::Config;
+use vaultwarden_cli::crypto::KdfIterations;
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -106,7 +107,7 @@ fn unlock_reads_password_from_environment() {
         access_token: Some("token".to_string()),
         token_expiry: Some(i64::MAX),
         encrypted_key: Some(encrypted_user_key(password, email, 600000, &keys)),
-        kdf_iterations: Some(600000),
+        kdf_iterations: KdfIterations::new(600000),
         ..Default::default()
     })
     .unwrap();
@@ -139,7 +140,7 @@ fn unlock_fails_when_keys_cannot_be_persisted() {
         access_token: Some("token".to_string()),
         token_expiry: Some(i64::MAX),
         encrypted_key: Some(encrypted_user_key(password, email, 600000, &keys)),
-        kdf_iterations: Some(600000),
+        kdf_iterations: KdfIterations::new(600000),
         ..Default::default()
     })
     .unwrap();
