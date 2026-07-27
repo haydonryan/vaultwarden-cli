@@ -75,11 +75,15 @@ impl StretchedKeys {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::crypto::MasterKey;
+    use crate::crypto::{KdfIterations, MasterKey};
 
     #[test]
     fn test_stretch_deterministic() {
-        let mk = MasterKey::derive("p4ss", "user@example.com", 100_000);
+        let mk = MasterKey::derive(
+            "p4ss",
+            "user@example.com",
+            KdfIterations::new(100_000).expect("non-zero iterations"),
+        );
         let s1 = mk.stretch().unwrap();
         let s2 = mk.stretch().unwrap();
         assert_eq!(s1.enc_key, s2.enc_key);
@@ -88,14 +92,22 @@ pub(crate) mod tests {
 
     #[test]
     fn test_enc_and_mac_keys_are_different() {
-        let mk = MasterKey::derive("p4ss", "user@example.com", 100_000);
+        let mk = MasterKey::derive(
+            "p4ss",
+            "user@example.com",
+            KdfIterations::new(100_000).expect("non-zero iterations"),
+        );
         let s = mk.stretch().unwrap();
         assert_ne!(&s.enc_key[..], &s.mac_key[..]);
     }
 
     #[test]
     fn test_keys_are_32_bytes() {
-        let mk = MasterKey::derive("p4ss", "user@example.com", 100_000);
+        let mk = MasterKey::derive(
+            "p4ss",
+            "user@example.com",
+            KdfIterations::new(100_000).expect("non-zero iterations"),
+        );
         let s = mk.stretch().unwrap();
         assert_eq!(s.enc_key.len(), 32);
         assert_eq!(s.mac_key.len(), 32);

@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 use vaultwarden_cli::{
-    crypto::{CryptoKeys, MasterKey},
+    crypto::{CryptoKeys, KdfIterations, MasterKey},
     install_rustls_crypto_provider,
 };
 
@@ -199,7 +199,11 @@ impl LiveTestEnv {
         let kdf_iterations: u32 = 100_000;
 
         // ── Crypto material ──────────────────────────────────────────────
-        let master_key = MasterKey::derive(TEST_PASSWORD, &email, kdf_iterations);
+        let master_key = MasterKey::derive(
+            TEST_PASSWORD,
+            &email,
+            KdfIterations::new(kdf_iterations).expect("non-zero iterations"),
+        );
         let stretched = master_key.stretch()?;
 
         // Random 64-byte symmetric key: [enc_key(32) | mac_key(32)]

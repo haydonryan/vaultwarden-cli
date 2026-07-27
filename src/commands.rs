@@ -33,7 +33,7 @@ use crate::api::ApiClient;
 use crate::config::{
     self, Config, KeyPersistenceOutcome, LoggedInLocked, LoggedInUnlocked, LoggedOut, Session,
 };
-use crate::crypto::{CryptoKeys, MasterKey};
+use crate::crypto::{CryptoKeys, KdfIterations, MasterKey};
 use crate::models::{Cipher, CipherOutput, CipherType, FieldOutput};
 
 struct TokenRefreshLock {
@@ -261,7 +261,12 @@ pub async fn unlock(
     println!("Deriving key...");
 
     // Derive master key from password and email
-    let master_key = MasterKey::derive(&password, email, iterations);
+    // SAFETY: unwrap_or_default() falls back to 600_000 if iterations is 0.
+    let master_key = MasterKey::derive(
+        &password,
+        email,
+        KdfIterations::new(iterations).unwrap_or_default(),
+    );
 
     // Decrypt the symmetric key
     let crypto_keys = master_key
@@ -2559,7 +2564,11 @@ mod tests {
             )
         }
 
-        fn create_named_test_cipher(id: &str, cipher_type: CipherType, keys: &CryptoKeys) -> Cipher {
+        fn create_named_test_cipher(
+            id: &str,
+            cipher_type: CipherType,
+            keys: &CryptoKeys,
+        ) -> Cipher {
             let mut cipher = create_test_cipher(id, cipher_type);
             cipher.name = Some(encrypt_for_decrypt_cipher_test("Test Item", keys));
             cipher
@@ -3384,7 +3393,11 @@ mod tests {
 
             type Aes256CbcEnc = Encryptor<aes::Aes256>;
 
-            let master_key = MasterKey::derive(&password, email, iterations);
+            let master_key = MasterKey::derive(
+                &password,
+                email,
+                KdfIterations::new(iterations).expect("non-zero iterations"),
+            );
             let stretched = master_key.stretch().unwrap();
 
             let iv: Vec<u8> = (64u8..80).collect();

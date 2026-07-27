@@ -1,5 +1,5 @@
-use crate::models::CipherType;
 use crate::config::Config;
+use crate::models::CipherType;
 use crate::models::{CipherListResponse, SyncResponse, TokenResponse};
 use anyhow::{Context, Result};
 use reqwest::{Client, Response, Url};

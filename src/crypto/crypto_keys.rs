@@ -183,7 +183,7 @@ impl CryptoKeys {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::crypto::MasterKey;
+    use crate::crypto::{KdfIterations, MasterKey};
 
     #[test]
     fn test_from_symmetric_key_valid() {
@@ -201,7 +201,11 @@ pub(crate) mod tests {
 
     #[test]
     fn test_decrypt_invalid_format_no_dot() {
-        let mk = MasterKey::derive("p4ss", "user@example.com", 100_000);
+        let mk = MasterKey::derive(
+            "p4ss",
+            "user@example.com",
+            KdfIterations::new(100_000).expect("non-zero iterations"),
+        );
         let sym_key = vec![0x42u8; 64];
         let enc_key_v = test_helpers::encrypt_bytes_for_test(
             &sym_key,
@@ -226,7 +230,11 @@ pub(crate) mod tests {
 
     #[test]
     fn test_decrypt_invalid_encryption_type() {
-        let mk = MasterKey::derive("p4ss", "user@example.com", 100_000);
+        let mk = MasterKey::derive(
+            "p4ss",
+            "user@example.com",
+            KdfIterations::new(100_000).expect("non-zero iterations"),
+        );
         let sym_key = vec![0x42u8; 64];
         let enc_key_v = test_helpers::encrypt_bytes_for_test(
             &sym_key,
@@ -251,7 +259,11 @@ pub(crate) mod tests {
 
     #[test]
     fn test_decrypt_invalid_type_not_number() {
-        let mk = MasterKey::derive("p4ss", "user@example.com", 100_000);
+        let mk = MasterKey::derive(
+            "p4ss",
+            "user@example.com",
+            KdfIterations::new(100_000).expect("non-zero iterations"),
+        );
         let sym_key = vec![0x42u8; 64];
         let enc_key_v = test_helpers::encrypt_bytes_for_test(
             &sym_key,
@@ -326,7 +338,11 @@ pub(crate) mod tests {
 
     #[test]
     fn test_decrypt_to_string_invalid() {
-        let mk = MasterKey::derive("p4ss", "user@example.com", 100_000);
+        let mk = MasterKey::derive(
+            "p4ss",
+            "user@example.com",
+            KdfIterations::new(100_000).expect("non-zero iterations"),
+        );
         let sym_key = vec![0x42u8; 64];
         let enc_key_v = test_helpers::encrypt_bytes_for_test(
             &sym_key,
@@ -387,7 +403,7 @@ pub(crate) mod tests {
     mod roundtrip_tests {
         use super::test_helpers::encrypt_bytes_for_test;
         use super::*;
-        use crate::crypto::MasterKey;
+        use crate::crypto::{KdfIterations, MasterKey};
 
         fn make_keys() -> (CryptoKeys, [u8; 32], [u8; 32]) {
             let enc_key = [0x42u8; 32];
@@ -397,7 +413,11 @@ pub(crate) mod tests {
                 v.extend_from_slice(&mac_key);
                 v
             };
-            let mk = MasterKey::derive("testpw", "test@example.com", 100_000);
+            let mk = MasterKey::derive(
+                "testpw",
+                "test@example.com",
+                KdfIterations::new(100_000).expect("non-zero iterations"),
+            );
             let stretched = mk.stretch().unwrap();
             let encrypted =
                 encrypt_bytes_for_test(&sym_key, stretched.enc_key(), stretched.mac_key());
@@ -465,7 +485,11 @@ pub(crate) mod tests {
             let plaintext = b"Secret data";
             let encrypted = encrypt_bytes_for_test(plaintext, &enc_key, &mac_key);
 
-            let mk = MasterKey::derive("otherpw", "other@example.com", 100_000);
+            let mk = MasterKey::derive(
+                "otherpw",
+                "other@example.com",
+                KdfIterations::new(100_000).expect("non-zero iterations"),
+            );
             let stretched = mk.stretch().unwrap();
             let sym_key: Vec<u8> = {
                 let mut v = [0x99u8; 32].to_vec();
@@ -592,7 +616,11 @@ pub(crate) mod tests {
             let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
             let der = private_key.to_pkcs8_der().unwrap().as_bytes().to_vec();
 
-            let mk = MasterKey::derive("testpw", "test@example.com", 100_000);
+            let mk = MasterKey::derive(
+                "testpw",
+                "test@example.com",
+                KdfIterations::new(100_000).expect("non-zero iterations"),
+            );
             let stretched = mk.stretch().unwrap();
             let sym_key: Vec<u8> = {
                 let mut v = vec![0x42u8; 32];

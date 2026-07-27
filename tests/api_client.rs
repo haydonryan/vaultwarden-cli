@@ -437,7 +437,12 @@ async fn api_client_ciphers_filtered_sends_query_params() {
 
     let client = ApiClient::new_with_flags(&mock_server.uri(), true).unwrap();
     let ciphers = client
-        .ciphers_filtered("access-token", Some("org-1"), Some("col-1"), Some(CipherType::SshKey))
+        .ciphers_filtered(
+            "access-token",
+            Some("org-1"),
+            Some("col-1"),
+            Some(CipherType::SshKey),
+        )
         .await
         .unwrap();
 

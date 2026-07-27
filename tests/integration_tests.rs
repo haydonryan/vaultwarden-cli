@@ -231,7 +231,7 @@ mod api_tests {
 
 /// Tests for cryptographic operations with realistic data
 mod crypto_integration_tests {
-    use vaultwarden_cli::crypto::{CryptoKeys, MasterKey};
+    use vaultwarden_cli::crypto::{CryptoKeys, KdfIterations, MasterKey};
 
     #[test]
     fn test_full_key_derivation_flow() {
@@ -241,7 +241,11 @@ mod crypto_integration_tests {
         let iterations = 100000; // Lower for test speed
 
         // Step 1: Derive master key from password
-        let master_key = MasterKey::derive(test_input, email, iterations);
+        let master_key = MasterKey::derive(
+            test_input,
+            email,
+            KdfIterations::new(iterations).expect("non-zero iterations"),
+        );
         assert_eq!(master_key.len(), 32);
 
         // Step 2: Stretch master key to get enc/mac keys
@@ -275,8 +279,16 @@ mod crypto_integration_tests {
         let password = "SamePassword";
         let iterations = 100000;
 
-        let key1 = MasterKey::derive(password, "user1@example.com", iterations);
-        let key2 = MasterKey::derive(password, "user2@example.com", iterations);
+        let key1 = MasterKey::derive(
+            password,
+            "user1@example.com",
+            KdfIterations::new(iterations).expect("non-zero iterations"),
+        );
+        let key2 = MasterKey::derive(
+            password,
+            "user2@example.com",
+            KdfIterations::new(iterations).expect("non-zero iterations"),
+        );
 
         // Same password but different emails should produce different keys
         assert_ne!(key1.as_bytes(), key2.as_bytes());
@@ -365,10 +377,7 @@ mod model_integration_tests {
 
         // Check cipher types
         assert_eq!(response.ciphers[0].r#type, CipherType::Login);
-        assert_eq!(
-            response.ciphers[1].r#type,
-            CipherType::SecureNote
-        );
+        assert_eq!(response.ciphers[1].r#type, CipherType::SecureNote);
     }
 
     #[test]
@@ -428,26 +437,38 @@ mod model_integration_tests {
 /// Tests for edge cases and error handling
 mod edge_case_tests {
     use std::str::FromStr;
-    use vaultwarden_cli::crypto::{CryptoKeys, MasterKey};
+    use vaultwarden_cli::crypto::{CryptoKeys, KdfIterations, MasterKey};
     use vaultwarden_cli::models::{Cipher, CipherType};
 
     #[test]
     fn test_empty_password_derivation() {
         // Empty password is technically valid
-        let key = MasterKey::derive("", "user@example.com", 100000);
+        let key = MasterKey::derive(
+            "",
+            "user@example.com",
+            KdfIterations::new(100000).expect("non-zero iterations"),
+        );
         assert_eq!(key.len(), 32);
     }
 
     #[test]
     fn test_unicode_password() {
-        let key = MasterKey::derive("密码🔐パスワード", "user@example.com", 100000);
+        let key = MasterKey::derive(
+            "密码🔐パスワード",
+            "user@example.com",
+            KdfIterations::new(100000).expect("non-zero iterations"),
+        );
         assert_eq!(key.len(), 32);
     }
 
     #[test]
     fn test_very_long_password() {
         let long_password = "a".repeat(10000);
-        let key = MasterKey::derive(&long_password, "user@example.com", 100000);
+        let key = MasterKey::derive(
+            &long_password,
+            "user@example.com",
+            KdfIterations::new(100000).expect("non-zero iterations"),
+        );
         assert_eq!(key.len(), 32);
     }
 
@@ -502,13 +523,17 @@ mod edge_case_tests {
 /// Performance-related tests
 mod performance_tests {
     use std::time::{Duration, Instant};
-    use vaultwarden_cli::crypto::{CryptoKeys, MasterKey};
+    use vaultwarden_cli::crypto::{CryptoKeys, KdfIterations, MasterKey};
 
     #[test]
     fn test_key_derivation_completes_in_reasonable_time() {
         // With low iterations, derivation should be fast
         let start = Instant::now();
-        let _ = MasterKey::derive("password", "user@example.com", 1000);
+        let _ = MasterKey::derive(
+            "password",
+            "user@example.com",
+            KdfIterations::new(1000).expect("non-zero iterations"),
+        );
         let duration = start.elapsed();
 
         assert!(
@@ -520,7 +545,11 @@ mod performance_tests {
     #[test]
     #[cfg_attr(tarpaulin, ignore)]
     fn test_stretch_key_is_fast() {
-        let master_key = MasterKey::derive("benchmark_password", "bench@example.com", 100_000);
+        let master_key = MasterKey::derive(
+            "benchmark_password",
+            "bench@example.com",
+            KdfIterations::new(100_000).expect("non-zero iterations"),
+        );
 
         let start = Instant::now();
         for _ in 0..1000 {

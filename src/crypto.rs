@@ -17,6 +17,7 @@ pub(crate) mod rsa_ops;
 pub(crate) mod stretched_keys;
 
 pub use crypto_keys::CryptoKeys;
+pub use master_key::KdfIterations;
 pub use master_key::MasterKey;
 pub use master_key::allow_insecure_mac;
 pub use master_key::set_allow_insecure_mac;
