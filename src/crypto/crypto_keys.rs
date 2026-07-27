@@ -361,7 +361,6 @@ pub(crate) mod tests {
 
     /// Test helpers that mirror the original `test_helpers` module.
     pub(crate) mod test_helpers {
-        use super::*;
         use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
         use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
         use hmac::{Hmac, KeyInit, Mac};
@@ -511,7 +510,6 @@ pub(crate) mod tests {
 
     // ── RSA round-trip tests ──────────────────────────────────────────────
     mod rsa_roundtrip_tests {
-        use super::test_helpers::encrypt_bytes_for_test;
         use super::*;
         use crate::crypto::{MasterKey, decrypt_rsa};
         use base64::{Engine, engine::general_purpose::STANDARD as BASE64};

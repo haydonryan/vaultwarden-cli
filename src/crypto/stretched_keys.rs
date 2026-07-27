@@ -74,7 +74,6 @@ impl StretchedKeys {
 // ── Tests ─────────────────────────────────────────────────────────────────
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::*;
     use crate::crypto::{KdfIterations, MasterKey};
 
     #[test]

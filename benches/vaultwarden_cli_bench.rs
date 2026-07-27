@@ -6,7 +6,8 @@ use serde_json::json;
 use std::hint::black_box;
 use std::time::Duration;
 use vaultwarden_cli::models::{
-    Cipher, CipherOutput, FieldData, FieldOutput, LoginData, SyncResponse, UriData,
+    Cipher, CipherOutput, CipherType, FieldData, FieldOutput, FieldType, LoginData, SyncResponse,
+    UriData,
 };
 
 const WORKLOADS: [(&str, usize); 3] = [("small", 16), ("medium", 256), ("large", 1024)];
@@ -108,7 +109,7 @@ fn fixture_ciphers(count: usize) -> Vec<Cipher> {
     (0..count)
         .map(|i| Cipher {
             id: format!("cipher-{i:04}"),
-            r#type: 1,
+            r#type: CipherType::Login,
             organization_id: Some(format!("org-{}", i % 4)),
             name: Some(format!("service-{i:04}")),
             notes: Some(format!("deterministic note {i}")),
@@ -130,7 +131,7 @@ fn fixture_ciphers(count: usize) -> Vec<Cipher> {
             fields: Some(vec![FieldData {
                 name: Some("api-token".to_string()),
                 value: Some(format!("token-{i:04}")),
-                r#type: 1,
+                r#type: FieldType::Hidden,
             }]),
             data: None,
         })
@@ -154,7 +155,7 @@ fn fixture_outputs(ciphers: &[Cipher]) -> Vec<CipherOutput> {
                     .map(|field| FieldOutput {
                         name: field.name.clone().unwrap_or_default(),
                         value: field.value.clone().unwrap_or_default(),
-                        hidden: field.r#type == 1,
+                        hidden: field.r#type == FieldType::Hidden,
                     })
                     .collect()
             }),

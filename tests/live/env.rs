@@ -316,8 +316,12 @@ impl LiveTestEnv {
         // Reconstruct user keys from plaintext (we know them since we
         // generated them during registration).
         let (enc, mac) = sym_key_bytes.split_at(32);
-        let enc_arr: [u8; 32] = enc.try_into().map_err(|_| anyhow::anyhow!("bad enc"))?;
-        let mac_arr: [u8; 32] = mac.try_into().map_err(|_| anyhow::anyhow!("bad mac"))?;
+        let enc_arr: [u8; 32] = enc
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("bad enc: {e}"))?;
+        let mac_arr: [u8; 32] = mac
+            .try_into()
+            .map_err(|e| anyhow::anyhow!("bad mac: {e}"))?;
         let user_keys = CryptoKeys::from_key_bytes(enc_arr, mac_arr);
 
         // ── Temp directory layout ────────────────────────────────────────

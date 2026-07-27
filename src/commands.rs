@@ -3394,7 +3394,7 @@ mod tests {
             type Aes256CbcEnc = Encryptor<aes::Aes256>;
 
             let master_key = MasterKey::derive(
-                &password,
+                password,
                 email,
                 KdfIterations::new(iterations).expect("non-zero iterations"),
             );

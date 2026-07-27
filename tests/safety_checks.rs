@@ -15,7 +15,7 @@ mod support;
 
 use support::{TestContext, allow_insecure_key_file_fallback, env_lock};
 use vaultwarden_cli::config::Config;
-use vaultwarden_cli::crypto::{CryptoKeys, KdfIterations, MasterKey};
+use vaultwarden_cli::crypto::CryptoKeys;
 
 // ─────────────────────────────────────────────
 // Restrictive file permissions (Unix only)
@@ -176,7 +176,7 @@ mod restrictive_file_permissions {
 // ─────────────────────────────────────────────
 
 mod key_zeroization {
-    use vaultwarden_cli::crypto::{CryptoKeys, KdfIterations, MasterKey};
+    use vaultwarden_cli::crypto::CryptoKeys;
 
     #[test]
     fn crypto_keys_implements_zeroize() {
@@ -347,7 +347,7 @@ mod api_client_timeouts {
 
 mod mac_integrity_rejection {
     use super::env_lock;
-    use vaultwarden_cli::crypto::{CryptoKeys, KdfIterations, MasterKey};
+    use vaultwarden_cli::crypto::CryptoKeys;
 
     #[test]
     fn rejects_ciphertext_without_mac_by_default() {

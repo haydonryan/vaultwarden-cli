@@ -437,7 +437,7 @@ mod model_integration_tests {
 /// Tests for edge cases and error handling
 mod edge_case_tests {
     use std::str::FromStr;
-    use vaultwarden_cli::crypto::{CryptoKeys, KdfIterations, MasterKey};
+    use vaultwarden_cli::crypto::{KdfIterations, MasterKey};
     use vaultwarden_cli::models::{Cipher, CipherType};
 
     #[test]
@@ -523,7 +523,7 @@ mod edge_case_tests {
 /// Performance-related tests
 mod performance_tests {
     use std::time::{Duration, Instant};
-    use vaultwarden_cli::crypto::{CryptoKeys, KdfIterations, MasterKey};
+    use vaultwarden_cli::crypto::{KdfIterations, MasterKey};
 
     #[test]
     fn test_key_derivation_completes_in_reasonable_time() {
