@@ -39,9 +39,11 @@ impl<'de> Deserialize<'de> for KdfType {
             Some(serde_json::Value::Number(n)) => match n.as_u64() {
                 Some(0) => Ok(Self::Pbkdf2),
                 Some(1) => Ok(Self::Argon2id),
-                _ => Ok(Self::Pbkdf2),
+                _ => Err(serde::de::Error::custom(format!(
+                    "unknown KdfType value: {n}"
+                ))),
             },
-            _ => Ok(Self::Pbkdf2),
+            _ => Err(serde::de::Error::custom("expected a number for KdfType")),
         }
     }
 }
@@ -83,7 +85,11 @@ impl<'de> Deserialize<'de> for FieldType {
                     Some(1) => Self::Hidden,
                     Some(2) => Self::Boolean,
                     Some(3) => Self::Linked,
-                    _ => Self::Hidden,
+                    _ => {
+                        return Err(serde::de::Error::custom(format!(
+                            "unknown FieldType value: {n}"
+                        )));
+                    }
                 }
             }
             Some(serde_json::Value::String(s)) => match s.parse::<u8>() {
@@ -91,9 +97,17 @@ impl<'de> Deserialize<'de> for FieldType {
                 Ok(1) => Self::Hidden,
                 Ok(2) => Self::Boolean,
                 Ok(3) => Self::Linked,
-                _ => Self::Hidden,
+                _ => {
+                    return Err(serde::de::Error::custom(format!(
+                        "unknown FieldType string value: {s}"
+                    )));
+                }
             },
-            _ => Self::Hidden,
+            _ => {
+                return Err(serde::de::Error::custom(
+                    "expected a number or string for FieldType",
+                ));
+            }
         })
     }
 }
@@ -134,7 +148,9 @@ impl<'de> Deserialize<'de> for UriMatchType {
                 Some(3) => Ok(Self::Exact),
                 Some(4) => Ok(Self::RegularExpression),
                 Some(5) => Ok(Self::Never),
-                _ => Ok(Self::Domain),
+                _ => Err(serde::de::Error::custom(format!(
+                    "unknown UriMatchType value: {n}"
+                ))),
             },
             Some(serde_json::Value::String(s)) => match s.parse::<u8>() {
                 Ok(0) => Ok(Self::Domain),
@@ -143,9 +159,13 @@ impl<'de> Deserialize<'de> for UriMatchType {
                 Ok(3) => Ok(Self::Exact),
                 Ok(4) => Ok(Self::RegularExpression),
                 Ok(5) => Ok(Self::Never),
-                _ => Ok(Self::Domain),
+                _ => Err(serde::de::Error::custom(format!(
+                    "unknown UriMatchType string value: {s}"
+                ))),
             },
-            _ => Ok(Self::Domain),
+            _ => Err(serde::de::Error::custom(
+                "expected a number or string for UriMatchType",
+            )),
         }
     }
 }
@@ -1026,25 +1046,23 @@ mod tests {
         }
 
         #[test]
-        fn test_field_data_missing_type_defaults_to_hidden() {
+        fn test_field_data_missing_type_errors() {
             let json = r#"{"Name": "unknown-field", "Value": "secret-value"}"#;
 
-            let field: FieldData = serde_json::from_str(json).unwrap();
-
-            assert_eq!(field.r#type, FieldType::Hidden);
+            let result: Result<FieldData, _> = serde_json::from_str(json);
+            assert!(result.is_err(), "missing FieldType should error");
         }
 
         #[test]
-        fn test_field_data_invalid_type_defaults_to_hidden() {
+        fn test_field_data_invalid_type_errors() {
             let json = r#"{"Name": "unknown-field", "Value": "secret-value", "Type": "invalid"}"#;
 
-            let field: FieldData = serde_json::from_str(json).unwrap();
-
-            assert_eq!(field.r#type, FieldType::Hidden);
+            let result: Result<FieldData, _> = serde_json::from_str(json);
+            assert!(result.is_err(), "invalid FieldType should error");
         }
 
         #[test]
-        fn test_cipher_with_invalid_field_type_still_deserializes() {
+        fn test_cipher_with_invalid_field_type_errors() {
             let json = r#"{
                 "Id": "cipher-with-bad-field",
                 "Type": 1,
@@ -1054,11 +1072,11 @@ mod tests {
                 ]
             }"#;
 
-            let cipher: Cipher = serde_json::from_str(json).unwrap();
-            let fields = cipher.fields.unwrap();
-
-            assert_eq!(fields.len(), 1);
-            assert_eq!(fields[0].r#type, FieldType::Hidden);
+            let result: Result<Cipher, _> = serde_json::from_str(json);
+            assert!(
+                result.is_err(),
+                "cipher with invalid FieldType should error"
+            );
         }
 
         #[test]
