@@ -320,38 +320,179 @@ impl FromStr for CipherType {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct Cipher {
-    #[serde(alias = "Id", alias = "id")]
-    pub id: String,
-    #[serde(alias = "Type", alias = "type")]
-    pub r#type: CipherType,
-    #[serde(alias = "OrganizationId", alias = "organizationId")]
-    pub organization_id: Option<String>,
-    #[serde(alias = "Name", alias = "name")]
-    pub name: Option<String>,
-    #[serde(alias = "Notes", alias = "notes")]
-    pub notes: Option<String>,
-    #[serde(alias = "FolderId", alias = "folderId")]
-    pub folder_id: Option<String>,
-    #[serde(alias = "Login", alias = "login")]
-    pub login: Option<LoginData>,
-    #[serde(alias = "Card", alias = "card")]
-    pub card: Option<CardData>,
-    #[serde(alias = "Identity", alias = "identity")]
-    pub identity: Option<IdentityData>,
-    #[serde(alias = "SecureNote", alias = "secureNote")]
-    pub secure_note: Option<SecureNoteData>,
-    #[serde(alias = "SshKey", alias = "sshKey")]
-    pub ssh_key: Option<SshKeyData>,
-    #[serde(alias = "CollectionIds", alias = "collectionIds", default)]
-    pub collection_ids: Vec<String>,
-    #[serde(alias = "Fields", alias = "fields")]
-    pub fields: Option<Vec<FieldData>>,
-    // Handle nested data structure (Vaultwarden format)
-    #[serde(alias = "Data", alias = "data")]
-    pub data: Option<NestedCipherData>,
+/// Cipher data variants — mutually exclusive.
+/// Only one variant is present per cipher; the type discriminator is
+/// embedded in the variant itself rather than stored as a separate field.
+#[derive(Debug, Clone)]
+pub enum CipherData {
+    Login(LoginData),
+    SecureNote(SecureNoteData),
+    Card(CardData),
+    Identity(IdentityData),
+    SshKey(SshKeyData),
 }
+
+impl CipherData {
+    /// Return the corresponding `CipherType` for this variant.
+    #[must_use]
+    pub fn cipher_type(&self) -> CipherType {
+        match self {
+            Self::Login(_) => CipherType::Login,
+            Self::SecureNote(_) => CipherType::SecureNote,
+            Self::Card(_) => CipherType::Card,
+            Self::Identity(_) => CipherType::Identity,
+            Self::SshKey(_) => CipherType::SshKey,
+        }
+    }
+}
+
+/// Helper to get typed data from a CipherData reference.
+#[must_use]
+pub fn cipher_login_data(data: &CipherData) -> Option<&LoginData> {
+    if let CipherData::Login(v) = data {
+        Some(v)
+    } else {
+        None
+    }
+}
+#[must_use]
+pub fn cipher_card_data(data: &CipherData) -> Option<&CardData> {
+    if let CipherData::Card(v) = data {
+        Some(v)
+    } else {
+        None
+    }
+}
+#[must_use]
+pub fn cipher_identity_data(data: &CipherData) -> Option<&IdentityData> {
+    if let CipherData::Identity(v) = data {
+        Some(v)
+    } else {
+        None
+    }
+}
+#[must_use]
+pub fn cipher_secure_note_data(data: &CipherData) -> Option<&SecureNoteData> {
+    if let CipherData::SecureNote(v) = data {
+        Some(v)
+    } else {
+        None
+    }
+}
+#[must_use]
+pub fn cipher_ssh_key_data(data: &CipherData) -> Option<&SshKeyData> {
+    if let CipherData::SshKey(v) = data {
+        Some(v)
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Cipher {
+    pub id: String,
+    pub organization_id: Option<String>,
+    pub name: Option<String>,
+    pub notes: Option<String>,
+    pub folder_id: Option<String>,
+    pub collection_ids: Vec<String>,
+    pub fields: Option<Vec<FieldData>>,
+    /// Nested cipher data (Vaultwarden alternate format).
+    pub data: Option<NestedCipherData>,
+    /// The exclusive cipher data variant.
+    pub cipher_data: Option<CipherData>,
+}
+
+/// Custom Deserialize for Cipher: reads the flat JSON layout (Type + separate
+/// Login/Card/Identity/SecureNote/SshKey fields) and constructs the CipherData enum.
+impl<'de> Deserialize<'de> for Cipher {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct CipherHelper {
+            #[serde(alias = "Id", alias = "id")]
+            id: String,
+            #[serde(alias = "OrganizationId", alias = "organizationId")]
+            organization_id: Option<String>,
+            #[serde(alias = "Name", alias = "name")]
+            name: Option<String>,
+            #[serde(alias = "Notes", alias = "notes")]
+            notes: Option<String>,
+            #[serde(alias = "FolderId", alias = "folderId")]
+            folder_id: Option<String>,
+            #[serde(alias = "CollectionIds", alias = "collectionIds", default)]
+            collection_ids: Vec<String>,
+            #[serde(alias = "Fields", alias = "fields")]
+            fields: Option<Vec<FieldData>>,
+            #[serde(alias = "Data", alias = "data")]
+            data: Option<NestedCipherData>,
+            #[serde(rename = "Type", alias = "type")]
+            r#type: CipherType,
+            #[serde(alias = "Login", alias = "login")]
+            login: Option<LoginData>,
+            #[serde(alias = "Card", alias = "card")]
+            card: Option<CardData>,
+            #[serde(alias = "Identity", alias = "identity")]
+            identity: Option<IdentityData>,
+            #[serde(alias = "SecureNote", alias = "secureNote")]
+            secure_note: Option<SecureNoteData>,
+            #[serde(alias = "SshKey", alias = "sshKey")]
+            ssh_key: Option<SshKeyData>,
+        }
+
+        let h = CipherHelper::deserialize(deserializer)?;
+        let cipher_data = Some(match h.r#type {
+            CipherType::Login => CipherData::Login(h.login.unwrap_or(LoginData {
+                username: None,
+                password: None,
+                totp: None,
+                uris: None,
+            })),
+            CipherType::SecureNote => {
+                CipherData::SecureNote(h.secure_note.unwrap_or(SecureNoteData { r#type: None }))
+            }
+            CipherType::Card => CipherData::Card(h.card.unwrap_or(CardData {
+                cardholder_name: None,
+                brand: None,
+                number: None,
+                exp_month: None,
+                exp_year: None,
+                code: None,
+            })),
+            CipherType::Identity => CipherData::Identity(h.identity.unwrap_or(IdentityData {
+                title: None,
+                first_name: None,
+                middle_name: None,
+                last_name: None,
+                email: None,
+                phone: None,
+                company: None,
+            })),
+            CipherType::SshKey => CipherData::SshKey(h.ssh_key.unwrap_or(SshKeyData {
+                private_key: None,
+                public_key: None,
+                fingerprint: None,
+            })),
+        });
+        Ok(Cipher {
+            id: h.id,
+            organization_id: h.organization_id,
+            name: h.name,
+            notes: h.notes,
+            folder_id: h.folder_id,
+            collection_ids: h.collection_ids,
+            fields: h.fields,
+            data: h.data,
+            cipher_data,
+        })
+    }
+}
+
+// Flattened deserialization: the wire format sends `Type` + `Login`/`Card`/...
+// as flat JSON keys. We use `#[serde(flatten)]` with a custom Deserialize impl
+// on CipherData that reads those keys and builds the correct variant.
 
 // Nested cipher data (Vaultwarden returns data in this nested format)
 #[derive(Debug, Clone, Deserialize)]
@@ -389,31 +530,45 @@ impl Cipher {
         self.resolve_field(self.name.as_deref(), |d| d.name.as_deref())
     }
 
-    // Get username from login or nested data
+    // Get username from cipher_data or nested data
     #[must_use]
     pub fn get_username(&self) -> Option<&str> {
-        self.resolve_field(
-            self.login.as_ref().and_then(|l| l.username.as_deref()),
-            |d| d.username.as_deref(),
-        )
+        let from_data = self.cipher_data.as_ref().and_then(|cd| {
+            if let CipherData::Login(login) = cd {
+                login.username.as_deref()
+            } else {
+                None
+            }
+        });
+        self.resolve_field(from_data, |d| d.username.as_deref())
     }
 
-    // Get password from login or nested data
+    // Get password from cipher_data or nested data
     #[must_use]
     pub fn get_password(&self) -> Option<&str> {
-        self.resolve_field(
-            self.login.as_ref().and_then(|l| l.password.as_deref()),
-            |d| d.password.as_deref(),
-        )
+        let from_data = self.cipher_data.as_ref().and_then(|cd| {
+            if let CipherData::Login(login) = cd {
+                login.password.as_deref()
+            } else {
+                None
+            }
+        });
+        self.resolve_field(from_data, |d| d.password.as_deref())
     }
 
-    // Get URI from login or nested data
+    // Get URI from cipher_data or nested data
     #[must_use]
     pub fn get_uri(&self) -> Option<&str> {
         let direct = self
-            .login
+            .cipher_data
             .as_ref()
-            .and_then(|l| l.uris.as_ref())
+            .and_then(|cd| {
+                if let CipherData::Login(login) = cd {
+                    login.uris.as_ref()
+                } else {
+                    None
+                }
+            })
             .and_then(|uris| uris.first())
             .and_then(|u| u.uri.as_deref());
         self.resolve_field(direct, |d| {
@@ -652,13 +807,18 @@ mod tests {
         fn create_test_cipher() -> Cipher {
             Cipher {
                 id: "test-id".to_string(),
-                r#type: CipherType::Login,
                 organization_id: None,
                 name: Some("encrypted-name".to_string()),
                 notes: Some("encrypted-notes".to_string()),
                 folder_id: None,
                 collection_ids: Vec::new(),
-                login: Some(LoginData {
+                fields: Some(vec![FieldData {
+                    name: Some("field-name".to_string()),
+                    value: Some("field-value".to_string()),
+                    r#type: FieldType::Text,
+                }]),
+                data: None,
+                cipher_data: Some(CipherData::Login(LoginData {
                     username: Some("encrypted-username".to_string()),
                     password: Some("encrypted-password".to_string()),
                     totp: None,
@@ -666,34 +826,18 @@ mod tests {
                         uri: Some("encrypted-uri".to_string()),
                         r#match: None,
                     }]),
-                }),
-                card: None,
-                identity: None,
-                secure_note: None,
-                ssh_key: None,
-                fields: Some(vec![FieldData {
-                    name: Some("field-name".to_string()),
-                    value: Some("field-value".to_string()),
-                    r#type: FieldType::Text,
-                }]),
-                data: None,
+                })),
             }
         }
 
         fn create_cipher_with_nested_data() -> Cipher {
             Cipher {
                 id: "test-id".to_string(),
-                r#type: CipherType::Login,
                 organization_id: None,
                 name: None,
                 notes: None,
                 folder_id: None,
                 collection_ids: Vec::new(),
-                login: None,
-                card: None,
-                identity: None,
-                secure_note: None,
-                ssh_key: None,
                 fields: None,
                 data: Some(NestedCipherData {
                     name: Some("nested-name".to_string()),
@@ -709,13 +853,22 @@ mod tests {
                         r#type: FieldType::Hidden,
                     }]),
                 }),
+                cipher_data: Some(CipherData::Login(LoginData {
+                    username: None,
+                    password: None,
+                    totp: None,
+                    uris: None,
+                })),
             }
         }
 
         #[test]
         fn test_cipher_type_is_enum() {
             let cipher = create_test_cipher();
-            assert_eq!(cipher.r#type, CipherType::Login);
+            assert_eq!(
+                cipher.cipher_data.as_ref().map(|cd| cd.cipher_type()),
+                Some(CipherType::Login)
+            );
         }
 
         #[test]
@@ -741,19 +894,19 @@ mod tests {
         fn test_get_name_none() {
             let cipher = Cipher {
                 id: "test".to_string(),
-                r#type: CipherType::Login,
                 organization_id: None,
                 name: None,
                 notes: None,
                 folder_id: None,
                 collection_ids: Vec::new(),
-                login: None,
-                card: None,
-                identity: None,
-                secure_note: None,
-                ssh_key: None,
                 fields: None,
                 data: None,
+                cipher_data: Some(CipherData::Login(LoginData {
+                    username: None,
+                    password: None,
+                    totp: None,
+                    uris: None,
+                })),
             };
             assert_eq!(cipher.get_name(), None);
         }
@@ -798,17 +951,11 @@ mod tests {
         fn test_get_uri_from_nested_uris_array() {
             let cipher = Cipher {
                 id: "test".to_string(),
-                r#type: CipherType::Login,
                 organization_id: None,
                 name: None,
                 notes: None,
                 folder_id: None,
                 collection_ids: Vec::new(),
-                login: None,
-                card: None,
-                identity: None,
-                secure_note: None,
-                ssh_key: None,
                 fields: None,
                 data: Some(NestedCipherData {
                     name: None,
@@ -823,6 +970,12 @@ mod tests {
                     }]),
                     fields: None,
                 }),
+                cipher_data: Some(CipherData::Login(LoginData {
+                    username: None,
+                    password: None,
+                    totp: None,
+                    uris: None,
+                })),
             };
             assert_eq!(cipher.get_uri(), Some("uri-from-array"));
         }
@@ -912,7 +1065,10 @@ mod tests {
 
             let cipher: Cipher = serde_json::from_str(json).unwrap();
             assert_eq!(cipher.id, "cipher-123");
-            assert_eq!(cipher.r#type, CipherType::Login);
+            assert_eq!(
+                cipher.cipher_data.as_ref().map(|cd| cd.cipher_type()),
+                Some(CipherType::Login)
+            );
             assert_eq!(cipher.get_name(), Some("My Login"));
             assert_eq!(cipher.get_username(), Some("user@example.com"));
             assert_eq!(cipher.get_password(), Some("secret123"));
@@ -1178,7 +1334,10 @@ mod tests {
         fn test_cipher_type_deserialization_from_u8() {
             let cipher_json = r#"{"Id": "test", "Type": 1}"#;
             let cipher: Cipher = serde_json::from_str(cipher_json).unwrap();
-            assert_eq!(cipher.r#type, CipherType::Login);
+            assert_eq!(
+                cipher.cipher_data.as_ref().map(|cd| cd.cipher_type()),
+                Some(CipherType::Login)
+            );
         }
     }
 }

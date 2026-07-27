@@ -34,7 +34,8 @@ use crate::config::{
     self, Config, KeyPersistenceOutcome, LoggedInLocked, LoggedInUnlocked, LoggedOut, Session,
 };
 use crate::crypto::{CryptoKeys, KdfIterations, MasterKey};
-use crate::models::{Cipher, CipherOutput, CipherType, FieldOutput};
+#[allow(unused_imports)]
+use crate::models::{Cipher, CipherData, CipherOutput, CipherType, FieldOutput, LoginData};
 
 struct TokenRefreshLock {
     file: File,
@@ -541,7 +542,10 @@ fn cipher_uri_matches(uri: &str, keys: &CryptoKeys, cipher: &Cipher) -> bool {
             .is_some_and(|decrypted| decrypted.to_lowercase().contains(&uri_lower))
     };
 
-    if let Some(login_uris) = cipher.login.as_ref().and_then(|l| l.uris.as_ref()) {
+    if let Some(login_uris) = cipher.cipher_data.as_ref().and_then(|cd| match cd {
+        CipherData::Login(l) => l.uris.as_ref(),
+        _ => None,
+    }) {
         for uri_data in login_uris {
             if let Some(uri_value) = uri_data.uri.as_deref()
                 && uri_matches(uri_value)
@@ -959,12 +963,16 @@ fn decrypt_cipher_with_profile(
     };
 
     // Decrypt SSH key fields if present
+    let ssh_key_data = cipher.cipher_data.as_ref().and_then(|cd| {
+        if let CipherData::SshKey(s) = cd {
+            Some(s)
+        } else {
+            None
+        }
+    });
     let ssh_public_key = decrypt_optional_cipher_subfield(
         keys,
-        cipher
-            .ssh_key
-            .as_ref()
-            .and_then(|s| s.public_key.as_deref()),
+        ssh_key_data.and_then(|s| s.public_key.as_deref()),
         &cipher.id,
         "SSH public key",
         profile.ssh_public_key,
@@ -972,10 +980,7 @@ fn decrypt_cipher_with_profile(
     )?;
     let ssh_private_key = decrypt_optional_cipher_subfield(
         keys,
-        cipher
-            .ssh_key
-            .as_ref()
-            .and_then(|s| s.private_key.as_deref()),
+        ssh_key_data.and_then(|s| s.private_key.as_deref()),
         &cipher.id,
         "SSH private key",
         profile.ssh_private_key,
@@ -983,10 +988,7 @@ fn decrypt_cipher_with_profile(
     )?;
     let ssh_fingerprint = decrypt_optional_cipher_subfield(
         keys,
-        cipher
-            .ssh_key
-            .as_ref()
-            .and_then(|s| s.fingerprint.as_deref()),
+        ssh_key_data.and_then(|s| s.fingerprint.as_deref()),
         &cipher.id,
         "SSH fingerprint",
         profile.ssh_fingerprint,
@@ -995,7 +997,10 @@ fn decrypt_cipher_with_profile(
 
     Ok(CipherOutput {
         id: cipher.id.clone(),
-        cipher_type: cipher.r#type.to_string(),
+        cipher_type: cipher
+            .cipher_data
+            .as_ref()
+            .map_or(String::new(), |cd| cd.cipher_type().to_string()),
         name: decrypted_name,
         username: decrypted_username,
         password: decrypted_password, // secrets-ignore: derived test data
@@ -1137,7 +1142,11 @@ pub async fn list(
                 org_id_filter.as_deref(),
                 collection_id_filter.as_deref(),
                 None,
-            ) && cipher_type_filter.is_none_or(|cipher_type| c.r#type == cipher_type)
+            ) && cipher_type_filter.is_none_or(|cipher_type| {
+                c.cipher_data
+                    .as_ref()
+                    .is_some_and(|cd| cd.cipher_type() == cipher_type)
+            })
         })
         .collect();
 
@@ -2355,19 +2364,19 @@ mod tests {
         fn test_cipher_matches_filters_allows_no_filters() {
             let cipher = Cipher {
                 id: "cipher-1".to_string(),
-                r#type: CipherType::Login,
                 organization_id: Some("org-1".to_string()),
                 name: None,
                 notes: None,
                 folder_id: None,
-                login: None,
-                card: None,
-                identity: None,
-                secure_note: None,
-                ssh_key: None,
                 collection_ids: vec!["col-1".to_string()],
                 fields: None,
                 data: None,
+                cipher_data: Some(CipherData::Login(LoginData {
+                    username: None,
+                    password: None,
+                    totp: None,
+                    uris: None,
+                })),
             };
 
             assert!(cipher_matches_filters(&cipher, None, None, None));
@@ -2377,19 +2386,19 @@ mod tests {
         fn test_cipher_matches_filters_checks_org_and_collection() {
             let cipher = Cipher {
                 id: "cipher-1".to_string(),
-                r#type: CipherType::Login,
                 organization_id: Some("org-1".to_string()),
                 name: None,
                 notes: None,
                 folder_id: None,
-                login: None,
-                card: None,
-                identity: None,
-                secure_note: None,
-                ssh_key: None,
                 collection_ids: vec!["col-1".to_string(), "col-2".to_string()],
                 fields: None,
                 data: None,
+                cipher_data: Some(CipherData::Login(LoginData {
+                    username: None,
+                    password: None,
+                    totp: None,
+                    uris: None,
+                })),
             };
 
             assert!(cipher_matches_filters(
@@ -2416,19 +2425,19 @@ mod tests {
         fn test_cipher_matches_filters_rejects_nonmatching_folder() {
             let cipher = Cipher {
                 id: "cipher-1".to_string(),
-                r#type: CipherType::Login,
                 organization_id: None,
                 name: None,
                 notes: None,
                 folder_id: Some("folder-1".to_string()),
-                login: None,
-                card: None,
-                identity: None,
-                secure_note: None,
-                ssh_key: None,
                 collection_ids: Vec::new(),
                 fields: None,
                 data: None,
+                cipher_data: Some(CipherData::Login(LoginData {
+                    username: None,
+                    password: None,
+                    totp: None,
+                    uris: None,
+                })),
             };
 
             assert!(cipher_matches_filters(
@@ -2533,24 +2542,54 @@ mod tests {
     // Tests for decrypt_cipher helper
     mod decrypt_cipher_tests {
         use super::*;
-        use crate::models::{Cipher, FieldData, FieldType, LoginData, SshKeyData, UriData};
+        use crate::models::{
+            CardData, Cipher, CipherData, CipherType, FieldData, FieldType, IdentityData,
+            LoginData, SecureNoteData, SshKeyData, UriData,
+        };
 
         fn create_test_cipher(id: &str, cipher_type: CipherType) -> Cipher {
             Cipher {
                 id: id.to_string(),
-                r#type: cipher_type,
                 organization_id: None,
                 name: None,
                 notes: None,
                 folder_id: None,
                 collection_ids: Vec::new(),
-                login: None,
-                card: None,
-                identity: None,
-                secure_note: None,
-                ssh_key: None,
                 fields: None,
                 data: None,
+                cipher_data: Some(match cipher_type {
+                    CipherType::Login => CipherData::Login(LoginData {
+                        username: None,
+                        password: None,
+                        totp: None,
+                        uris: None,
+                    }),
+                    CipherType::SecureNote => {
+                        CipherData::SecureNote(SecureNoteData { r#type: None })
+                    }
+                    CipherType::Card => CipherData::Card(CardData {
+                        cardholder_name: None,
+                        brand: None,
+                        number: None,
+                        exp_month: None,
+                        exp_year: None,
+                        code: None,
+                    }),
+                    CipherType::Identity => CipherData::Identity(IdentityData {
+                        title: None,
+                        first_name: None,
+                        middle_name: None,
+                        last_name: None,
+                        email: None,
+                        phone: None,
+                        company: None,
+                    }),
+                    CipherType::SshKey => CipherData::SshKey(SshKeyData {
+                        private_key: None,
+                        public_key: None,
+                        fingerprint: None,
+                    }),
+                }),
             }
         }
 
@@ -2580,7 +2619,7 @@ mod tests {
         fn test_list_env_name_profile_skips_secret_value_decryption() {
             let keys = test_crypto_keys();
             let mut cipher = create_named_test_cipher("test-123", CipherType::Login, &keys);
-            cipher.login = Some(LoginData {
+            cipher.cipher_data = Some(CipherData::Login(LoginData {
                 username: Some("not-encrypted".to_string()),
                 password: Some("also-not-encrypted".to_string()),
                 totp: None,
@@ -2588,7 +2627,7 @@ mod tests {
                     uri: Some("bad-uri".to_string()),
                     r#match: None,
                 }]),
-            });
+            }));
 
             let output = decrypt_cipher_with_profile(
                 &cipher,
@@ -2607,7 +2646,7 @@ mod tests {
         fn test_run_env_profile_skips_unused_uri_decryption() {
             let keys = test_crypto_keys();
             let mut cipher = create_named_test_cipher("test-123", CipherType::Login, &keys);
-            cipher.login = Some(LoginData {
+            cipher.cipher_data = Some(CipherData::Login(LoginData {
                 username: Some(encrypt_for_decrypt_cipher_test("alice", &keys)),
                 password: Some(encrypt_for_decrypt_cipher_test("secret", &keys)),
                 totp: None,
@@ -2615,7 +2654,7 @@ mod tests {
                     uri: Some("not-encrypted".to_string()),
                     r#match: None,
                 }]),
-            });
+            }));
 
             let output =
                 decrypt_cipher_with_profile(&cipher, &keys, CipherDecryptionProfile::run_env())
@@ -2630,12 +2669,12 @@ mod tests {
         fn test_interpolation_profile_decrypts_only_requested_component() {
             let keys = test_crypto_keys();
             let mut cipher = create_named_test_cipher("test-123", CipherType::Login, &keys);
-            cipher.login = Some(LoginData {
+            cipher.cipher_data = Some(CipherData::Login(LoginData {
                 username: Some("not-encrypted".to_string()),
                 password: Some(encrypt_for_decrypt_cipher_test("secret", &keys)),
                 totp: None,
                 uris: None,
-            });
+            }));
 
             let output = decrypt_cipher_with_profile(
                 &cipher,
@@ -2703,11 +2742,11 @@ mod tests {
         fn test_decrypt_cipher_errors_on_invalid_ssh_public_key() {
             let keys = test_crypto_keys();
             let mut cipher = create_named_test_cipher("cipher-ssh", CipherType::SshKey, &keys);
-            cipher.ssh_key = Some(SshKeyData {
+            cipher.cipher_data = Some(CipherData::SshKey(SshKeyData {
                 public_key: Some("not encrypted".to_string()),
                 private_key: Some(encrypt_for_decrypt_cipher_test("private", &keys)),
                 fingerprint: Some(encrypt_for_decrypt_cipher_test("fingerprint", &keys)),
-            });
+            }));
 
             let err = decrypt_cipher(&cipher, &keys).unwrap_err();
             let message = format!("{err:#}");
@@ -2719,11 +2758,11 @@ mod tests {
         fn test_decrypt_cipher_errors_on_invalid_ssh_private_key() {
             let keys = test_crypto_keys();
             let mut cipher = create_named_test_cipher("cipher-ssh", CipherType::SshKey, &keys);
-            cipher.ssh_key = Some(SshKeyData {
+            cipher.cipher_data = Some(CipherData::SshKey(SshKeyData {
                 public_key: Some(encrypt_for_decrypt_cipher_test("public", &keys)),
                 private_key: Some("not encrypted".to_string()),
                 fingerprint: Some(encrypt_for_decrypt_cipher_test("fingerprint", &keys)),
-            });
+            }));
 
             let err = decrypt_cipher(&cipher, &keys).unwrap_err();
             let message = format!("{err:#}");
@@ -2735,11 +2774,11 @@ mod tests {
         fn test_decrypt_cipher_errors_on_invalid_ssh_fingerprint() {
             let keys = test_crypto_keys();
             let mut cipher = create_named_test_cipher("cipher-ssh", CipherType::SshKey, &keys);
-            cipher.ssh_key = Some(SshKeyData {
+            cipher.cipher_data = Some(CipherData::SshKey(SshKeyData {
                 public_key: Some(encrypt_for_decrypt_cipher_test("public", &keys)),
                 private_key: Some(encrypt_for_decrypt_cipher_test("private", &keys)),
                 fingerprint: Some("not encrypted".to_string()),
-            });
+            }));
 
             let err = decrypt_cipher(&cipher, &keys).unwrap_err();
             let message = format!("{err:#}");
@@ -3736,19 +3775,19 @@ mod tests {
 
             let ciphers = vec![Cipher {
                 id: "cipher-1".to_string(),
-                r#type: CipherType::Login,
                 organization_id: None,
                 name: Some(encrypted_name),
                 notes: None,
                 folder_id: None,
-                login: None,
-                card: None,
-                identity: None,
-                secure_note: None,
-                ssh_key: None,
                 collection_ids: Vec::new(),
                 fields: None,
                 data: None,
+                cipher_data: Some(CipherData::Login(LoginData {
+                    username: None,
+                    password: None,
+                    totp: None,
+                    uris: None,
+                })),
             }];
 
             let result = find_cipher_output(&ciphers, &config, |o| o.name == "Target", |_c| true);
@@ -3775,19 +3814,19 @@ mod tests {
 
             let ciphers = vec![Cipher {
                 id: "cipher-1".to_string(),
-                r#type: CipherType::Login,
                 organization_id: None,
                 name: Some(encrypted_name),
                 notes: None,
                 folder_id: None,
-                login: None,
-                card: None,
-                identity: None,
-                secure_note: None,
-                ssh_key: None,
                 collection_ids: Vec::new(),
                 fields: None,
                 data: None,
+                cipher_data: Some(CipherData::Login(LoginData {
+                    username: None,
+                    password: None,
+                    totp: None,
+                    uris: None,
+                })),
             }];
 
             let result = find_cipher_output(&ciphers, &config, |o| o.name == "Target", |_c| true);
@@ -5921,19 +5960,19 @@ mod tests {
         fn create_minimal_cipher(org_id: Option<&str>) -> Cipher {
             Cipher {
                 id: "test".to_string(),
-                r#type: CipherType::Login,
                 organization_id: org_id.map(std::string::ToString::to_string),
                 name: None,
                 notes: None,
                 folder_id: None,
                 collection_ids: Vec::new(),
-                login: None,
-                card: None,
-                identity: None,
-                secure_note: None,
-                ssh_key: None,
                 fields: None,
                 data: None,
+                cipher_data: Some(CipherData::Login(LoginData {
+                    username: None,
+                    password: None,
+                    totp: None,
+                    uris: None,
+                })),
             }
         }
 
@@ -6565,19 +6604,19 @@ mod tests {
         fn minimal_cipher(id: &str) -> Cipher {
             Cipher {
                 id: id.to_string(),
-                r#type: CipherType::Login,
                 organization_id: None,
                 name: None,
                 notes: None,
                 folder_id: None,
                 collection_ids: Vec::new(),
-                login: None,
-                card: None,
-                identity: None,
-                secure_note: None,
-                ssh_key: None,
                 fields: None,
                 data: None,
+                cipher_data: Some(CipherData::Login(LoginData {
+                    username: None,
+                    password: None,
+                    totp: None,
+                    uris: None,
+                })),
             }
         }
 
@@ -6617,19 +6656,19 @@ mod tests {
 
             let cipher = Cipher {
                 id: "test-id".to_string(),
-                r#type: CipherType::Login,
                 name: Some(encrypted_name),
                 organization_id: None,
                 notes: None,
                 folder_id: None,
                 collection_ids: Vec::new(),
-                login: None,
-                card: None,
-                identity: None,
-                secure_note: None,
-                ssh_key: None,
                 fields: None,
                 data: None,
+                cipher_data: Some(CipherData::Login(LoginData {
+                    username: None,
+                    password: None,
+                    totp: None,
+                    uris: None,
+                })),
             };
             let result = find_cipher_output(&[cipher], &config, |_output| true, |_c| true);
             assert!(result.is_some());
@@ -6679,13 +6718,17 @@ mod tests {
         fn cipher_with_login_uris(keys: &CryptoKeys, uris: &[&str]) -> Cipher {
             Cipher {
                 id: "cipher-1".to_string(),
-                r#type: CipherType::Login,
                 organization_id: None,
                 name: None,
                 notes: None,
                 folder_id: None,
                 collection_ids: Vec::new(),
-                login: Some(LoginData {
+                fields: None,
+                data: None,
+                cipher_data: Some(CipherData::Login(LoginData {
+                    username: None,
+                    password: None,
+                    totp: None,
                     uris: Some(
                         uris.iter()
                             .map(|u| UriData {
@@ -6694,16 +6737,7 @@ mod tests {
                             })
                             .collect(),
                     ),
-                    username: None,
-                    password: None,
-                    totp: None,
-                }),
-                card: None,
-                identity: None,
-                secure_note: None,
-                ssh_key: None,
-                fields: None,
-                data: None,
+                })),
             }
         }
 
@@ -6719,19 +6753,19 @@ mod tests {
             let keys = keys();
             let cipher = Cipher {
                 id: "cipher-1".to_string(),
-                r#type: CipherType::Login,
                 organization_id: None,
                 name: None,
                 notes: None,
                 folder_id: None,
                 collection_ids: Vec::new(),
-                login: None,
-                card: None,
-                identity: None,
-                secure_note: None,
-                ssh_key: None,
                 fields: None,
                 data: None,
+                cipher_data: Some(CipherData::Login(LoginData {
+                    username: None,
+                    password: None,
+                    totp: None,
+                    uris: None,
+                })),
             };
             assert!(!cipher_uri_matches("anything", &keys, &cipher));
         }

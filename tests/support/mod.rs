@@ -16,7 +16,7 @@ use tempfile::TempDir;
 use vaultwarden_cli::config::Config;
 use vaultwarden_cli::crypto::{CryptoKeys, KdfIterations, MasterKey};
 use vaultwarden_cli::models::{
-    Cipher, CipherType, Collection, FieldData, FieldType, Folder, KdfType, LoginData,
+    Cipher, CipherData, Collection, FieldData, FieldType, Folder, KdfType, LoginData,
     NestedCipherData, Organization, Profile, SyncResponse, TokenResponse, UriData, UriMatchType,
 };
 
@@ -400,12 +400,14 @@ pub fn folder(id: &str, name: &str) -> Folder {
 pub fn login_cipher(id: &str, name: &str, username: &str, password: &str, uri: &str) -> Cipher {
     Cipher {
         id: id.to_string(),
-        r#type: CipherType::Login,
         organization_id: None,
         name: Some(name.to_string()),
         notes: None,
         folder_id: None,
-        login: Some(LoginData {
+        collection_ids: Vec::new(),
+        fields: None,
+        data: None,
+        cipher_data: Some(CipherData::Login(LoginData {
             username: Some(username.to_string()),
             password: Some(password.to_string()),
             totp: None,
@@ -413,14 +415,7 @@ pub fn login_cipher(id: &str, name: &str, username: &str, password: &str, uri: &
                 uri: Some(uri.to_string()),
                 r#match: Some(UriMatchType::Domain),
             }]),
-        }),
-        card: None,
-        identity: None,
-        secure_note: None,
-        ssh_key: None,
-        collection_ids: Vec::new(),
-        fields: None,
-        data: None,
+        })),
     }
 }
 
@@ -433,16 +428,10 @@ pub fn nested_login_cipher(
 ) -> Cipher {
     Cipher {
         id: id.to_string(),
-        r#type: CipherType::Login,
         organization_id: None,
         name: None,
         notes: None,
         folder_id: None,
-        login: None,
-        card: None,
-        identity: None,
-        secure_note: None,
-        ssh_key: None,
         collection_ids: Vec::new(),
         fields: None,
         data: Some(NestedCipherData {
@@ -455,6 +444,12 @@ pub fn nested_login_cipher(
             uris: None,
             fields: None,
         }),
+        cipher_data: Some(CipherData::Login(LoginData {
+            username: None,
+            password: None,
+            totp: None,
+            uris: None,
+        })),
     }
 }
 

@@ -6,7 +6,7 @@ use serde_json::json;
 use std::hint::black_box;
 use std::time::Duration;
 use vaultwarden_cli::models::{
-    Cipher, CipherOutput, CipherType, FieldData, FieldOutput, FieldType, LoginData, SyncResponse,
+    Cipher, CipherData, CipherOutput, FieldData, FieldOutput, FieldType, LoginData, SyncResponse,
     UriData,
 };
 
@@ -109,24 +109,10 @@ fn fixture_ciphers(count: usize) -> Vec<Cipher> {
     (0..count)
         .map(|i| Cipher {
             id: format!("cipher-{i:04}"),
-            r#type: CipherType::Login,
             organization_id: Some(format!("org-{}", i % 4)),
             name: Some(format!("service-{i:04}")),
             notes: Some(format!("deterministic note {i}")),
             folder_id: Some(format!("folder-{}", i % 8)),
-            login: Some(LoginData {
-                username: Some(format!("user-{i}@example.com")),
-                password: Some(format!("password-{i:04}")),
-                totp: None,
-                uris: Some(vec![UriData {
-                    uri: Some(format!("https://service-{i:04}.example.com/login")),
-                    r#match: None,
-                }]),
-            }),
-            card: None,
-            identity: None,
-            secure_note: None,
-            ssh_key: None,
             collection_ids: vec![format!("collection-{}", i % 6)],
             fields: Some(vec![FieldData {
                 name: Some("api-token".to_string()),
@@ -134,6 +120,15 @@ fn fixture_ciphers(count: usize) -> Vec<Cipher> {
                 r#type: FieldType::Hidden,
             }]),
             data: None,
+            cipher_data: Some(CipherData::Login(LoginData {
+                username: Some(format!("user-{i}@example.com")),
+                password: Some(format!("password-{i:04}")),
+                totp: None,
+                uris: Some(vec![UriData {
+                    uri: Some(format!("https://service-{i:04}.example.com/login")),
+                    r#match: None,
+                }]),
+            })),
         })
         .collect()
 }
