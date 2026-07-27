@@ -246,16 +246,16 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
             client_secret,
         } => commands::login(server, client_id, client_secret, &opts)
             .await
-            .map(|()| commands::CommandOutcome::Success),
+            .map(|_| commands::CommandOutcome::Success),
         Commands::Unlock { password } => commands::unlock(password, &opts)
             .await
-            .map(|()| commands::CommandOutcome::Success),
+            .map(|_| commands::CommandOutcome::Success),
         Commands::Lock => commands::lock()
             .await
-            .map(|()| commands::CommandOutcome::Success),
+            .map(|_| commands::CommandOutcome::Success),
         Commands::Logout => commands::logout()
             .await
-            .map(|()| commands::CommandOutcome::Success),
+            .map(|_| commands::CommandOutcome::Success),
         Commands::List {
             r#type,
             search,
@@ -264,7 +264,7 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
             json,
         } => commands::list(r#type, search, org, collection, json, &opts)
             .await
-            .map(|()| commands::CommandOutcome::Success),
+            .map(|_| commands::CommandOutcome::Success),
         Commands::Get {
             item,
             format,
@@ -280,7 +280,7 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
             &opts,
         )
         .await
-        .map(|()| commands::CommandOutcome::Success),
+        .map(|_| commands::CommandOutcome::Success),
         Commands::GetUri {
             uri,
             format,
@@ -296,7 +296,7 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
             &opts,
         )
         .await
-        .map(|()| commands::CommandOutcome::Success),
+        .map(|_| commands::CommandOutcome::Success),
         Commands::Run {
             name,
             item,
@@ -329,14 +329,14 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
         }
         Commands::Status => commands::status()
             .await
-            .map(|()| commands::CommandOutcome::Success),
+            .map(|_| commands::CommandOutcome::Success),
         Commands::Interpolate {
             file,
             output,
             skip_missing,
         } => commands::interpolate(&file, output.as_deref(), skip_missing, &opts)
             .await
-            .map(|()| commands::CommandOutcome::Success),
+            .map(|_| commands::CommandOutcome::Success),
     }
 }
 

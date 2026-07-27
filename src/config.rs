@@ -186,6 +186,164 @@ fn insecure_key_file_fallback_allowed() -> bool {
             .unwrap_or(false)
 }
 
+// ── Session lifecycle marker types ─────────────────────────────────────────
+//
+// These zero-sized types encode the Config session state at compile time,
+// replacing runtime is_logged_in() / is_unlocked() checks with type-safe
+// method dispatch.
+
+/// Marker trait for session states (sealed).
+pub trait SessionState: std::fmt::Debug + Clone + Send + 'static {}
+
+/// Not logged in — no server or access token.
+#[derive(Debug, Clone, Copy)]
+pub struct LoggedOut;
+impl SessionState for LoggedOut {}
+
+/// Logged in but vault is locked — has access token but no decrypted keys.
+#[derive(Debug, Clone, Copy)]
+pub struct LoggedInLocked;
+impl SessionState for LoggedInLocked {}
+
+/// Logged in and vault is unlocked — has access token and decrypted keys.
+#[derive(Debug, Clone, Copy)]
+pub struct LoggedInUnlocked;
+impl SessionState for LoggedInUnlocked {}
+
+/// A typed wrapper over [`Config`] that encodes the session state at compile time.
+///
+/// `Session<S>` replaces runtime `is_logged_in()` / `is_unlocked()` checks
+/// with compile-time type enforcement.  Methods that require a particular
+/// session state only exist on the matching `Session<S>` variant.
+///
+/// # State transitions
+///
+/// | Operation | From → To |
+/// |---|---|
+/// | `login()` | `Session<LoggedOut>` → `Result<Session<LoggedInLocked>>` |
+/// | `unlock()` | `Session<LoggedInLocked>` → `Result<Session<LoggedInUnlocked>>` |
+/// | `lock()` | `Session<LoggedInUnlocked>` → `Session<LoggedInLocked>` |
+/// | `logout()` | any logged-in state → `Session<LoggedOut>` |
+#[derive(Debug, Clone)]
+pub struct Session<S: SessionState> {
+    pub config: Config,
+    pub _state: std::marker::PhantomData<S>,
+}
+
+// ── Runtime-to-compile-time bridges ────────────────────────────────────────
+
+impl Session<LoggedOut> {
+    /// Check at runtime that the inner Config is logged in and return a
+    /// `Session<LoggedInLocked>`.  This is the bridge between the dynamic
+    /// disk state and compile-time type safety.
+    pub fn require_logged_in(self) -> Result<Session<LoggedInLocked>> {
+        if self.config.access_token.is_some() && self.config.server.is_some() {
+            Ok(Session {
+                config: self.config,
+                _state: std::marker::PhantomData,
+            })
+        } else {
+            anyhow::bail!("Not logged in. Please run 'vaultwarden-cli login' first.");
+        }
+    }
+
+    /// Check at runtime that the inner Config is unlocked and return a
+    /// `Session<LoggedInUnlocked>`.
+    pub fn require_unlocked(self) -> Result<Session<LoggedInUnlocked>> {
+        if self.config.crypto_keys.is_some() {
+            Ok(Session {
+                config: self.config,
+                _state: std::marker::PhantomData,
+            })
+        } else if self.config.access_token.is_none() || self.config.server.is_none() {
+            anyhow::bail!("Not logged in. Please run 'vaultwarden-cli login' first.");
+        } else {
+            anyhow::bail!("Vault is locked. Please run 'vaultwarden-cli unlock' first.");
+        }
+    }
+}
+
+impl<S: SessionState> std::ops::Deref for Session<S> {
+    type Target = Config;
+    fn deref(&self) -> &Config {
+        &self.config
+    }
+}
+
+impl<S: SessionState> std::ops::DerefMut for Session<S> {
+    fn deref_mut(&mut self) -> &mut Config {
+        &mut self.config
+    }
+}
+
+// ── Session state transitions ──────────────────────────────────────────────
+
+impl Config {
+    /// Convenience: load from disk and wrap in `Session<LoggedOut>`.
+    pub fn load_session() -> Result<Session<LoggedOut>> {
+        Ok(Session {
+            config: Self::load()?,
+            _state: std::marker::PhantomData,
+        })
+    }
+}
+
+impl Session<LoggedOut> {
+    /// Transition from logged-out to logged-in-locked after a successful login.
+    /// This does NOT perform the login — it's a type-safe wrapper for code that
+    /// has already populated the Config fields.
+    pub fn into_logged_in_locked(self) -> Session<LoggedInLocked> {
+        Session {
+            config: self.config,
+            _state: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Session<LoggedInLocked> {
+    /// Transition from logged-in-locked to logged-in-unlocked after a successful
+    /// unlock.  This does NOT perform the unlock — it's a type-safe wrapper.
+    pub fn into_unlocked(self) -> Session<LoggedInUnlocked> {
+        Session {
+            config: self.config,
+            _state: std::marker::PhantomData,
+        }
+    }
+
+    /// Logout: clear session state and return to logged-out.
+    pub fn logout(mut self) -> Result<Session<LoggedOut>> {
+        self.config.clear()?;
+        Ok(Session {
+            config: self.config,
+            _state: std::marker::PhantomData,
+        })
+    }
+}
+
+impl Session<LoggedInUnlocked> {
+    /// Lock: remove decrypted keys and return to locked state.
+    pub fn lock(self) -> Result<Session<LoggedInLocked>> {
+        self.config.delete_saved_keys()?;
+        // Create a new Config with keys cleared
+        let mut config = self.config;
+        config.crypto_keys = None;
+        config.org_crypto_keys = HashMap::new();
+        Ok(Session {
+            config,
+            _state: std::marker::PhantomData,
+        })
+    }
+
+    /// Logout: clear session state and return to logged-out.
+    pub fn logout(mut self) -> Result<Session<LoggedOut>> {
+        self.config.clear()?;
+        Ok(Session {
+            config: self.config,
+            _state: std::marker::PhantomData,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub server: Option<String>,

@@ -8,8 +8,8 @@
 //!
 //! Once obtained, callers can decrypt data or decrypt their RSA private key.
 
-use anyhow::{Context, Result};
 use aes::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::Pkcs7};
+use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use hmac::{Hmac, KeyInit, Mac};
 use rsa::{RsaPrivateKey, pkcs8::DecodePrivateKey};
@@ -208,11 +208,20 @@ pub(crate) mod tests {
             mk.stretch().unwrap().enc_key(),
             mk.stretch().unwrap().mac_key(),
         );
-        let keys = mk.stretch().unwrap().decrypt_symmetric_key(&enc_key_v).unwrap();
+        let keys = mk
+            .stretch()
+            .unwrap()
+            .decrypt_symmetric_key(&enc_key_v)
+            .unwrap();
 
         let result = keys.decrypt("invalid_no_dot");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid encrypted string format"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid encrypted string format")
+        );
     }
 
     #[test]
@@ -224,11 +233,20 @@ pub(crate) mod tests {
             mk.stretch().unwrap().enc_key(),
             mk.stretch().unwrap().mac_key(),
         );
-        let keys = mk.stretch().unwrap().decrypt_symmetric_key(&enc_key_v).unwrap();
+        let keys = mk
+            .stretch()
+            .unwrap()
+            .decrypt_symmetric_key(&enc_key_v)
+            .unwrap();
 
         let result = keys.decrypt("99.abc|def|ghi");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Unsupported encryption type"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unsupported encryption type")
+        );
     }
 
     #[test]
@@ -240,11 +258,20 @@ pub(crate) mod tests {
             mk.stretch().unwrap().enc_key(),
             mk.stretch().unwrap().mac_key(),
         );
-        let keys = mk.stretch().unwrap().decrypt_symmetric_key(&enc_key_v).unwrap();
+        let keys = mk
+            .stretch()
+            .unwrap()
+            .decrypt_symmetric_key(&enc_key_v)
+            .unwrap();
 
         let result = keys.decrypt("abc.iv|ciphertext|mac");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid encryption type"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid encryption type")
+        );
     }
 
     #[test]
@@ -252,8 +279,7 @@ pub(crate) mod tests {
         let enc_key = [0x00u8; 32];
         let mac_key = [0x20u8; 32];
 
-        let bad_mac_string =
-            "2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        let bad_mac_string = "2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
         let result = CryptoKeys::decrypt_with_keys(&enc_key, &mac_key, bad_mac_string);
         assert!(result.is_err());
     }
@@ -272,7 +298,12 @@ pub(crate) mod tests {
         let mac_key = [0x20u8; 32];
         let result = CryptoKeys::decrypt_with_keys(&enc_key, &mac_key, "2.!!!invalid!!|AAAA|AAAA");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to decode IV"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to decode IV")
+        );
     }
 
     #[test]
@@ -285,7 +316,12 @@ pub(crate) mod tests {
             "2.AAAAAAAAAAAAAAAAAAAAAA==|!!!invalid!!|AAAA",
         );
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to decode ciphertext"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to decode ciphertext")
+        );
     }
 
     #[test]
@@ -297,7 +333,11 @@ pub(crate) mod tests {
             mk.stretch().unwrap().enc_key(),
             mk.stretch().unwrap().mac_key(),
         );
-        let keys = mk.stretch().unwrap().decrypt_symmetric_key(&enc_key_v).unwrap();
+        let keys = mk
+            .stretch()
+            .unwrap()
+            .decrypt_symmetric_key(&enc_key_v)
+            .unwrap();
 
         let result = keys.decrypt_to_string("invalid");
         assert!(result.is_err());
@@ -359,8 +399,13 @@ pub(crate) mod tests {
             };
             let mk = MasterKey::derive("testpw", "test@example.com", 100_000);
             let stretched = mk.stretch().unwrap();
-            let encrypted = encrypt_bytes_for_test(&sym_key, stretched.enc_key(), stretched.mac_key());
-            let keys = mk.stretch().unwrap().decrypt_symmetric_key(&encrypted).unwrap();
+            let encrypted =
+                encrypt_bytes_for_test(&sym_key, stretched.enc_key(), stretched.mac_key());
+            let keys = mk
+                .stretch()
+                .unwrap()
+                .decrypt_symmetric_key(&encrypted)
+                .unwrap();
             (keys, enc_key, mac_key)
         }
 
@@ -377,11 +422,8 @@ pub(crate) mod tests {
         fn test_roundtrip_unicode() {
             let (keys, _, _) = make_keys();
             let plaintext = "Hello, 世界! 🔐";
-            let encrypted = encrypt_bytes_for_test(
-                plaintext.as_bytes(),
-                keys.enc_key(),
-                keys.mac_key(),
-            );
+            let encrypted =
+                encrypt_bytes_for_test(plaintext.as_bytes(), keys.enc_key(), keys.mac_key());
             let decrypted = keys.decrypt_to_string(&encrypted).unwrap();
             assert_eq!(decrypted, plaintext);
         }
@@ -430,8 +472,13 @@ pub(crate) mod tests {
                 v.extend_from_slice(&[0x99u8; 32]);
                 v
             };
-            let enc_sym = encrypt_bytes_for_test(&sym_key, stretched.enc_key(), stretched.mac_key());
-            let wrong_keys = mk.stretch().unwrap().decrypt_symmetric_key(&enc_sym).unwrap();
+            let enc_sym =
+                encrypt_bytes_for_test(&sym_key, stretched.enc_key(), stretched.mac_key());
+            let wrong_keys = mk
+                .stretch()
+                .unwrap()
+                .decrypt_symmetric_key(&enc_sym)
+                .unwrap();
 
             let result = wrong_keys.decrypt(&encrypted);
             assert!(result.is_err());
@@ -443,10 +490,10 @@ pub(crate) mod tests {
         use super::test_helpers::encrypt_bytes_for_test;
         use super::*;
         use crate::crypto::{MasterKey, decrypt_rsa};
-        use sha1::Sha1;
         use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
         use rsa::pkcs8::EncodePrivateKey;
         use rsa::{Oaep, RsaPrivateKey, RsaPublicKey};
+        use sha1::Sha1;
         use sha2::Sha256;
 
         #[test]
@@ -486,7 +533,12 @@ pub(crate) mod tests {
 
             let result = decrypt_rsa("nodot", &private_key);
             assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("Invalid encrypted string format"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Invalid encrypted string format")
+            );
         }
 
         #[test]
@@ -496,7 +548,12 @@ pub(crate) mod tests {
 
             let result = decrypt_rsa("abc.AAAA", &private_key);
             assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("Invalid encryption type"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Invalid encryption type")
+            );
         }
 
         #[test]
@@ -506,7 +563,12 @@ pub(crate) mod tests {
 
             let result = decrypt_rsa("5.AAAA", &private_key);
             assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("Unsupported RSA encryption type"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Unsupported RSA encryption type")
+            );
         }
 
         #[test]
@@ -516,7 +578,12 @@ pub(crate) mod tests {
 
             let result = decrypt_rsa("4.!!!notbase64!!!", &private_key);
             assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("Failed to decode RSA ciphertext"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to decode RSA ciphertext")
+            );
         }
 
         #[test]
@@ -537,7 +604,11 @@ pub(crate) mod tests {
                 stretched.enc_key(),
                 stretched.mac_key(),
             );
-            let keys = mk.stretch().unwrap().decrypt_symmetric_key(&enc_sym).unwrap();
+            let keys = mk
+                .stretch()
+                .unwrap()
+                .decrypt_symmetric_key(&enc_sym)
+                .unwrap();
 
             let encrypted = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
                 &der,

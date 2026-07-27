@@ -30,7 +30,9 @@ fn token_expiry_from_lifetime(now: i64, expires_in: i64) -> Result<i64> {
 }
 
 use crate::api::ApiClient;
-use crate::config::{self, Config, KeyPersistenceOutcome};
+use crate::config::{
+    self, Config, KeyPersistenceOutcome, LoggedInLocked, LoggedInUnlocked, LoggedOut, Session,
+};
 use crate::crypto::{CryptoKeys, MasterKey};
 use crate::models::{Cipher, CipherOutput, CipherType, FieldOutput};
 
@@ -132,8 +134,9 @@ pub async fn login(
     client_id: Option<String>,
     client_secret: Option<String>,
     opts: &CommandOptions,
-) -> Result<()> {
-    let mut config = Config::load()?;
+) -> Result<Session<LoggedInLocked>> {
+    let mut session = Config::load_session()?;
+    let config = &mut session.config;
 
     // Use provided values or existing config
     let server = server
@@ -201,15 +204,16 @@ pub async fn login(
         println!("Found {org_count} organization(s).");
     }
     println!("Run 'vaultwarden-cli unlock' to unlock the vault with your master password.");
-    Ok(())
+    Ok(session.into_logged_in_locked())
 }
 
-pub async fn unlock(password: Option<String>, opts: &CommandOptions) -> Result<()> {
-    let mut config = Config::load()?;
-
-    if !config.is_logged_in() {
-        anyhow::bail!("Not logged in. Please run 'vaultwarden-cli login' first.");
-    }
+pub async fn unlock(
+    password: Option<String>,
+    opts: &CommandOptions,
+) -> Result<Session<LoggedInUnlocked>> {
+    let session = Config::load_session()?;
+    let locked = session.require_logged_in()?;
+    let mut config = locked.config;
 
     // Ensure token is still valid before prompting for password
     ensure_valid_token(&mut config, opts.allow_insecure_http).await?;
@@ -239,7 +243,8 @@ pub async fn unlock(password: Option<String>, opts: &CommandOptions) -> Result<(
     let master_key = MasterKey::derive(&password, email, iterations);
 
     // Decrypt the symmetric key
-    let crypto_keys = master_key.decrypt_symmetric_key(encrypted_key)
+    let crypto_keys = master_key
+        .decrypt_symmetric_key(encrypted_key)
         .context("Failed to decrypt vault key. Check your master password.")?;
 
     // Decrypt organization keys if present
@@ -284,39 +289,36 @@ pub async fn unlock(password: Option<String>, opts: &CommandOptions) -> Result<(
     } else {
         println!("Vault unlocked successfully!");
     }
-    Ok(())
+    Ok(Session {
+        config,
+        _state: std::marker::PhantomData,
+    })
 }
 
-pub async fn lock() -> Result<()> {
-    let config = Config::load()?;
-    lock_loaded_config(&config)?;
-    Ok(())
+pub async fn lock() -> Result<Session<LoggedInLocked>> {
+    let session = Config::load_session()?;
+    let unlocked = session.require_unlocked()?;
+    unlocked.lock()
 }
 
-fn lock_loaded_config(config: &Config) -> Result<()> {
-    config.delete_saved_keys()?;
-    println!("Vault locked.");
-    Ok(())
-}
-
-pub async fn logout() -> Result<()> {
-    logout_loaded_config(Config::load()?)
-}
-
-fn logout_loaded_config(mut config: Config) -> Result<()> {
-    if !config.is_logged_in() {
+pub async fn logout() -> Result<Session<LoggedOut>> {
+    let session = Config::load_session()?;
+    let mut config = session.config;
+    // Try logging out - if not logged in, just return success
+    if config.access_token.is_some() && config.server.is_some() {
+        // Delete stored client secret
+        if let Some(client_id) = &config.client_id {
+            config::delete_client_secret(client_id)?;
+        }
+        config.clear()?;
+        println!("Logged out successfully.");
+    } else {
         println!("Not currently logged in.");
-        return Ok(());
     }
-
-    // Delete stored client secret
-    if let Some(client_id) = &config.client_id {
-        config::delete_client_secret(client_id)?;
-    }
-
-    config.clear()?;
-    println!("Logged out successfully.");
-    Ok(())
+    Ok(Session {
+        config,
+        _state: std::marker::PhantomData,
+    })
 }
 
 pub async fn status() -> Result<()> {
@@ -402,13 +404,6 @@ fn token_needs_refresh(config: &Config) -> Result<bool> {
     Ok(unix_now()? >= expiry.saturating_sub(60))
 }
 
-fn ensure_unlocked(config: &Config) -> Result<()> {
-    if config.crypto_keys.is_none() {
-        anyhow::bail!("Vault is locked. Please run 'vaultwarden-cli unlock' first.");
-    }
-    Ok(())
-}
-
 struct SyncContext {
     config: Config,
     access_token: String,
@@ -423,9 +418,10 @@ struct ApiContext {
 }
 
 async fn load_api_context(allow_insecure_http: bool) -> Result<ApiContext> {
-    let mut config = Config::load()?;
+    let session = Config::load_session()?;
+    let unlocked = session.require_unlocked()?;
+    let mut config = unlocked.config;
     let access_token = ensure_valid_token(&mut config, allow_insecure_http).await?;
-    ensure_unlocked(&config)?;
     let api = ApiClient::from_config_with_flags(&config, allow_insecure_http)?;
     Ok(ApiContext {
         config,
@@ -1934,6 +1930,40 @@ fn run_with_decrypted_outputs(
     })
 }
 
+// ── Session-state helpers (used by tests, kept for backwards compat) ────────
+
+#[allow(dead_code)]
+fn lock_loaded_config(config: &Config) -> Result<()> {
+    config.delete_saved_keys()?;
+    println!("Vault locked.");
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn ensure_unlocked(config: &Config) -> Result<()> {
+    if config.crypto_keys.is_none() {
+        anyhow::bail!("Vault is locked. Please run 'vaultwarden-cli unlock' first.");
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn logout_loaded_config(mut config: Config) -> Result<()> {
+    if !config.is_logged_in() {
+        println!("Not currently logged in.");
+        return Ok(());
+    }
+
+    // Delete stored client secret
+    if let Some(client_id) = &config.client_id {
+        config::delete_client_secret(client_id)?;
+    }
+
+    config.clear()?;
+    println!("Logged out successfully.");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2930,8 +2960,6 @@ mod tests {
             assert!(result.is_ok());
 
             let loaded = Config::load().unwrap();
-            assert!(!loaded.is_logged_in());
-            assert!(!loaded.is_unlocked());
             assert!(loaded.server.is_none());
             assert!(loaded.client_id.is_none());
             assert!(loaded.email.is_none());
@@ -3567,7 +3595,11 @@ mod tests {
         fn test_try_decrypt_some() {
             let keys = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test;
             let crypto_keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
-            let encrypted = keys(b"secret", crypto_keys.enc_key_bytes(), crypto_keys.mac_key_bytes());
+            let encrypted = keys(
+                b"secret",
+                crypto_keys.enc_key_bytes(),
+                crypto_keys.mac_key_bytes(),
+            );
             let result = try_decrypt(&crypto_keys, Some(&encrypted)).unwrap();
             assert_eq!(result, Some("secret".to_string()));
         }
@@ -3675,11 +3707,12 @@ mod tests {
                 ..Default::default()
             };
 
-            let encrypted_name = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
-                b"Target",
-                crypto_keys.enc_key_bytes(),
-                crypto_keys.mac_key_bytes(),
-            );
+            let encrypted_name =
+                crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
+                    b"Target",
+                    crypto_keys.enc_key_bytes(),
+                    crypto_keys.mac_key_bytes(),
+                );
 
             let ciphers = vec![Cipher {
                 id: "cipher-1".to_string(),
@@ -3713,11 +3746,12 @@ mod tests {
                 ..Default::default()
             };
 
-            let encrypted_name = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
-                b"Other",
-                crypto_keys.enc_key_bytes(),
-                crypto_keys.mac_key_bytes(),
-            );
+            let encrypted_name =
+                crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
+                    b"Other",
+                    crypto_keys.enc_key_bytes(),
+                    crypto_keys.mac_key_bytes(),
+                );
 
             let ciphers = vec![Cipher {
                 id: "cipher-1".to_string(),
@@ -6557,11 +6591,12 @@ mod tests {
         #[test]
         fn returns_some_when_cipher_matches() {
             let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
-            let encrypted_name = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
-                b"Test App",
-                keys.enc_key_bytes(),
-                keys.mac_key_bytes(),
-            );
+            let encrypted_name =
+                crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
+                    b"Test App",
+                    keys.enc_key_bytes(),
+                    keys.mac_key_bytes(),
+                );
             let config = Config {
                 crypto_keys: Some(keys),
                 ..Default::default()

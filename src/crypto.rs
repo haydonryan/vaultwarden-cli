@@ -11,14 +11,14 @@
 //! - `RsaPrivateKey` can be obtained from `CryptoKeys::decrypt_private_key`.
 //! - Org keys can be decrypted from `RsaPrivateKey` back into `CryptoKeys`.
 
-pub(crate) mod master_key;
-pub(crate) mod stretched_keys;
 pub(crate) mod crypto_keys;
+pub(crate) mod master_key;
 pub(crate) mod rsa_ops;
+pub(crate) mod stretched_keys;
 
-pub use master_key::MasterKey;
-pub use master_key::set_allow_insecure_mac;
-pub use master_key::allow_insecure_mac;
-pub use stretched_keys::StretchedKeys;
 pub use crypto_keys::CryptoKeys;
+pub use master_key::MasterKey;
+pub use master_key::allow_insecure_mac;
+pub use master_key::set_allow_insecure_mac;
 pub use rsa_ops::decrypt_rsa;
+pub use stretched_keys::StretchedKeys;

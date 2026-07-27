@@ -277,7 +277,7 @@ fn config_load_saved_keys_removes_legacy_file_unless_insecure_fallback_is_allowe
         support::ScopedEnvVar::set("VAULTWARDEN_ALLOW_INSECURE_KEY_FILE", "false");
     let ctx = TestContext::new();
     ctx.write_saved_user_keys(&CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32]))
-    .unwrap();
+        .unwrap();
 
     let mut config = ctx.scoped_config(Config {
         client_id: Some("client-id".to_string()),
@@ -309,7 +309,7 @@ fn config_load_saved_keys_accepts_legacy_file_when_insecure_fallback_is_allowed(
     let _allow_key_file = allow_insecure_key_file_fallback();
     let ctx = TestContext::new();
     ctx.write_saved_user_keys(&CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32]))
-    .unwrap();
+        .unwrap();
 
     let mut config = ctx.scoped_config(Config {
         client_id: Some("client-id".to_string()),

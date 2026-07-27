@@ -285,8 +285,14 @@ pub fn unavailable_keyring() -> MockKeyring {
 
 pub fn test_crypto_keys() -> CryptoKeys {
     CryptoKeys::from_key_bytes(
-        [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31],
-        [32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63],
+        [
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29, 30, 31,
+        ],
+        [
+            32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53,
+            54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
+        ],
     )
 }
 
@@ -307,7 +313,11 @@ pub fn encrypted_user_key(
 }
 
 pub fn encrypt_string_for_test(plaintext: &str, keys: &CryptoKeys) -> String {
-    encrypt_bytes_for_test(plaintext.as_bytes(), keys.enc_key_bytes(), keys.mac_key_bytes())
+    encrypt_bytes_for_test(
+        plaintext.as_bytes(),
+        keys.enc_key_bytes(),
+        keys.mac_key_bytes(),
+    )
 }
 
 pub fn encrypt_bytes_for_test(plaintext: &[u8], enc_key: &[u8], mac_key: &[u8]) -> String {

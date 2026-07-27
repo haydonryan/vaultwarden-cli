@@ -23,7 +23,10 @@ use sha2::Sha256;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
-use vaultwarden_cli::{crypto::{CryptoKeys, MasterKey}, install_rustls_crypto_provider};
+use vaultwarden_cli::{
+    crypto::{CryptoKeys, MasterKey},
+    install_rustls_crypto_provider,
+};
 
 type Aes256CbcEnc = Encryptor<aes::Aes256>;
 
@@ -548,7 +551,11 @@ pub fn encrypt_bytes(plaintext: &[u8], enc_key: &[u8], mac_key: &[u8]) -> String
 
 /// Encrypt a UTF-8 string using the given `CryptoKeys`.
 pub fn encrypt_str(plaintext: &str, keys: &CryptoKeys) -> String {
-    encrypt_bytes(plaintext.as_bytes(), keys.enc_key_bytes(), keys.mac_key_bytes())
+    encrypt_bytes(
+        plaintext.as_bytes(),
+        keys.enc_key_bytes(),
+        keys.mac_key_bytes(),
+    )
 }
 
 /// Compute the Bitwarden master-password hash:
