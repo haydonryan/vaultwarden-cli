@@ -23,7 +23,7 @@ use sha2::Sha256;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
-use vaultwarden_cli::{crypto::CryptoKeys, install_rustls_crypto_provider};
+use vaultwarden_cli::{crypto::{CryptoKeys, MasterKey}, install_rustls_crypto_provider};
 
 type Aes256CbcEnc = Encryptor<aes::Aes256>;
 
@@ -196,18 +196,18 @@ impl LiveTestEnv {
         let kdf_iterations: u32 = 100_000;
 
         // ── Crypto material ──────────────────────────────────────────────
-        let master_key = CryptoKeys::derive_master_key(TEST_PASSWORD, &email, kdf_iterations);
-        let stretched = CryptoKeys::stretch_master_key(&master_key)?;
+        let master_key = MasterKey::derive(TEST_PASSWORD, &email, kdf_iterations);
+        let stretched = master_key.stretch()?;
 
         // Random 64-byte symmetric key: [enc_key(32) | mac_key(32)]
         let mut sym_key_bytes = [0u8; 64];
         rand::rng().fill_bytes(&mut sym_key_bytes);
 
         // Protect the symmetric key with the stretched master key.
-        let protected_key = encrypt_bytes(&sym_key_bytes, &stretched.enc_key, &stretched.mac_key);
+        let protected_key = encrypt_bytes(&sym_key_bytes, stretched.enc_key(), stretched.mac_key());
 
         // Master-password hash sent to the server (PBKDF2 round 2).
-        let pw_hash = master_password_hash(&master_key, TEST_PASSWORD);
+        let pw_hash = master_password_hash(master_key.as_bytes(), TEST_PASSWORD);
 
         // ── Register user ────────────────────────────────────────────────
         // Vaultwarden ≥1.30 moved registration to /identity/accounts/register.
@@ -308,7 +308,10 @@ impl LiveTestEnv {
 
         // Reconstruct user keys from plaintext (we know them since we
         // generated them during registration).
-        let user_keys = CryptoKeys::from_symmetric_key(&sym_key_bytes)?;
+        let (enc, mac) = sym_key_bytes.split_at(32);
+        let enc_arr: [u8; 32] = enc.try_into().map_err(|_| anyhow::anyhow!("bad enc"))?;
+        let mac_arr: [u8; 32] = mac.try_into().map_err(|_| anyhow::anyhow!("bad mac"))?;
+        let user_keys = CryptoKeys::from_key_bytes(enc_arr, mac_arr);
 
         // ── Temp directory layout ────────────────────────────────────────
         let temp_dir = TempDir::new().context("TempDir")?;
@@ -348,8 +351,8 @@ impl LiveTestEnv {
             &config_dir.join("keys.json"),
             &format!(
                 r#"{{"user_keys":{{"enc_key":"{}","mac_key":"{}"}},"org_keys":{{}}}}"#,
-                BASE64.encode(&user_keys.enc_key),
-                BASE64.encode(&user_keys.mac_key),
+                BASE64.encode(user_keys.enc_key_bytes()),
+                BASE64.encode(user_keys.mac_key_bytes()),
             ),
         )?;
 
@@ -545,7 +548,7 @@ pub fn encrypt_bytes(plaintext: &[u8], enc_key: &[u8], mac_key: &[u8]) -> String
 
 /// Encrypt a UTF-8 string using the given `CryptoKeys`.
 pub fn encrypt_str(plaintext: &str, keys: &CryptoKeys) -> String {
-    encrypt_bytes(plaintext.as_bytes(), &keys.enc_key, &keys.mac_key)
+    encrypt_bytes(plaintext.as_bytes(), keys.enc_key_bytes(), keys.mac_key_bytes())
 }
 
 /// Compute the Bitwarden master-password hash:

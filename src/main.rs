@@ -414,10 +414,7 @@ mod tests {
             server: Some(server),
             access_token: Some("access-token".to_string()),
             token_expiry: Some(i64::MAX),
-            crypto_keys: Some(CryptoKeys {
-                enc_key: vec![0; 32],
-                mac_key: vec![0; 32],
-            }),
+            crypto_keys: Some(CryptoKeys::from_key_bytes([0u8; 32], [0u8; 32])),
             ..Default::default()
         }
     }

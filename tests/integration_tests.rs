@@ -231,7 +231,7 @@ mod api_tests {
 
 /// Tests for cryptographic operations with realistic data
 mod crypto_integration_tests {
-    use vaultwarden_cli::crypto::CryptoKeys;
+    use vaultwarden_cli::crypto::{CryptoKeys, MasterKey};
 
     #[test]
     fn test_full_key_derivation_flow() {
@@ -241,17 +241,17 @@ mod crypto_integration_tests {
         let iterations = 100000; // Lower for test speed
 
         // Step 1: Derive master key from password
-        let master_key = CryptoKeys::derive_master_key(test_input, email, iterations);
+        let master_key = MasterKey::derive(test_input, email, iterations);
         assert_eq!(master_key.len(), 32);
 
         // Step 2: Stretch master key to get enc/mac keys
-        let stretched = CryptoKeys::stretch_master_key(&master_key).unwrap();
-        assert_eq!(stretched.enc_key.len(), 32);
-        assert_eq!(stretched.mac_key.len(), 32);
+        let stretched = master_key.stretch().unwrap();
+        assert_eq!(stretched.enc_key().len(), 32);
+        assert_eq!(stretched.mac_key().len(), 32);
 
         // Keys should be different from master key
-        assert_ne!(&stretched.enc_key[..], &master_key[..]);
-        assert_ne!(&stretched.mac_key[..], &master_key[..]);
+        assert_ne!(stretched.enc_key() as &[u8], master_key.as_bytes() as &[u8]);
+        assert_ne!(stretched.mac_key() as &[u8], master_key.as_bytes() as &[u8]);
     }
 
     #[test]
@@ -259,12 +259,15 @@ mod crypto_integration_tests {
         // Simulate receiving a decrypted 64-byte symmetric key
         let symmetric_key: Vec<u8> = (0..64).collect();
 
-        let keys = CryptoKeys::from_symmetric_key(&symmetric_key).unwrap();
+        let (enc, mac) = symmetric_key.split_at(32);
+        let enc_arr: [u8; 32] = enc.try_into().unwrap();
+        let mac_arr: [u8; 32] = mac.try_into().unwrap();
+        let keys = CryptoKeys::from_key_bytes(enc_arr, mac_arr);
 
         // First 32 bytes = enc_key
-        assert_eq!(&keys.enc_key[..], &symmetric_key[0..32]);
+        assert_eq!(keys.enc_key_bytes() as &[u8], &symmetric_key[0..32]);
         // Last 32 bytes = mac_key
-        assert_eq!(&keys.mac_key[..], &symmetric_key[32..64]);
+        assert_eq!(keys.mac_key_bytes() as &[u8], &symmetric_key[32..64]);
     }
 
     #[test]
@@ -272,11 +275,11 @@ mod crypto_integration_tests {
         let password = "SamePassword";
         let iterations = 100000;
 
-        let key1 = CryptoKeys::derive_master_key(password, "user1@example.com", iterations);
-        let key2 = CryptoKeys::derive_master_key(password, "user2@example.com", iterations);
+        let key1 = MasterKey::derive(password, "user1@example.com", iterations);
+        let key2 = MasterKey::derive(password, "user2@example.com", iterations);
 
         // Same password but different emails should produce different keys
-        assert_ne!(key1, key2);
+        assert_ne!(key1.as_bytes(), key2.as_bytes());
     }
 }
 
@@ -425,26 +428,26 @@ mod model_integration_tests {
 /// Tests for edge cases and error handling
 mod edge_case_tests {
     use std::str::FromStr;
-    use vaultwarden_cli::crypto::CryptoKeys;
+    use vaultwarden_cli::crypto::{CryptoKeys, MasterKey};
     use vaultwarden_cli::models::{Cipher, CipherType};
 
     #[test]
     fn test_empty_password_derivation() {
         // Empty password is technically valid
-        let key = CryptoKeys::derive_master_key("", "user@example.com", 100000);
+        let key = MasterKey::derive("", "user@example.com", 100000);
         assert_eq!(key.len(), 32);
     }
 
     #[test]
     fn test_unicode_password() {
-        let key = CryptoKeys::derive_master_key("密码🔐パスワード", "user@example.com", 100000);
+        let key = MasterKey::derive("密码🔐パスワード", "user@example.com", 100000);
         assert_eq!(key.len(), 32);
     }
 
     #[test]
     fn test_very_long_password() {
         let long_password = "a".repeat(10000);
-        let key = CryptoKeys::derive_master_key(&long_password, "user@example.com", 100000);
+        let key = MasterKey::derive(&long_password, "user@example.com", 100000);
         assert_eq!(key.len(), 32);
     }
 
@@ -499,13 +502,13 @@ mod edge_case_tests {
 /// Performance-related tests
 mod performance_tests {
     use std::time::{Duration, Instant};
-    use vaultwarden_cli::crypto::CryptoKeys;
+    use vaultwarden_cli::crypto::{CryptoKeys, MasterKey};
 
     #[test]
     fn test_key_derivation_completes_in_reasonable_time() {
         // With low iterations, derivation should be fast
         let start = Instant::now();
-        let _ = CryptoKeys::derive_master_key("password", "user@example.com", 1000);
+        let _ = MasterKey::derive("password", "user@example.com", 1000);
         let duration = start.elapsed();
 
         assert!(
@@ -517,11 +520,11 @@ mod performance_tests {
     #[test]
     #[cfg_attr(tarpaulin, ignore)]
     fn test_stretch_key_is_fast() {
-        let master_key = vec![0u8; 32];
+        let master_key = MasterKey::derive("benchmark_password", "bench@example.com", 100_000);
 
         let start = Instant::now();
         for _ in 0..1000 {
-            CryptoKeys::stretch_master_key(&master_key).unwrap();
+            let _ = master_key.stretch().unwrap();
         }
         let duration = start.elapsed();
 

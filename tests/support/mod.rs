@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use tempfile::TempDir;
 use vaultwarden_cli::config::Config;
-use vaultwarden_cli::crypto::CryptoKeys;
+use vaultwarden_cli::crypto::{CryptoKeys, MasterKey};
 use vaultwarden_cli::models::{
     Cipher, CipherData, Collection, FieldData, Folder, LoginData, Organization, Profile,
     SyncResponse, TokenResponse, UriData,
@@ -159,8 +159,8 @@ impl TestContext {
                 (
                     (*id).to_string(),
                     serde_json::json!({
-                        "enc_key": BASE64.encode(&keys.enc_key),
-                        "mac_key": BASE64.encode(&keys.mac_key)
+                        "enc_key": BASE64.encode(keys.enc_key_bytes()),
+                        "mac_key": BASE64.encode(keys.mac_key_bytes())
                     }),
                 )
             })
@@ -174,8 +174,8 @@ impl TestContext {
                 }},
                 "org_keys": {}
             }}"#,
-            BASE64.encode(&user_keys.enc_key),
-            BASE64.encode(&user_keys.mac_key),
+            BASE64.encode(user_keys.enc_key_bytes()),
+            BASE64.encode(user_keys.mac_key_bytes()),
             serde_json::Value::Object(org_keys)
         ))
     }
@@ -284,10 +284,10 @@ pub fn unavailable_keyring() -> MockKeyring {
 }
 
 pub fn test_crypto_keys() -> CryptoKeys {
-    CryptoKeys {
-        enc_key: (0u8..32).collect(),
-        mac_key: (32u8..64).collect(),
-    }
+    CryptoKeys::from_key_bytes(
+        [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31],
+        [32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63],
+    )
 }
 
 pub fn encrypted_user_key(
@@ -296,17 +296,18 @@ pub fn encrypted_user_key(
     iterations: u32,
     keys: &CryptoKeys,
 ) -> String {
-    let master_key = CryptoKeys::derive_master_key(password, email, iterations);
-    let stretched = CryptoKeys::stretch_master_key(&master_key).expect("stretch master key");
+    let master_key = MasterKey::derive(password, email, iterations);
+    let stretched = master_key.stretch().expect("stretch master key");
 
-    let mut symmetric_key = keys.enc_key.clone();
-    symmetric_key.extend_from_slice(&keys.mac_key);
+    let mut symmetric_key = Vec::with_capacity(64);
+    symmetric_key.extend_from_slice(keys.enc_key_bytes());
+    symmetric_key.extend_from_slice(keys.mac_key_bytes());
 
-    encrypt_bytes_for_test(&symmetric_key, &stretched.enc_key, &stretched.mac_key)
+    encrypt_bytes_for_test(&symmetric_key, stretched.enc_key(), stretched.mac_key())
 }
 
 pub fn encrypt_string_for_test(plaintext: &str, keys: &CryptoKeys) -> String {
-    encrypt_bytes_for_test(plaintext.as_bytes(), &keys.enc_key, &keys.mac_key)
+    encrypt_bytes_for_test(plaintext.as_bytes(), keys.enc_key_bytes(), keys.mac_key_bytes())
 }
 
 pub fn encrypt_bytes_for_test(plaintext: &[u8], enc_key: &[u8], mac_key: &[u8]) -> String {
