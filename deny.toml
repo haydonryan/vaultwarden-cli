@@ -29,3 +29,37 @@ allow = [
     "Unlicense",
     "Zlib",
 ]
+
+[bans]
+# dbus-secret-service-keyring-store v1.0.0 transitively depends on
+# dbus-secret-service v4.1.0, which pins its own older crypto dependency
+# stack (aes 0.8, block-buffer 0.10, cbc 0.1, cipher 0.4, digest 0.10,
+# hkdf 0.12, hmac 0.12, sha2 0.10, etc.) that is separate from the
+# vaultwarden-cli direct crypto stack (aes 0.9, block-buffer 0.12,
+# cbc 0.2, cipher 0.5, digest 0.11, hkdf 0.13, hmac 0.13, sha2 0.11).
+#
+# Both dbus-secret-service-keyring-store and dbus-secret-service are at
+# their latest published versions (1.0.0 and 4.1.0 respectively), so
+# the duplicate crypto dependency stack is unavoidable unless the
+# upstream crate cuts new releases with updated crypto dep ranges.
+#
+# These duplicates increase build surface but do not affect runtime
+# behavior because the two stacks are linked independently — one inside
+# dbus-secret-service's internal keyring transport, the other directly
+# in vaultwarden-cli for vault data crypto operations.
+# Revisit: remove these skips once dbus-secret-service-keyring-store or
+# dbus-secret-service updates to use the same crypto crate versions.
+skip = [
+    { name = "aes", version = "0.8.4" },
+    { name = "block-buffer", version = "0.10.4" },
+    { name = "block-padding", version = "0.3.3" },
+    { name = "cbc", version = "0.1.2" },
+    { name = "cipher", version = "0.4.4" },
+    { name = "cpufeatures", version = "0.2.17" },
+    { name = "crypto-common", version = "0.1.7" },
+    { name = "digest", version = "0.10.7" },
+    { name = "hkdf", version = "0.12.4" },
+    { name = "hmac", version = "0.12.1" },
+    { name = "inout", version = "0.1.4" },
+    { name = "sha2", version = "0.10.9" },
+]
