@@ -70,10 +70,7 @@ fn config_save_keys_fails_when_config_dir_is_missing() {
     let ctx = TestContext::new();
 
     let config = ctx.scoped_config(Config {
-        crypto_keys: Some(vaultwarden_cli::crypto::CryptoKeys {
-            enc_key: vec![7u8; 32],
-            mac_key: vec![9u8; 32],
-        }),
+        crypto_keys: Some(CryptoKeys::from_key_bytes([7u8; 32], [9u8; 32])),
         ..Default::default()
     });
 
@@ -97,10 +94,7 @@ fn config_save_keys_warns_when_client_id_is_none() {
 
     let config = ctx.scoped_config(Config {
         // client_id deliberately absent: no keyring account can be formed
-        crypto_keys: Some(vaultwarden_cli::crypto::CryptoKeys {
-            enc_key: vec![7u8; 32],
-            mac_key: vec![9u8; 32],
-        }),
+        crypto_keys: Some(CryptoKeys::from_key_bytes([7u8; 32], [9u8; 32])),
         ..Default::default()
     });
 
@@ -133,10 +127,7 @@ fn warning_capture_drain_clears_messages_and_drop_restores_stderr_mode() {
     ctx.create_config_dir();
 
     let config = ctx.scoped_config(Config {
-        crypto_keys: Some(CryptoKeys {
-            enc_key: vec![7u8; 32],
-            mac_key: vec![9u8; 32],
-        }),
+        crypto_keys: Some(CryptoKeys::from_key_bytes([7u8; 32], [9u8; 32])),
         ..Default::default()
     });
 
@@ -199,10 +190,7 @@ fn config_save_keys_defaults_to_no_persist_without_keyring() {
     ctx.create_config_dir();
 
     let config = ctx.scoped_config(Config {
-        crypto_keys: Some(vaultwarden_cli::crypto::CryptoKeys {
-            enc_key: vec![7u8; 32],
-            mac_key: vec![9u8; 32],
-        }),
+        crypto_keys: Some(CryptoKeys::from_key_bytes([7u8; 32], [9u8; 32])),
         ..Default::default()
     });
 
@@ -232,10 +220,7 @@ fn config_save_keys_removes_stale_legacy_file_after_keyring_success() {
 
     let config = ctx.scoped_config(Config {
         client_id: Some("client-id".to_string()),
-        crypto_keys: Some(CryptoKeys {
-            enc_key: vec![7u8; 32],
-            mac_key: vec![9u8; 32],
-        }),
+        crypto_keys: Some(CryptoKeys::from_key_bytes([7u8; 32], [9u8; 32])),
         ..Default::default()
     });
 
@@ -261,10 +246,7 @@ fn config_save_keys_removes_stale_legacy_file_when_no_persist_is_required() {
 
     let config = ctx.scoped_config(Config {
         client_id: Some("client-id".to_string()),
-        crypto_keys: Some(CryptoKeys {
-            enc_key: vec![7u8; 32],
-            mac_key: vec![9u8; 32],
-        }),
+        crypto_keys: Some(CryptoKeys::from_key_bytes([7u8; 32], [9u8; 32])),
         ..Default::default()
     });
 
@@ -294,10 +276,7 @@ fn config_load_saved_keys_removes_legacy_file_unless_insecure_fallback_is_allowe
     let _disallow_key_file =
         support::ScopedEnvVar::set("VAULTWARDEN_ALLOW_INSECURE_KEY_FILE", "false");
     let ctx = TestContext::new();
-    ctx.write_saved_user_keys(&CryptoKeys {
-        enc_key: vec![1u8; 32],
-        mac_key: vec![2u8; 32],
-    })
+    ctx.write_saved_user_keys(&CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32]))
     .unwrap();
 
     let mut config = ctx.scoped_config(Config {
@@ -329,10 +308,7 @@ fn config_load_saved_keys_accepts_legacy_file_when_insecure_fallback_is_allowed(
     let _unavailable_keyring = unavailable_keyring();
     let _allow_key_file = allow_insecure_key_file_fallback();
     let ctx = TestContext::new();
-    ctx.write_saved_user_keys(&CryptoKeys {
-        enc_key: vec![1u8; 32],
-        mac_key: vec![2u8; 32],
-    })
+    ctx.write_saved_user_keys(&CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32]))
     .unwrap();
 
     let mut config = ctx.scoped_config(Config {
@@ -344,8 +320,8 @@ fn config_load_saved_keys_accepts_legacy_file_when_insecure_fallback_is_allowed(
         .expect("legacy file should load when explicitly allowed");
 
     let keys = config.crypto_keys.expect("legacy user keys should load");
-    assert_eq!(keys.enc_key, vec![1u8; 32]);
-    assert_eq!(keys.mac_key, vec![2u8; 32]);
+    assert_eq!(*keys.enc_key_bytes(), [1u8; 32]);
+    assert_eq!(*keys.mac_key_bytes(), [2u8; 32]);
     assert!(
         ctx.keys_path().exists(),
         "allowed legacy keys.json should remain in place"
@@ -362,18 +338,12 @@ fn config_save_keys_round_trips_when_config_dir_exists() {
     let mut config = ctx.scoped_config(Config {
         server: Some("https://vault.example.com".to_string()),
         access_token: Some("token".to_string()),
-        crypto_keys: Some(vaultwarden_cli::crypto::CryptoKeys {
-            enc_key: vec![1u8; 32],
-            mac_key: vec![2u8; 32],
-        }),
+        crypto_keys: Some(CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32])),
         ..Default::default()
     });
     config.org_crypto_keys.insert(
         "org-1".to_string(),
-        vaultwarden_cli::crypto::CryptoKeys {
-            enc_key: vec![3u8; 32],
-            mac_key: vec![4u8; 32],
-        },
+        CryptoKeys::from_key_bytes([3u8; 32], [4u8; 32]),
     );
 
     config.save().unwrap();
@@ -383,15 +353,15 @@ fn config_save_keys_round_trips_when_config_dir_exists() {
     let loaded = ctx.load_config().unwrap();
 
     let user_keys = loaded.crypto_keys.expect("user keys should load");
-    assert_eq!(user_keys.enc_key, vec![1u8; 32]);
-    assert_eq!(user_keys.mac_key, vec![2u8; 32]);
+    assert_eq!(*user_keys.enc_key_bytes(), [1u8; 32]);
+    assert_eq!(*user_keys.mac_key_bytes(), [2u8; 32]);
 
     let org_keys = loaded
         .org_crypto_keys
         .get("org-1")
         .expect("org keys should load");
-    assert_eq!(org_keys.enc_key, vec![3u8; 32]);
-    assert_eq!(org_keys.mac_key, vec![4u8; 32]);
+    assert_eq!(*org_keys.enc_key_bytes(), [3u8; 32]);
+    assert_eq!(*org_keys.mac_key_bytes(), [4u8; 32]);
 }
 
 #[test]
@@ -410,10 +380,7 @@ fn config_clear_removes_account_metadata_runtime_state_and_saved_keys() {
         token_expiry: Some(12345),
         encrypted_key: Some("encrypted-key".to_string()),
         encrypted_private_key: Some("encrypted-private-key".to_string()),
-        crypto_keys: Some(vaultwarden_cli::crypto::CryptoKeys {
-            enc_key: vec![1u8; 32],
-            mac_key: vec![2u8; 32],
-        }),
+        crypto_keys: Some(CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32])),
         ..Default::default()
     });
     config
@@ -421,10 +388,7 @@ fn config_clear_removes_account_metadata_runtime_state_and_saved_keys() {
         .insert("org-1".to_string(), "encrypted-org-key".to_string());
     config.org_crypto_keys.insert(
         "org-1".to_string(),
-        vaultwarden_cli::crypto::CryptoKeys {
-            enc_key: vec![3u8; 32],
-            mac_key: vec![4u8; 32],
-        },
+        CryptoKeys::from_key_bytes([3u8; 32], [4u8; 32]),
     );
 
     config.save().unwrap();

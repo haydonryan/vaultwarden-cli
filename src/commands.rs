@@ -31,7 +31,7 @@ fn token_expiry_from_lifetime(now: i64, expires_in: i64) -> Result<i64> {
 
 use crate::api::ApiClient;
 use crate::config::{self, Config, KeyPersistenceOutcome};
-use crate::crypto::CryptoKeys;
+use crate::crypto::{CryptoKeys, MasterKey};
 use crate::models::{Cipher, CipherOutput, CipherType, FieldOutput};
 
 struct TokenRefreshLock {
@@ -236,10 +236,10 @@ pub async fn unlock(password: Option<String>, opts: &CommandOptions) -> Result<(
     println!("Deriving key...");
 
     // Derive master key from password and email
-    let master_key = CryptoKeys::derive_master_key(&password, email, iterations);
+    let master_key = MasterKey::derive(&password, email, iterations);
 
     // Decrypt the symmetric key
-    let crypto_keys = CryptoKeys::decrypt_symmetric_key(&master_key, encrypted_key)
+    let crypto_keys = master_key.decrypt_symmetric_key(encrypted_key)
         .context("Failed to decrypt vault key. Check your master password.")?;
 
     // Decrypt organization keys if present
@@ -1950,29 +1950,29 @@ mod tests {
         uris: &[&str],
         keys: &CryptoKeys,
     ) -> serde_json::Value {
-        let enc_name = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+        let enc_name = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
             name.as_bytes(),
-            &keys.enc_key,
-            &keys.mac_key,
+            keys.enc_key_bytes(),
+            keys.mac_key_bytes(),
         );
-        let enc_user = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+        let enc_user = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
             username.as_bytes(),
-            &keys.enc_key,
-            &keys.mac_key,
+            keys.enc_key_bytes(),
+            keys.mac_key_bytes(),
         );
-        let enc_pass = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+        let enc_pass = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
             password.as_bytes(),
-            &keys.enc_key,
-            &keys.mac_key,
+            keys.enc_key_bytes(),
+            keys.mac_key_bytes(),
         );
         let encrypted_uris = uris
             .iter()
             .map(|uri| {
                 serde_json::json!({
-                    "uri": crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+                    "uri": crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
                         uri.as_bytes(),
-                        &keys.enc_key,
-                        &keys.mac_key,
+                        keys.enc_key_bytes(),
+                        keys.mac_key_bytes(),
                     ),
                     "match": 0
                 })
@@ -2241,13 +2241,13 @@ mod tests {
             let msg_len = buf.len();
             buf.resize(msg_len + 16, 0);
 
-            let ciphertext = Aes256CbcEnc::new_from_slices(&keys.enc_key, &iv)
+            let ciphertext = Aes256CbcEnc::new_from_slices(keys.enc_key_bytes(), &iv)
                 .unwrap()
                 .encrypt_padded::<Pkcs7>(&mut buf, msg_len)
                 .unwrap()
                 .to_vec();
 
-            let mut hmac = Hmac::<Sha256>::new_from_slice(&keys.mac_key).unwrap();
+            let mut hmac = Hmac::<Sha256>::new_from_slice(keys.mac_key_bytes()).unwrap();
             hmac.update(&iv);
             hmac.update(&ciphertext);
             let mac = hmac.finalize().into_bytes();
@@ -2406,10 +2406,7 @@ mod tests {
 
         #[test]
         fn test_resolve_collection_id_matches_decrypted_name_with_org_scope() {
-            let org_keys = CryptoKeys {
-                enc_key: vec![1u8; 32],
-                mac_key: vec![2u8; 32],
-            };
+            let org_keys = CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32]);
             let mut config = Config::default();
             config
                 .org_crypto_keys
@@ -2435,14 +2432,8 @@ mod tests {
 
         #[test]
         fn test_resolve_collection_id_rejects_ambiguous_decrypted_name_without_org_scope() {
-            let org_1_keys = CryptoKeys {
-                enc_key: vec![1u8; 32],
-                mac_key: vec![2u8; 32],
-            };
-            let org_2_keys = CryptoKeys {
-                enc_key: vec![3u8; 32],
-                mac_key: vec![4u8; 32],
-            };
+            let org_1_keys = CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32]);
+            let org_2_keys = CryptoKeys::from_key_bytes([3u8; 32], [4u8; 32]);
             let mut config = Config::default();
             config
                 .org_crypto_keys
@@ -2509,17 +2500,14 @@ mod tests {
         }
 
         fn test_crypto_keys() -> CryptoKeys {
-            CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            }
+            CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32])
         }
 
         fn encrypt_for_decrypt_cipher_test(value: &str, crypto_keys: &CryptoKeys) -> String {
-            crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+            crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
                 value.as_bytes(),
-                &crypto_keys.enc_key,
-                &crypto_keys.mac_key,
+                crypto_keys.enc_key_bytes(),
+                crypto_keys.mac_key_bytes(),
             )
         }
 
@@ -2604,10 +2592,7 @@ mod tests {
         #[test]
         fn test_decrypt_cipher_no_name_fails() {
             let cipher = create_test_cipher("test-123", 1);
-            let keys = CryptoKeys {
-                enc_key: vec![0u8; 32],
-                mac_key: vec![0u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0u8; 32], [0u8; 32]);
 
             let result = decrypt_cipher(&cipher, &keys);
             assert!(result.is_err());
@@ -2724,10 +2709,7 @@ mod tests {
         #[test]
         fn test_ensure_unlocked_with_keys() {
             let config = Config {
-                crypto_keys: Some(CryptoKeys {
-                    enc_key: vec![0u8; 32],
-                    mac_key: vec![0u8; 32],
-                }),
+                crypto_keys: Some(CryptoKeys::from_key_bytes([0u8; 32], [0u8; 32])),
                 ..Default::default()
             };
 
@@ -2835,10 +2817,7 @@ mod tests {
                 token_expiry: Some(i64::MAX),
                 ..Default::default()
             };
-            config.crypto_keys = Some(CryptoKeys {
-                enc_key: vec![0u8; 32],
-                mac_key: vec![0u8; 32],
-            });
+            config.crypto_keys = Some(CryptoKeys::from_key_bytes([0u8; 32], [0u8; 32]));
             config.save().unwrap();
             config.save_keys().unwrap();
 
@@ -2875,10 +2854,7 @@ mod tests {
                 access_token: Some("token".to_string()),
                 ..Default::default()
             };
-            config.crypto_keys = Some(CryptoKeys {
-                enc_key: vec![0u8; 32],
-                mac_key: vec![0u8; 32],
-            });
+            config.crypto_keys = Some(CryptoKeys::from_key_bytes([0u8; 32], [0u8; 32]));
             config.save().unwrap();
             config.save_keys().unwrap();
 
@@ -2946,10 +2922,7 @@ mod tests {
             config
                 .org_keys
                 .insert("org-1".to_string(), "key".to_string());
-            config.crypto_keys = Some(CryptoKeys {
-                enc_key: vec![0u8; 32],
-                mac_key: vec![0u8; 32],
-            });
+            config.crypto_keys = Some(CryptoKeys::from_key_bytes([0u8; 32], [0u8; 32]));
             config.save().unwrap();
             config.save_keys().unwrap();
 
@@ -3378,21 +3351,21 @@ mod tests {
 
             type Aes256CbcEnc = Encryptor<aes::Aes256>;
 
-            let master_key = CryptoKeys::derive_master_key(password, email, iterations);
-            let stretched = CryptoKeys::stretch_master_key(&master_key).unwrap();
+            let master_key = MasterKey::derive(&password, email, iterations);
+            let stretched = master_key.stretch().unwrap();
 
             let iv: Vec<u8> = (64u8..80).collect();
             let mut buf = symmetric_key.to_vec();
             let msg_len = buf.len();
             buf.resize(msg_len + 16, 0);
 
-            let ciphertext = Aes256CbcEnc::new_from_slices(&stretched.enc_key, &iv)
+            let ciphertext = Aes256CbcEnc::new_from_slices(stretched.enc_key(), &iv)
                 .unwrap()
                 .encrypt_padded::<Pkcs7>(&mut buf, msg_len)
                 .unwrap()
                 .to_vec();
 
-            let mut hmac = Hmac::<Sha256>::new_from_slice(&stretched.mac_key).unwrap();
+            let mut hmac = Hmac::<Sha256>::new_from_slice(stretched.mac_key()).unwrap();
             hmac.update(&iv);
             hmac.update(&ciphertext);
             let mac = hmac.finalize().into_bytes();
@@ -3453,12 +3426,10 @@ mod tests {
             let temp_dir = tempfile::TempDir::new().unwrap();
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
-            let mut symmetric_key = keys.enc_key.clone();
-            symmetric_key.extend_from_slice(&keys.mac_key);
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
+            let mut symmetric_key = Vec::with_capacity(64);
+            symmetric_key.extend_from_slice(keys.enc_key_bytes());
+            symmetric_key.extend_from_slice(keys.mac_key_bytes());
 
             let encrypted_key = encrypt_symmetric_key_for_test(
                 &symmetric_key,
@@ -3492,12 +3463,10 @@ mod tests {
             let temp_dir = tempfile::TempDir::new().unwrap();
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
-            let mut symmetric_key = keys.enc_key.clone();
-            symmetric_key.extend_from_slice(&keys.mac_key);
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
+            let mut symmetric_key = Vec::with_capacity(64);
+            symmetric_key.extend_from_slice(keys.enc_key_bytes());
+            symmetric_key.extend_from_slice(keys.mac_key_bytes());
 
             let encrypted_key = encrypt_symmetric_key_for_test(
                 &symmetric_key,
@@ -3533,12 +3502,10 @@ mod tests {
             let temp_dir = tempfile::TempDir::new().unwrap();
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
-            let user_keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
-            let mut symmetric_key = user_keys.enc_key.clone();
-            symmetric_key.extend_from_slice(&user_keys.mac_key);
+            let user_keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
+            let mut symmetric_key = Vec::with_capacity(64);
+            symmetric_key.extend_from_slice(user_keys.enc_key_bytes());
+            symmetric_key.extend_from_slice(user_keys.mac_key_bytes());
 
             let encrypted_key = encrypt_symmetric_key_for_test(
                 &symmetric_key,
@@ -3554,7 +3521,7 @@ mod tests {
             let der = private_key.to_pkcs8_der().unwrap().as_bytes().to_vec();
 
             let encrypted_private_key =
-                encrypt_bytes_for_test(&der, &user_keys.enc_key, &user_keys.mac_key);
+                encrypt_bytes_for_test(&der, user_keys.enc_key_bytes(), user_keys.mac_key_bytes());
 
             // Encrypt org symmetric key with RSA
             let org_symmetric_key: Vec<u8> = (0..64).collect();
@@ -3588,8 +3555,8 @@ mod tests {
                 .org_crypto_keys
                 .get("org-1")
                 .expect("org key present");
-            assert_eq!(org_keys.enc_key, org_symmetric_key[0..32]);
-            assert_eq!(org_keys.mac_key, org_symmetric_key[32..64]);
+            assert_eq!(*org_keys.enc_key_bytes(), org_symmetric_key[0..32]);
+            assert_eq!(*org_keys.mac_key_bytes(), org_symmetric_key[32..64]);
         }
     }
 
@@ -3598,22 +3565,16 @@ mod tests {
 
         #[test]
         fn test_try_decrypt_some() {
-            let keys = crate::crypto::tests::test_helpers::encrypt_bytes_for_test;
-            let crypto_keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
-            let encrypted = keys(b"secret", &crypto_keys.enc_key, &crypto_keys.mac_key);
+            let keys = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test;
+            let crypto_keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
+            let encrypted = keys(b"secret", crypto_keys.enc_key_bytes(), crypto_keys.mac_key_bytes());
             let result = try_decrypt(&crypto_keys, Some(&encrypted)).unwrap();
             assert_eq!(result, Some("secret".to_string()));
         }
 
         #[test]
         fn test_try_decrypt_none() {
-            let crypto_keys = CryptoKeys {
-                enc_key: vec![0u8; 32],
-                mac_key: vec![0u8; 32],
-            };
+            let crypto_keys = CryptoKeys::from_key_bytes([0u8; 32], [0u8; 32]);
             let result = try_decrypt(&crypto_keys, None).unwrap();
             assert_eq!(result, None);
         }
@@ -3708,19 +3669,16 @@ mod tests {
         fn test_find_cipher_output_finds_match() {
             use crate::models::Cipher;
 
-            let crypto_keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let crypto_keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
             let config = Config {
                 crypto_keys: Some(crypto_keys.clone()),
                 ..Default::default()
             };
 
-            let encrypted_name = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+            let encrypted_name = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
                 b"Target",
-                &crypto_keys.enc_key,
-                &crypto_keys.mac_key,
+                crypto_keys.enc_key_bytes(),
+                crypto_keys.mac_key_bytes(),
             );
 
             let ciphers = vec![Cipher {
@@ -3749,19 +3707,16 @@ mod tests {
         fn test_find_cipher_output_no_match() {
             use crate::models::Cipher;
 
-            let crypto_keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let crypto_keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
             let config = Config {
                 crypto_keys: Some(crypto_keys.clone()),
                 ..Default::default()
             };
 
-            let encrypted_name = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+            let encrypted_name = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
                 b"Other",
-                &crypto_keys.enc_key,
-                &crypto_keys.mac_key,
+                crypto_keys.enc_key_bytes(),
+                crypto_keys.mac_key_bytes(),
             );
 
             let ciphers = vec![Cipher {
@@ -3797,20 +3752,17 @@ mod tests {
         }
 
         fn encrypt_for_interpolate_test(value: &str, crypto_keys: &CryptoKeys) -> String {
-            crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+            crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
                 value.as_bytes(),
-                &crypto_keys.enc_key,
-                &crypto_keys.mac_key,
+                crypto_keys.enc_key_bytes(),
+                crypto_keys.mac_key_bytes(),
             )
         }
 
         fn make_sync_response_with_logins(
             logins: &[(&str, &str, &str, &str)],
         ) -> serde_json::Value {
-            let crypto_keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let crypto_keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let ciphers = logins
                 .iter()
@@ -3900,10 +3852,7 @@ mod tests {
         }
 
         fn test_crypto_keys() -> CryptoKeys {
-            CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            }
+            CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32])
         }
 
         async fn mount_sync_response(mock_server: &MockServer, sync_response: serde_json::Value) {
@@ -4037,10 +3986,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let sync_response = serde_json::json!({
                 "ciphers": [
@@ -4102,10 +4048,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let sync_response = serde_json::json!({
                 "ciphers": [
@@ -4552,25 +4495,25 @@ mod tests {
             uri: &str,
             keys: &CryptoKeys,
         ) -> serde_json::Value {
-            let enc_name = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+            let enc_name = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
                 name.as_bytes(),
-                &keys.enc_key,
-                &keys.mac_key,
+                keys.enc_key_bytes(),
+                keys.mac_key_bytes(),
             );
-            let enc_user = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+            let enc_user = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
                 username.as_bytes(),
-                &keys.enc_key,
-                &keys.mac_key,
+                keys.enc_key_bytes(),
+                keys.mac_key_bytes(),
             );
-            let enc_pass = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+            let enc_pass = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
                 password.as_bytes(),
-                &keys.enc_key,
-                &keys.mac_key,
+                keys.enc_key_bytes(),
+                keys.mac_key_bytes(),
             );
-            let enc_uri = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+            let enc_uri = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
                 uri.as_bytes(),
-                &keys.enc_key,
-                &keys.mac_key,
+                keys.enc_key_bytes(),
+                keys.mac_key_bytes(),
             );
 
             serde_json::json!({
@@ -4589,10 +4532,10 @@ mod tests {
         }
 
         fn make_encrypted_note(id: &str, name: &str, keys: &CryptoKeys) -> serde_json::Value {
-            let enc_name = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+            let enc_name = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
                 name.as_bytes(),
-                &keys.enc_key,
-                &keys.mac_key,
+                keys.enc_key_bytes(),
+                keys.mac_key_bytes(),
             );
 
             serde_json::json!({
@@ -4612,10 +4555,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let sync_response = serde_json::json!({
                 "ciphers": [
@@ -4679,10 +4619,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let sync_response = serde_json::json!({
                 "ciphers": [
@@ -4746,10 +4683,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let sync_response = serde_json::json!({
                 "ciphers": [
@@ -4813,10 +4747,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let sync_response = serde_json::json!({
                 "ciphers": [
@@ -4879,10 +4810,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let sync_response = serde_json::json!({
                 "ciphers": [],
@@ -4952,25 +4880,25 @@ mod tests {
             uri: &str,
             keys: &CryptoKeys,
         ) -> serde_json::Value {
-            let enc_name = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+            let enc_name = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
                 name.as_bytes(),
-                &keys.enc_key,
-                &keys.mac_key,
+                keys.enc_key_bytes(),
+                keys.mac_key_bytes(),
             );
-            let enc_user = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+            let enc_user = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
                 username.as_bytes(),
-                &keys.enc_key,
-                &keys.mac_key,
+                keys.enc_key_bytes(),
+                keys.mac_key_bytes(),
             );
-            let enc_pass = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+            let enc_pass = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
                 password.as_bytes(),
-                &keys.enc_key,
-                &keys.mac_key,
+                keys.enc_key_bytes(),
+                keys.mac_key_bytes(),
             );
-            let enc_uri = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+            let enc_uri = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
                 uri.as_bytes(),
-                &keys.enc_key,
-                &keys.mac_key,
+                keys.enc_key_bytes(),
+                keys.mac_key_bytes(),
             );
 
             serde_json::json!({
@@ -4995,10 +4923,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let sync_response = serde_json::json!({
                 "ciphers": [
@@ -5061,10 +4986,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let sync_response = serde_json::json!({
                 "ciphers": [
@@ -5118,10 +5040,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let mut filtered_cipher = make_encrypted_login(
                 "cipher-1",
@@ -5200,10 +5119,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let sync_response = serde_json::json!({
                 "ciphers": [
@@ -5259,10 +5175,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let sync_response = serde_json::json!({
                 "ciphers": [
@@ -5321,10 +5234,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let sync_response = serde_json::json!({
                 "ciphers": [
@@ -5380,10 +5290,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let sync_response = serde_json::json!({
                 "ciphers": [],
@@ -5458,10 +5365,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let sync_response = serde_json::json!({
                 "ciphers": [
@@ -5522,10 +5426,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let sync_response = serde_json::json!({
                 "ciphers": [
@@ -5598,10 +5499,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let sync_response = serde_json::json!({
                 "ciphers": [
@@ -5655,10 +5553,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let sync_response = serde_json::json!({
                 "ciphers": [
@@ -5712,10 +5607,7 @@ mod tests {
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
             let mock_server = MockServer::start().await;
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
 
             let sync_response = serde_json::json!({
                 "ciphers": [],
@@ -5993,10 +5885,7 @@ mod tests {
 
         #[test]
         fn test_get_cipher_keys_user_cipher() {
-            let user_keys = CryptoKeys {
-                enc_key: vec![1u8; 32],
-                mac_key: vec![2u8; 32],
-            };
+            let user_keys = CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32]);
 
             let config = Config {
                 crypto_keys: Some(user_keys.clone()),
@@ -6005,19 +5894,13 @@ mod tests {
 
             let cipher = create_minimal_cipher(None);
             let keys = get_cipher_keys(&config, &cipher).unwrap();
-            assert_eq!(keys.enc_key, user_keys.enc_key);
+            assert_eq!(*keys.enc_key_bytes(), *user_keys.enc_key_bytes());
         }
 
         #[test]
         fn test_get_cipher_keys_org_cipher() {
-            let user_keys = CryptoKeys {
-                enc_key: vec![1u8; 32],
-                mac_key: vec![2u8; 32],
-            };
-            let org_keys = CryptoKeys {
-                enc_key: vec![3u8; 32],
-                mac_key: vec![4u8; 32],
-            };
+            let user_keys = CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32]);
+            let org_keys = CryptoKeys::from_key_bytes([3u8; 32], [4u8; 32]);
 
             let mut config = Config {
                 crypto_keys: Some(user_keys),
@@ -6029,15 +5912,12 @@ mod tests {
 
             let cipher = create_minimal_cipher(Some("org-123"));
             let keys = get_cipher_keys(&config, &cipher).unwrap();
-            assert_eq!(keys.enc_key, org_keys.enc_key);
+            assert_eq!(*keys.enc_key_bytes(), *org_keys.enc_key_bytes());
         }
 
         #[test]
         fn test_get_cipher_keys_missing_org_keys() {
-            let user_keys = CryptoKeys {
-                enc_key: vec![1u8; 32],
-                mac_key: vec![2u8; 32],
-            };
+            let user_keys = CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32]);
 
             let config = Config {
                 crypto_keys: Some(user_keys),
@@ -6663,10 +6543,7 @@ mod tests {
 
         #[test]
         fn returns_none_when_predicate_never_matches() {
-            let keys = CryptoKeys {
-                enc_key: vec![1u8; 32],
-                mac_key: vec![2u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32]);
             let config = Config {
                 crypto_keys: Some(keys),
                 ..Default::default()
@@ -6679,14 +6556,11 @@ mod tests {
 
         #[test]
         fn returns_some_when_cipher_matches() {
-            let keys = CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            };
-            let encrypted_name = crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
+            let encrypted_name = crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
                 b"Test App",
-                &keys.enc_key,
-                &keys.mac_key,
+                keys.enc_key_bytes(),
+                keys.mac_key_bytes(),
             );
             let config = Config {
                 crypto_keys: Some(keys),
@@ -6716,10 +6590,7 @@ mod tests {
 
         #[test]
         fn skips_ciphers_that_fail_filter() {
-            let keys = CryptoKeys {
-                enc_key: vec![1u8; 32],
-                mac_key: vec![2u8; 32],
-            };
+            let keys = CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32]);
             let config = Config {
                 crypto_keys: Some(keys),
                 ..Default::default()
@@ -6746,17 +6617,14 @@ mod tests {
         use crate::models::{Cipher, LoginData, UriData};
 
         fn keys() -> CryptoKeys {
-            CryptoKeys {
-                enc_key: vec![0x42u8; 32],
-                mac_key: vec![0x43u8; 32],
-            }
+            CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32])
         }
 
         fn encrypted_uri(keys: &CryptoKeys, uri: &str) -> String {
-            crate::crypto::tests::test_helpers::encrypt_bytes_for_test(
+            crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
                 uri.as_bytes(),
-                &keys.enc_key,
-                &keys.mac_key,
+                keys.enc_key_bytes(),
+                keys.mac_key_bytes(),
             )
         }
 

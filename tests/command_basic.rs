@@ -122,8 +122,8 @@ fn unlock_reads_password_from_environment() {
     let _allow_key_file = allow_insecure_key_file_fallback();
     let saved = ctx.load_config().unwrap();
     let saved_keys = saved.crypto_keys.expect("saved user keys");
-    assert_eq!(saved_keys.enc_key, keys.enc_key);
-    assert_eq!(saved_keys.mac_key, keys.mac_key);
+    assert_eq!(*saved_keys.enc_key_bytes(), *keys.enc_key_bytes());
+    assert_eq!(*saved_keys.mac_key_bytes(), *keys.mac_key_bytes());
 }
 
 #[test]

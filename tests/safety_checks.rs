@@ -15,7 +15,7 @@ mod support;
 
 use support::{TestContext, allow_insecure_key_file_fallback, env_lock};
 use vaultwarden_cli::config::Config;
-use vaultwarden_cli::crypto::CryptoKeys;
+use vaultwarden_cli::crypto::{CryptoKeys, MasterKey};
 
 // ─────────────────────────────────────────────
 // Restrictive file permissions (Unix only)
@@ -86,10 +86,7 @@ mod restrictive_file_permissions {
         let config = ctx.scoped_config(Config {
             server: Some("https://vault.example.com".to_string()),
             access_token: Some("token".to_string()),
-            crypto_keys: Some(CryptoKeys {
-                enc_key: vec![1u8; 32],
-                mac_key: vec![2u8; 32],
-            }),
+            crypto_keys: Some(CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32])),
             // No client_id — forces file fallback
             ..Default::default()
         });
@@ -118,10 +115,7 @@ mod restrictive_file_permissions {
         let _guard = env_lock();
         let _allow_key_file = allow_insecure_key_file_fallback();
         let ctx = TestContext::new();
-        let keys = CryptoKeys {
-            enc_key: vec![1u8; 32],
-            mac_key: vec![2u8; 32],
-        };
+        let keys = CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32]);
         ctx.write_raw_config(r#"{"server":"https://vault.example.com"}"#)
             .unwrap();
         ctx.write_saved_user_keys(&keys).unwrap();
@@ -182,7 +176,7 @@ mod restrictive_file_permissions {
 // ─────────────────────────────────────────────
 
 mod key_zeroization {
-    use vaultwarden_cli::crypto::CryptoKeys;
+    use vaultwarden_cli::crypto::{CryptoKeys, MasterKey};
 
     #[test]
     fn crypto_keys_implements_zeroize() {
@@ -204,10 +198,7 @@ mod key_zeroization {
     fn zeroize_clears_key_bytes_from_memory() {
         use ::zeroize::Zeroize;
 
-        let keys = CryptoKeys {
-            enc_key: vec![0xAA; 32],
-            mac_key: vec![0xBB; 32],
-        };
+        let keys = CryptoKeys::from_key_bytes([0xAA; 32], [0xBB; 32]);
 
         // Clone so we can zeroize the original and verify it's wiped
         let mut keys = keys;
@@ -215,11 +206,11 @@ mod key_zeroization {
 
         // After zeroize, the Vec contents should be zeroed
         assert!(
-            keys.enc_key.iter().all(|&b| b == 0),
+            keys.enc_key_bytes().iter().all(|&b| b == 0),
             "enc_key should be zeroed after zeroize()"
         );
         assert!(
-            keys.mac_key.iter().all(|&b| b == 0),
+            keys.mac_key_bytes().iter().all(|&b| b == 0),
             "mac_key should be zeroed after zeroize()"
         );
     }
@@ -228,10 +219,7 @@ mod key_zeroization {
     fn debug_output_does_not_expose_key_bytes() {
         // The derived Debug would print raw key bytes; we use a manual impl
         // that replaces both fields with "[REDACTED]".
-        let keys = CryptoKeys {
-            enc_key: vec![0xDE; 32],
-            mac_key: vec![0xAD; 32],
-        };
+        let keys = CryptoKeys::from_key_bytes([0xDE; 32], [0xAD; 32]);
         let debug = format!("{keys:?}");
         assert!(
             debug.contains("[REDACTED]"),
@@ -359,7 +347,7 @@ mod api_client_timeouts {
 
 mod mac_integrity_rejection {
     use super::env_lock;
-    use vaultwarden_cli::crypto::CryptoKeys;
+    use vaultwarden_cli::crypto::{CryptoKeys, MasterKey};
 
     #[test]
     fn rejects_ciphertext_without_mac_by_default() {
@@ -369,10 +357,7 @@ mod mac_integrity_rejection {
         vaultwarden_cli::crypto::set_allow_insecure_mac(false);
 
         // Create valid keys
-        let keys = CryptoKeys {
-            enc_key: vec![0u8; 32],
-            mac_key: vec![0u8; 32],
-        };
+        let keys = CryptoKeys::from_key_bytes([0u8; 32], [0u8; 32]);
 
         // A type-2 encrypted string with only iv|ciphertext (no MAC)
         // Should be rejected because MAC integrity verification is required
@@ -390,10 +375,7 @@ mod mac_integrity_rejection {
         let _guard = env_lock();
         unsafe { std::env::set_var("VAULTWARDEN_ALLOW_INSECURE_MAC", "1") };
 
-        let keys = CryptoKeys {
-            enc_key: vec![0u8; 32],
-            mac_key: vec![0u8; 32],
-        };
+        let keys = CryptoKeys::from_key_bytes([0u8; 32], [0u8; 32]);
 
         // Without MAC but with env var bypass — should attempt decryption
         // (will fail at AES decrypt since keys/data are garbage, but not at MAC check)
@@ -416,10 +398,7 @@ mod mac_integrity_rejection {
         // Set the global flag
         vaultwarden_cli::crypto::set_allow_insecure_mac(true);
 
-        let keys = CryptoKeys {
-            enc_key: vec![0u8; 32],
-            mac_key: vec![0u8; 32],
-        };
+        let keys = CryptoKeys::from_key_bytes([0u8; 32], [0u8; 32]);
 
         // Without MAC but with global flag — should attempt decryption
         let result = keys.decrypt("2.AAAAAAAAAAAAAAAAAAAAAA==|AAAAAAAAAAAAAAAAAAAAAA==");

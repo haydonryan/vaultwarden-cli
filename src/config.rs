@@ -372,16 +372,21 @@ impl Config {
 
     fn keys_to_key_data(keys: &CryptoKeys) -> KeyData {
         KeyData {
-            enc_key: BASE64.encode(&keys.enc_key),
-            mac_key: BASE64.encode(&keys.mac_key),
+            enc_key: BASE64.encode(keys.enc_key_bytes()),
+            mac_key: BASE64.encode(keys.mac_key_bytes()),
         }
     }
 
     fn key_data_to_keys(data: KeyData) -> Result<CryptoKeys> {
-        Ok(CryptoKeys {
-            enc_key: BASE64.decode(&data.enc_key)?,
-            mac_key: BASE64.decode(&data.mac_key)?,
-        })
+        let enc_key: [u8; 32] = BASE64
+            .decode(&data.enc_key)?
+            .try_into()
+            .map_err(|_len| anyhow::anyhow!("enc_key must be exactly 32 bytes"))?;
+        let mac_key: [u8; 32] = BASE64
+            .decode(&data.mac_key)?
+            .try_into()
+            .map_err(|_len| anyhow::anyhow!("mac_key must be exactly 32 bytes"))?;
+        Ok(CryptoKeys::from_key_bytes(enc_key, mac_key))
     }
 
     pub fn save_keys(&self) -> Result<KeyPersistenceOutcome> {
@@ -911,10 +916,7 @@ mod tests {
         #[test]
         fn test_is_unlocked_true_when_keys_present() {
             let config = Config {
-                crypto_keys: Some(CryptoKeys {
-                    enc_key: vec![0u8; 32],
-                    mac_key: vec![0u8; 32],
-                }),
+                crypto_keys: Some(CryptoKeys::from_key_bytes([0u8; 32], [0u8; 32])),
                 ..Default::default()
             };
             assert!(config.is_unlocked());
@@ -1035,10 +1037,7 @@ mod tests {
 
         #[test]
         fn test_get_keys_for_cipher_user_keys() {
-            let user_keys = CryptoKeys {
-                enc_key: vec![1u8; 32],
-                mac_key: vec![2u8; 32],
-            };
+            let user_keys = CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32]);
 
             let config = Config {
                 crypto_keys: Some(user_keys.clone()),
@@ -1046,19 +1045,13 @@ mod tests {
             };
 
             let keys = config.get_keys_for_cipher(None).unwrap();
-            assert_eq!(keys.enc_key, user_keys.enc_key);
+            assert_eq!(*keys.enc_key_bytes(), *user_keys.enc_key_bytes());
         }
 
         #[test]
         fn test_get_keys_for_cipher_org_keys() {
-            let user_keys = CryptoKeys {
-                enc_key: vec![1u8; 32],
-                mac_key: vec![2u8; 32],
-            };
-            let org_keys = CryptoKeys {
-                enc_key: vec![3u8; 32],
-                mac_key: vec![4u8; 32],
-            };
+            let user_keys = CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32]);
+            let org_keys = CryptoKeys::from_key_bytes([3u8; 32], [4u8; 32]);
 
             let mut config = Config {
                 crypto_keys: Some(user_keys),
@@ -1069,15 +1062,12 @@ mod tests {
                 .insert("org-123".to_string(), org_keys.clone());
 
             let keys = config.get_keys_for_cipher(Some("org-123")).unwrap();
-            assert_eq!(keys.enc_key, org_keys.enc_key);
+            assert_eq!(*keys.enc_key_bytes(), *org_keys.enc_key_bytes());
         }
 
         #[test]
         fn test_get_keys_for_cipher_org_not_found() {
-            let user_keys = CryptoKeys {
-                enc_key: vec![1u8; 32],
-                mac_key: vec![2u8; 32],
-            };
+            let user_keys = CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32]);
 
             let config = Config {
                 crypto_keys: Some(user_keys),
@@ -1104,10 +1094,7 @@ mod tests {
         fn test_config_serialization_excludes_crypto_keys() {
             let config = Config {
                 server: Some("https://vault.example.com".to_string()),
-                crypto_keys: Some(CryptoKeys {
-                    enc_key: vec![1u8; 32],
-                    mac_key: vec![2u8; 32],
-                }),
+                crypto_keys: Some(CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32])),
                 ..Default::default()
             };
 
@@ -1272,17 +1259,14 @@ mod tests {
             let keys_path = temp_dir.path().join("keys.json");
 
             let config = Config {
-                crypto_keys: Some(CryptoKeys {
-                    enc_key: vec![0x42u8; 32],
-                    mac_key: vec![0x43u8; 32],
-                }),
+                crypto_keys: Some(CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32])),
                 ..Default::default()
             };
 
             // Manually save keys
             let user_keys = config.crypto_keys.as_ref().map(|keys| KeyData {
-                enc_key: BASE64.encode(&keys.enc_key),
-                mac_key: BASE64.encode(&keys.mac_key),
+                enc_key: BASE64.encode(keys.enc_key_bytes()),
+                mac_key: BASE64.encode(keys.mac_key_bytes()),
             });
 
             let saved = SavedKeys {
@@ -1312,17 +1296,11 @@ mod tests {
             let mut config = Config::default();
             config.org_crypto_keys.insert(
                 "org-1".to_string(),
-                CryptoKeys {
-                    enc_key: vec![0x11u8; 32],
-                    mac_key: vec![0x12u8; 32],
-                },
+                CryptoKeys::from_key_bytes([0x11u8; 32], [0x12u8; 32]),
             );
             config.org_crypto_keys.insert(
                 "org-2".to_string(),
-                CryptoKeys {
-                    enc_key: vec![0x21u8; 32],
-                    mac_key: vec![0x22u8; 32],
-                },
+                CryptoKeys::from_key_bytes([0x21u8; 32], [0x22u8; 32]),
             );
 
             // Manually save keys
@@ -1333,8 +1311,8 @@ mod tests {
                     (
                         id.clone(),
                         KeyData {
-                            enc_key: BASE64.encode(&keys.enc_key),
-                            mac_key: BASE64.encode(&keys.mac_key),
+                            enc_key: BASE64.encode(keys.enc_key_bytes()),
+                            mac_key: BASE64.encode(keys.mac_key_bytes()),
                         },
                     )
                 })
@@ -1394,10 +1372,7 @@ mod tests {
                 token_expiry: Some(1234567890),
                 encrypted_key: Some("encrypted-key".to_string()),
                 encrypted_private_key: Some("private-key".to_string()),
-                crypto_keys: Some(CryptoKeys {
-                    enc_key: vec![0u8; 32],
-                    mac_key: vec![0u8; 32],
-                }),
+                crypto_keys: Some(CryptoKeys::from_key_bytes([0u8; 32], [0u8; 32])),
                 ..Default::default()
             };
             config
@@ -1405,10 +1380,7 @@ mod tests {
                 .insert("org-1".to_string(), "key".to_string());
             config.org_crypto_keys.insert(
                 "org-1".to_string(),
-                CryptoKeys {
-                    enc_key: vec![0u8; 32],
-                    mac_key: vec![0u8; 32],
-                },
+                CryptoKeys::from_key_bytes([0u8; 32], [0u8; 32]),
             );
 
             // Manually clear fields (simulating clear() behavior without file ops)
