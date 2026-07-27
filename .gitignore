@@ -2,3 +2,5 @@
 /.codex
 sbom.cdx.json
 test.yml
+*.bak
+*_intermediate.rs
