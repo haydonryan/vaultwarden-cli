@@ -14,10 +14,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use tempfile::TempDir;
 use vaultwarden_cli::config::Config;
-use vaultwarden_cli::crypto::{CryptoKeys, MasterKey};
+use vaultwarden_cli::crypto::{CryptoKeys, KdfIterations, MasterKey};
 use vaultwarden_cli::models::{
-    Cipher, CipherType, Collection, FieldData, FieldType, Folder, KdfType, LoginData, NestedCipherData, Organization, Profile, UriMatchType,
-    SyncResponse, TokenResponse, UriData,
+    Cipher, CipherType, Collection, FieldData, FieldType, Folder, KdfType, LoginData,
+    NestedCipherData, Organization, Profile, SyncResponse, TokenResponse, UriData, UriMatchType,
 };
 
 type Aes256CbcEnc = Encryptor<aes::Aes256>;
@@ -302,7 +302,11 @@ pub fn encrypted_user_key(
     iterations: u32,
     keys: &CryptoKeys,
 ) -> String {
-    let master_key = MasterKey::derive(password, email, iterations);
+    let master_key = MasterKey::derive(
+        password,
+        email,
+        KdfIterations::new(iterations).expect("non-zero iterations"),
+    );
     let stretched = master_key.stretch().expect("stretch master key");
 
     let mut symmetric_key = Vec::with_capacity(64);
@@ -458,7 +462,11 @@ pub fn field(name: &str, value: &str, hidden: bool) -> FieldData {
     FieldData {
         name: Some(name.to_string()),
         value: Some(value.to_string()),
-        r#type: if hidden { FieldType::Hidden } else { FieldType::Text },
+        r#type: if hidden {
+            FieldType::Hidden
+        } else {
+            FieldType::Text
+        },
     }
 }
 

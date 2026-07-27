@@ -23,15 +23,23 @@ pub enum KdfType {
 }
 impl std::fmt::Display for KdfType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self { Self::Pbkdf2 => write!(f, "pbkdf2"), Self::Argon2id => write!(f, "argon2id") }
+        match self {
+            Self::Pbkdf2 => write!(f, "pbkdf2"),
+            Self::Argon2id => write!(f, "argon2id"),
+        }
     }
 }
 impl<'de> Deserialize<'de> for KdfType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
         let value = Option::<serde_json::Value>::deserialize(deserializer)?;
         match value {
             Some(serde_json::Value::Number(n)) => match n.as_u64() {
-                Some(0) => Ok(Self::Pbkdf2), Some(1) => Ok(Self::Argon2id), _ => Ok(Self::Pbkdf2),
+                Some(0) => Ok(Self::Pbkdf2),
+                Some(1) => Ok(Self::Argon2id),
+                _ => Ok(Self::Pbkdf2),
             },
             _ => Ok(Self::Pbkdf2),
         }
@@ -41,25 +49,49 @@ impl<'de> Deserialize<'de> for KdfType {
 // ── FieldType enum ──────────────────────────────────────────────────────────────
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum FieldType {
-    Text = 0, Hidden = 1, Boolean = 2, Linked = 3,
+    Text = 0,
+    Hidden = 1,
+    Boolean = 2,
+    Linked = 3,
 }
 impl FieldType {
-    #[must_use] pub const fn is_hidden(self) -> bool { matches!(self, Self::Hidden) }
+    #[must_use]
+    pub const fn is_hidden(self) -> bool {
+        matches!(self, Self::Hidden)
+    }
 }
 impl std::fmt::Display for FieldType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self { Self::Text => write!(f, "text"), Self::Hidden => write!(f, "hidden"), Self::Boolean => write!(f, "boolean"), Self::Linked => write!(f, "linked") }
+        match self {
+            Self::Text => write!(f, "text"),
+            Self::Hidden => write!(f, "hidden"),
+            Self::Boolean => write!(f, "boolean"),
+            Self::Linked => write!(f, "linked"),
+        }
     }
 }
 impl<'de> Deserialize<'de> for FieldType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
         let value = Option::<serde_json::Value>::deserialize(deserializer)?;
         Ok(match value {
-            Some(serde_json::Value::Number(n)) => match n.as_u64().and_then(|n| u8::try_from(n).ok()) {
-                Some(0) => Self::Text, Some(1) => Self::Hidden, Some(2) => Self::Boolean, Some(3) => Self::Linked, _ => Self::Hidden,
-            },
+            Some(serde_json::Value::Number(n)) => {
+                match n.as_u64().and_then(|n| u8::try_from(n).ok()) {
+                    Some(0) => Self::Text,
+                    Some(1) => Self::Hidden,
+                    Some(2) => Self::Boolean,
+                    Some(3) => Self::Linked,
+                    _ => Self::Hidden,
+                }
+            }
             Some(serde_json::Value::String(s)) => match s.parse::<u8>() {
-                Ok(0) => Self::Text, Ok(1) => Self::Hidden, Ok(2) => Self::Boolean, Ok(3) => Self::Linked, _ => Self::Hidden,
+                Ok(0) => Self::Text,
+                Ok(1) => Self::Hidden,
+                Ok(2) => Self::Boolean,
+                Ok(3) => Self::Linked,
+                _ => Self::Hidden,
             },
             _ => Self::Hidden,
         })
@@ -69,22 +101,49 @@ impl<'de> Deserialize<'de> for FieldType {
 // ── UriMatchType enum ───────────────────────────────────────────────────────────
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum UriMatchType {
-    Domain = 0, Host = 1, StartsWith = 2, Exact = 3, RegularExpression = 4, Never = 5,
+    Domain = 0,
+    Host = 1,
+    StartsWith = 2,
+    Exact = 3,
+    RegularExpression = 4,
+    Never = 5,
 }
 impl std::fmt::Display for UriMatchType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self { Self::Domain => write!(f, "domain"), Self::Host => write!(f, "host"), Self::StartsWith => write!(f, "starts_with"), Self::Exact => write!(f, "exact"), Self::RegularExpression => write!(f, "regex"), Self::Never => write!(f, "never") }
+        match self {
+            Self::Domain => write!(f, "domain"),
+            Self::Host => write!(f, "host"),
+            Self::StartsWith => write!(f, "starts_with"),
+            Self::Exact => write!(f, "exact"),
+            Self::RegularExpression => write!(f, "regex"),
+            Self::Never => write!(f, "never"),
+        }
     }
 }
 impl<'de> Deserialize<'de> for UriMatchType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
         let value = Option::<serde_json::Value>::deserialize(deserializer)?;
         match value {
             Some(serde_json::Value::Number(n)) => match n.as_u64() {
-                Some(0) => Ok(Self::Domain), Some(1) => Ok(Self::Host), Some(2) => Ok(Self::StartsWith), Some(3) => Ok(Self::Exact), Some(4) => Ok(Self::RegularExpression), Some(5) => Ok(Self::Never), _ => Ok(Self::Domain),
+                Some(0) => Ok(Self::Domain),
+                Some(1) => Ok(Self::Host),
+                Some(2) => Ok(Self::StartsWith),
+                Some(3) => Ok(Self::Exact),
+                Some(4) => Ok(Self::RegularExpression),
+                Some(5) => Ok(Self::Never),
+                _ => Ok(Self::Domain),
             },
             Some(serde_json::Value::String(s)) => match s.parse::<u8>() {
-                Ok(0) => Ok(Self::Domain), Ok(1) => Ok(Self::Host), Ok(2) => Ok(Self::StartsWith), Ok(3) => Ok(Self::Exact), Ok(4) => Ok(Self::RegularExpression), Ok(5) => Ok(Self::Never), _ => Ok(Self::Domain),
+                Ok(0) => Ok(Self::Domain),
+                Ok(1) => Ok(Self::Host),
+                Ok(2) => Ok(Self::StartsWith),
+                Ok(3) => Ok(Self::Exact),
+                Ok(4) => Ok(Self::RegularExpression),
+                Ok(5) => Ok(Self::Never),
+                _ => Ok(Self::Domain),
             },
             _ => Ok(Self::Domain),
         }
@@ -196,17 +255,20 @@ impl std::fmt::Display for CipherType {
 }
 impl<'de> Deserialize<'de> for CipherType {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where D: Deserializer<'de>,
+    where
+        D: Deserializer<'de>,
     {
         let n = u8::deserialize(deserializer)?;
         match n {
-            1 => Ok(Self::Login), 2 => Ok(Self::SecureNote), 3 => Ok(Self::Card),
-            4 => Ok(Self::Identity), 5 | 6 => Ok(Self::SshKey),
+            1 => Ok(Self::Login),
+            2 => Ok(Self::SecureNote),
+            3 => Ok(Self::Card),
+            4 => Ok(Self::Identity),
+            5 | 6 => Ok(Self::SshKey),
             _ => Err(serde::de::Error::custom("unknown cipher type value")),
         }
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("invalid cipher type")]
