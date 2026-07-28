@@ -13,6 +13,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::crypto::{CryptoKeys, KdfIterations};
+use crate::models::OrgId;
 
 // ── Warning capture (for testability) ───────────────────────────────────────
 //
@@ -385,13 +386,13 @@ pub struct Config {
     pub kdf_iterations: Option<KdfIterations>,
     // Organization encrypted keys: org_id -> encrypted_key
     #[serde(default)]
-    pub org_keys: HashMap<String, String>,
+    pub org_keys: HashMap<OrgId, String>,
     // Store derived keys (base64 encoded) - only in memory/session
     #[serde(skip)]
     pub crypto_keys: Option<CryptoKeys>,
     // Decrypted organization keys: org_id -> keys
     #[serde(skip)]
-    pub org_crypto_keys: HashMap<String, CryptoKeys>,
+    pub org_crypto_keys: HashMap<OrgId, CryptoKeys>,
     // Test and embedded callers can pin config I/O to an explicit directory
     // instead of mutating process-global HOME/XDG_CONFIG_HOME.
     #[serde(skip)]
@@ -576,7 +577,7 @@ impl Config {
         let org_keys: HashMap<String, KeyData> = self
             .org_crypto_keys
             .iter()
-            .map(|(id, keys)| (id.clone(), Self::keys_to_key_data(keys)))
+            .map(|(id, keys)| (id.to_string(), Self::keys_to_key_data(keys)))
             .collect();
 
         let saved = SavedKeys {
@@ -668,7 +669,7 @@ impl Config {
             }
             for (id, keys_data) in saved.org_keys {
                 self.org_crypto_keys
-                    .insert(id, Self::key_data_to_keys(keys_data)?);
+                    .insert(OrgId::new(id).map_err(|e| anyhow::anyhow!("Invalid org ID in saved keys: {}", e))?, Self::key_data_to_keys(keys_data)?);
             }
             return Ok(());
         }
@@ -695,7 +696,7 @@ impl Config {
 
             for (id, keys_data) in saved.org_keys {
                 self.org_crypto_keys
-                    .insert(id, Self::key_data_to_keys(keys_data)?);
+                    .insert(OrgId::new(id).map_err(|e| anyhow::anyhow!("Invalid org ID in saved keys: {}", e))?, Self::key_data_to_keys(keys_data)?);
             }
         }
         Ok(())
@@ -1236,8 +1237,7 @@ mod tests {
                 ..Default::default()
             };
             config
-                .org_crypto_keys
-                .insert("org-123".to_string(), org_keys.clone());
+                .org_crypto_keys.insert(OrgId::new("org-123".to_string()).unwrap(), org_keys.clone());
 
             let keys = config.get_keys_for_cipher(Some("org-123")).unwrap();
             assert_eq!(*keys.enc_key_bytes(), *org_keys.enc_key_bytes());
@@ -1353,11 +1353,9 @@ mod tests {
         fn test_config_with_org_keys() {
             let mut config = Config::default();
             config
-                .org_keys
-                .insert("org-1".to_string(), "encrypted-key-1".to_string());
+                .org_keys.insert(OrgId::new("org-1".to_string()).unwrap(), "encrypted-key-1".to_string());
             config
-                .org_keys
-                .insert("org-2".to_string(), "encrypted-key-2".to_string());
+                .org_keys.insert(OrgId::new("org-2".to_string()).unwrap(), "encrypted-key-2".to_string());
 
             let json = serde_json::to_string(&config).unwrap();
             assert!(json.contains("org-1"));
@@ -1472,12 +1470,10 @@ mod tests {
             let keys_path = temp_dir.path().join("keys.json");
 
             let mut config = Config::default();
-            config.org_crypto_keys.insert(
-                "org-1".to_string(),
+            config.org_crypto_keys.insert(OrgId::new("org-1".to_string()).unwrap(),
                 CryptoKeys::from_key_bytes([0x11u8; 32], [0x12u8; 32]),
             );
-            config.org_crypto_keys.insert(
-                "org-2".to_string(),
+            config.org_crypto_keys.insert(OrgId::new("org-2".to_string()).unwrap(),
                 CryptoKeys::from_key_bytes([0x21u8; 32], [0x22u8; 32]),
             );
 
@@ -1487,7 +1483,7 @@ mod tests {
                 .iter()
                 .map(|(id, keys)| {
                     (
-                        id.clone(),
+                        id.to_string(),
                         KeyData {
                             enc_key: BASE64.encode(keys.enc_key_bytes()),
                             mac_key: BASE64.encode(keys.mac_key_bytes()),
@@ -1554,10 +1550,8 @@ mod tests {
                 ..Default::default()
             };
             config
-                .org_keys
-                .insert("org-1".to_string(), "key".to_string());
-            config.org_crypto_keys.insert(
-                "org-1".to_string(),
+                .org_keys.insert(OrgId::new("org-1".to_string()).unwrap(), "key".to_string());
+            config.org_crypto_keys.insert(OrgId::new("org-1".to_string()).unwrap(),
                 CryptoKeys::from_key_bytes([0u8; 32], [0u8; 32]),
             );
 

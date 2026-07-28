@@ -1,11 +1,124 @@
 use serde::{Deserialize, Deserializer, Serialize};
+use std::borrow::Borrow;
+use std::fmt;
+use std::hash::{Hash, Hasher};
+use std::ops::Deref;
 use std::str::FromStr;
 
 // ── Newtype IDs ─────────────────────────────────────────────────────────────────
 macro_rules! newtype_id {
     ($name:ident) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-        pub struct $name(pub String);
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        #[serde(try_from = "String")]
+        pub struct $name(String);
+
+        impl $name {
+            /// Create a new ID, validating it is non-empty.
+            pub fn new(value: impl Into<String>) -> Result<Self, String> {
+                let s = value.into();
+                if s.is_empty() {
+                    Err(format!("{} must not be empty", stringify!($name)))
+                } else {
+                    Ok(Self(s))
+                }
+            }
+
+            /// Get the inner string value.
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+
+            /// Convert into the inner String, consuming self.
+            pub fn into_inner(self) -> String {
+                self.0
+            }
+        }
+
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl PartialEq for $name {
+            fn eq(&self, other: &Self) -> bool {
+                self.0 == other.0
+            }
+        }
+
+        impl Eq for $name {}
+
+        impl Hash for $name {
+            fn hash<H: Hasher>(&self, state: &mut H) {
+                self.0.hash(state);
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
+
+        impl Deref for $name {
+            type Target = str;
+
+            fn deref(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl Borrow<str> for $name {
+            fn borrow(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl Borrow<String> for $name {
+            fn borrow(&self) -> &String {
+                &self.0
+            }
+        }
+
+        impl PartialEq<str> for $name {
+            fn eq(&self, other: &str) -> bool {
+                self.0 == other
+            }
+        }
+
+        impl PartialEq<&str> for $name {
+            fn eq(&self, other: &&str) -> bool {
+                self.0 == *other
+            }
+        }
+
+        impl PartialEq<String> for $name {
+            fn eq(&self, other: &String) -> bool {
+                self.0 == *other
+            }
+        }
+
+        impl FromStr for $name {
+            type Err = String;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                Self::new(s.to_string())
+            }
+        }
+
+        impl TryFrom<String> for $name {
+            type Error = String;
+
+            fn try_from(value: String) -> Result<Self, Self::Error> {
+                Self::new(value)
+            }
+        }
+
+        impl From<$name> for String {
+            fn from(id: $name) -> String {
+                id.0
+            }
+        }
     };
 }
 
@@ -210,7 +323,7 @@ pub struct CipherListResponse {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Organization {
     #[serde(alias = "Id", alias = "id")]
-    pub id: String,
+    pub id: OrgId,
     #[serde(alias = "Name", alias = "name")]
     pub name: Option<String>,
     #[serde(alias = "Key", alias = "key")]
@@ -220,7 +333,7 @@ pub struct Organization {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Profile {
     #[serde(alias = "Id", alias = "id")]
-    pub id: String,
+    pub id: UserId,
     #[serde(alias = "Email", alias = "email")]
     pub email: String,
     #[serde(alias = "Name", alias = "name")]
@@ -236,7 +349,7 @@ pub struct Profile {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Folder {
     #[serde(alias = "Id", alias = "id")]
-    pub id: String,
+    pub id: FolderId,
     #[serde(alias = "Name", alias = "name")]
     pub name: String,
 }
@@ -244,11 +357,11 @@ pub struct Folder {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Collection {
     #[serde(alias = "Id", alias = "id")]
-    pub id: String,
+    pub id: CollectionId,
     #[serde(alias = "Name", alias = "name")]
     pub name: String,
     #[serde(alias = "OrganizationId", alias = "organizationId")]
-    pub organization_id: String,
+    pub organization_id: OrgId,
 }
 
 // Cipher types
@@ -390,12 +503,12 @@ pub fn cipher_ssh_key_data(data: &CipherData) -> Option<&SshKeyData> {
 
 #[derive(Debug, Clone)]
 pub struct Cipher {
-    pub id: String,
-    pub organization_id: Option<String>,
+    pub id: CipherId,
+    pub organization_id: Option<OrgId>,
     pub name: Option<String>,
     pub notes: Option<String>,
-    pub folder_id: Option<String>,
-    pub collection_ids: Vec<String>,
+    pub folder_id: Option<FolderId>,
+    pub collection_ids: Vec<CollectionId>,
     pub fields: Option<Vec<FieldData>>,
     /// Nested cipher data (Vaultwarden alternate format).
     pub data: Option<NestedCipherData>,
@@ -413,17 +526,17 @@ impl<'de> Deserialize<'de> for Cipher {
         #[derive(Deserialize)]
         struct CipherHelper {
             #[serde(alias = "Id", alias = "id")]
-            id: String,
+            id: CipherId,
             #[serde(alias = "OrganizationId", alias = "organizationId")]
-            organization_id: Option<String>,
+            organization_id: Option<OrgId>,
             #[serde(alias = "Name", alias = "name")]
             name: Option<String>,
             #[serde(alias = "Notes", alias = "notes")]
             notes: Option<String>,
             #[serde(alias = "FolderId", alias = "folderId")]
-            folder_id: Option<String>,
+            folder_id: Option<FolderId>,
             #[serde(alias = "CollectionIds", alias = "collectionIds", default)]
-            collection_ids: Vec<String>,
+            collection_ids: Vec<CollectionId>,
             #[serde(alias = "Fields", alias = "fields")]
             fields: Option<Vec<FieldData>>,
             #[serde(alias = "Data", alias = "data")]
@@ -806,7 +919,7 @@ mod tests {
 
         fn create_test_cipher() -> Cipher {
             Cipher {
-                id: "test-id".to_string(),
+                id: CipherId::new("test-id".to_string()).unwrap(),
                 organization_id: None,
                 name: Some("encrypted-name".to_string()),
                 notes: Some("encrypted-notes".to_string()),
@@ -832,7 +945,7 @@ mod tests {
 
         fn create_cipher_with_nested_data() -> Cipher {
             Cipher {
-                id: "test-id".to_string(),
+                id: CipherId::new("test-id".to_string()).unwrap(),
                 organization_id: None,
                 name: None,
                 notes: None,
@@ -892,9 +1005,8 @@ mod tests {
 
         #[test]
         fn test_get_name_none() {
-            let cipher = Cipher {
-                id: "test".to_string(),
-                organization_id: None,
+            let cipher = Cipher { id: CipherId::new("test".to_string()).unwrap(),
+            organization_id: None,
                 name: None,
                 notes: None,
                 folder_id: None,
@@ -949,9 +1061,8 @@ mod tests {
 
         #[test]
         fn test_get_uri_from_nested_uris_array() {
-            let cipher = Cipher {
-                id: "test".to_string(),
-                organization_id: None,
+            let cipher = Cipher { id: CipherId::new("test".to_string()).unwrap(),
+            organization_id: None,
                 name: None,
                 notes: None,
                 folder_id: None,
@@ -1105,7 +1216,7 @@ mod tests {
             }"#;
 
             let cipher: Cipher = serde_json::from_str(json).unwrap();
-            assert_eq!(cipher.organization_id, Some("org-123".to_string()));
+            assert_eq!(cipher.organization_id, Some(OrgId::new("org-123".to_string()).unwrap()));
         }
 
         #[test]

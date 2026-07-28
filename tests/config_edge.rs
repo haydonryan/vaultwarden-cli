@@ -7,6 +7,7 @@ use support::{
 };
 use vaultwarden_cli::config::{self, Config, KeyPersistenceOutcome};
 use vaultwarden_cli::crypto::CryptoKeys;
+use vaultwarden_cli::models::OrgId;
 
 #[test]
 fn config_load_fails_for_invalid_config_json() {
@@ -342,7 +343,7 @@ fn config_save_keys_round_trips_when_config_dir_exists() {
         ..Default::default()
     });
     config.org_crypto_keys.insert(
-        "org-1".to_string(),
+        OrgId::new("org-1".to_string()).unwrap(),
         CryptoKeys::from_key_bytes([3u8; 32], [4u8; 32]),
     );
 
@@ -384,10 +385,9 @@ fn config_clear_removes_account_metadata_runtime_state_and_saved_keys() {
         ..Default::default()
     });
     config
-        .org_keys
-        .insert("org-1".to_string(), "encrypted-org-key".to_string());
+        .org_keys.insert(OrgId::new("org-1".to_string()).unwrap(), "encrypted-org-key".to_string());
     config.org_crypto_keys.insert(
-        "org-1".to_string(),
+        OrgId::new("org-1".to_string()).unwrap(),
         CryptoKeys::from_key_bytes([3u8; 32], [4u8; 32]),
     );
 

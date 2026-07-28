@@ -6,8 +6,8 @@ use serde_json::json;
 use std::hint::black_box;
 use std::time::Duration;
 use vaultwarden_cli::models::{
-    Cipher, CipherData, CipherOutput, FieldData, FieldOutput, FieldType, LoginData, SyncResponse,
-    UriData,
+    Cipher, CipherData, CipherOutput, CipherId, CollectionId, FieldData, FieldOutput, FieldType,
+    FolderId, LoginData, OrgId, SyncResponse, UriData,
 };
 
 const WORKLOADS: [(&str, usize); 3] = [("small", 16), ("medium", 256), ("large", 1024)];
@@ -108,12 +108,12 @@ fn command_args() -> Vec<Vec<&'static str>> {
 fn fixture_ciphers(count: usize) -> Vec<Cipher> {
     (0..count)
         .map(|i| Cipher {
-            id: format!("cipher-{i:04}"),
-            organization_id: Some(format!("org-{}", i % 4)),
+            id: CipherId::new(format!("cipher-{i:04}")).unwrap(),
+            organization_id: Some(OrgId::new(format!("org-{}", i % 4)).unwrap()),
             name: Some(format!("service-{i:04}")),
             notes: Some(format!("deterministic note {i}")),
-            folder_id: Some(format!("folder-{}", i % 8)),
-            collection_ids: vec![format!("collection-{}", i % 6)],
+            folder_id: Some(FolderId::new(format!("folder-{}", i % 8)).unwrap()),
+            collection_ids: vec![CollectionId::new(format!("collection-{}", i % 6)).unwrap()],
             fields: Some(vec![FieldData {
                 name: Some("api-token".to_string()),
                 value: Some(format!("token-{i:04}")),
@@ -137,7 +137,7 @@ fn fixture_outputs(ciphers: &[Cipher]) -> Vec<CipherOutput> {
     ciphers
         .iter()
         .map(|cipher| CipherOutput {
-            id: cipher.id.clone(),
+            id: cipher.id.to_string(),
             cipher_type: "login".to_string(),
             name: cipher.get_name().unwrap_or_default().to_string(),
             username: cipher.get_username().map(str::to_string),
