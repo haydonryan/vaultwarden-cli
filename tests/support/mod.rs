@@ -16,8 +16,9 @@ use tempfile::TempDir;
 use vaultwarden_cli::config::Config;
 use vaultwarden_cli::crypto::{CryptoKeys, KdfIterations, MasterKey};
 use vaultwarden_cli::models::{
-    Cipher, CipherData, Collection, FieldData, FieldType, Folder, KdfType, LoginData,
-    NestedCipherData, Organization, Profile, SyncResponse, TokenResponse, UriData, UriMatchType,
+    Cipher, CipherData, CipherId, Collection, CollectionId, FieldData, FieldType, Folder, FolderId,
+    KdfType, LoginData, NestedCipherData, Organization, OrgId, Profile, SyncResponse,
+    TokenResponse, UriData, UriMatchType, UserId,
 };
 
 type Aes256CbcEnc = Encryptor<aes::Aes256>;
@@ -365,7 +366,7 @@ pub fn token_response(access_token: &str) -> TokenResponse {
 
 pub fn profile(email: &str) -> Profile {
     Profile {
-        id: "user-1".to_string(),
+        id: UserId::new("user-1".to_string()).unwrap(),
         email: email.to_string(),
         name: Some("Test User".to_string()),
         key: None,
@@ -376,7 +377,7 @@ pub fn profile(email: &str) -> Profile {
 
 pub fn organization(id: &str, name: &str, key: Option<&str>) -> Organization {
     Organization {
-        id: id.to_string(),
+        id: OrgId::new(id.to_string()).unwrap(),
         name: Some(name.to_string()),
         key: key.map(str::to_string),
     }
@@ -384,22 +385,22 @@ pub fn organization(id: &str, name: &str, key: Option<&str>) -> Organization {
 
 pub fn collection(id: &str, name: &str, organization_id: &str) -> Collection {
     Collection {
-        id: id.to_string(),
+        id: CollectionId::new(id.to_string()).unwrap(),
         name: name.to_string(),
-        organization_id: organization_id.to_string(),
+        organization_id: OrgId::new(organization_id.to_string()).unwrap(),
     }
 }
 
 pub fn folder(id: &str, name: &str) -> Folder {
     Folder {
-        id: id.to_string(),
+        id: FolderId::new(id.to_string()).unwrap(),
         name: name.to_string(),
     }
 }
 
 pub fn login_cipher(id: &str, name: &str, username: &str, password: &str, uri: &str) -> Cipher {
     Cipher {
-        id: id.to_string(),
+        id: CipherId::new(id.to_string()).unwrap(),
         organization_id: None,
         name: Some(name.to_string()),
         notes: None,
@@ -427,7 +428,7 @@ pub fn nested_login_cipher(
     uri: &str,
 ) -> Cipher {
     Cipher {
-        id: id.to_string(),
+        id: CipherId::new(id.to_string()).unwrap(),
         organization_id: None,
         name: None,
         notes: None,
