@@ -35,7 +35,10 @@ use crate::config::{
 };
 use crate::crypto::{CryptoKeys, KdfIterations, MasterKey};
 #[allow(unused_imports)]
-use crate::models::{Cipher, CipherData, CipherOutput, CipherType, CipherId, CollectionId, FieldOutput, FolderId, LoginData, OrgId, UserId};
+use crate::models::{
+    Cipher, CipherData, CipherId, CipherOutput, CipherType, CollectionId, FieldOutput, FolderId,
+    LoginData, OrgId, UserId,
+};
 
 struct TokenRefreshLock {
     file: File,
@@ -2326,7 +2329,8 @@ mod tests {
 
         #[test]
         fn test_resolve_org_id_matches_exact_id() {
-            let profile = make_profile(vec![Organization { id: OrgId::new("org-123".to_string()).unwrap(),
+            let profile = make_profile(vec![Organization {
+                id: OrgId::new("org-123".to_string()).unwrap(),
                 name: Some("Engineering".to_string()),
                 key: None,
             }]);
@@ -2337,7 +2341,8 @@ mod tests {
 
         #[test]
         fn test_resolve_org_id_matches_name_case_insensitively() {
-            let profile = make_profile(vec![Organization { id: OrgId::new("org-123".to_string()).unwrap(),
+            let profile = make_profile(vec![Organization {
+                id: OrgId::new("org-123".to_string()).unwrap(),
                 name: Some("Engineering".to_string()),
                 key: None,
             }]);
@@ -2348,7 +2353,8 @@ mod tests {
 
         #[test]
         fn test_resolve_org_id_errors_when_missing() {
-            let profile = make_profile(vec![Organization { id: OrgId::new("org-123".to_string()).unwrap(),
+            let profile = make_profile(vec![Organization {
+                id: OrgId::new("org-123".to_string()).unwrap(),
                 name: Some("Engineering".to_string()),
                 key: None,
             }]);
@@ -2359,8 +2365,9 @@ mod tests {
 
         #[test]
         fn test_cipher_matches_filters_allows_no_filters() {
-            let cipher = Cipher { id: CipherId::new("cipher-1".to_string()).unwrap(),
-            organization_id: Some(OrgId::new("org-1".to_string()).unwrap()),
+            let cipher = Cipher {
+                id: CipherId::new("cipher-1".to_string()).unwrap(),
+                organization_id: Some(OrgId::new("org-1".to_string()).unwrap()),
                 name: None,
                 notes: None,
                 folder_id: None,
@@ -2380,12 +2387,16 @@ mod tests {
 
         #[test]
         fn test_cipher_matches_filters_checks_org_and_collection() {
-            let cipher = Cipher { id: CipherId::new("cipher-1".to_string()).unwrap(),
-            organization_id: Some(OrgId::new("org-1".to_string()).unwrap()),
+            let cipher = Cipher {
+                id: CipherId::new("cipher-1".to_string()).unwrap(),
+                organization_id: Some(OrgId::new("org-1".to_string()).unwrap()),
                 name: None,
                 notes: None,
                 folder_id: None,
-                collection_ids: vec![CollectionId::new("col-1".to_string()).unwrap(), CollectionId::new("col-2".to_string()).unwrap()],
+                collection_ids: vec![
+                    CollectionId::new("col-1".to_string()).unwrap(),
+                    CollectionId::new("col-2".to_string()).unwrap(),
+                ],
                 fields: None,
                 data: None,
                 cipher_data: Some(CipherData::Login(LoginData {
@@ -2418,8 +2429,9 @@ mod tests {
 
         #[test]
         fn test_cipher_matches_filters_rejects_nonmatching_folder() {
-            let cipher = Cipher { id: CipherId::new("cipher-1".to_string()).unwrap(),
-            organization_id: None,
+            let cipher = Cipher {
+                id: CipherId::new("cipher-1".to_string()).unwrap(),
+                organization_id: None,
                 name: None,
                 notes: None,
                 folder_id: Some(FolderId::new("folder-1".to_string()).unwrap()),
@@ -2450,9 +2462,10 @@ mod tests {
 
         #[test]
         fn test_resolve_collection_id_matches_exact_id() {
-            let collection = Collection { id: CollectionId::new("col-1".to_string()).unwrap(),
-            name: "ignored".to_string(),
-            organization_id: OrgId::new("org-1".to_string()).unwrap(),
+            let collection = Collection {
+                id: CollectionId::new("col-1".to_string()).unwrap(),
+                name: "ignored".to_string(),
+                organization_id: OrgId::new("org-1".to_string()).unwrap(),
             };
 
             let config = Config::default();
@@ -2466,14 +2479,17 @@ mod tests {
             let org_keys = CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32]);
             let mut config = Config::default();
             config
-                .org_crypto_keys.insert(OrgId::new("org-1".to_string()).unwrap(), org_keys.clone());
+                .org_crypto_keys
+                .insert(OrgId::new("org-1".to_string()).unwrap(), org_keys.clone());
 
             let collections = vec![
-                Collection { id: CollectionId::new("col-ignored".to_string()).unwrap(),
+                Collection {
+                    id: CollectionId::new("col-ignored".to_string()).unwrap(),
                     name: encrypt_for_test("Shared", &org_keys),
                     organization_id: OrgId::new("org-2".to_string()).unwrap(),
                 },
-                Collection { id: CollectionId::new("col-1".to_string()).unwrap(),
+                Collection {
+                    id: CollectionId::new("col-1".to_string()).unwrap(),
                     name: encrypt_for_test("Shared", &org_keys),
                     organization_id: OrgId::new("org-1".to_string()).unwrap(),
                 },
@@ -2490,16 +2506,20 @@ mod tests {
             let org_2_keys = CryptoKeys::from_key_bytes([3u8; 32], [4u8; 32]);
             let mut config = Config::default();
             config
-                .org_crypto_keys.insert(OrgId::new("org-1".to_string()).unwrap(), org_1_keys.clone());
+                .org_crypto_keys
+                .insert(OrgId::new("org-1".to_string()).unwrap(), org_1_keys.clone());
             config
-                .org_crypto_keys.insert(OrgId::new("org-2".to_string()).unwrap(), org_2_keys.clone());
+                .org_crypto_keys
+                .insert(OrgId::new("org-2".to_string()).unwrap(), org_2_keys.clone());
 
             let collections = vec![
-                Collection { id: CollectionId::new("col-1".to_string()).unwrap(),
+                Collection {
+                    id: CollectionId::new("col-1".to_string()).unwrap(),
                     name: encrypt_for_test("Shared", &org_1_keys),
                     organization_id: OrgId::new("org-1".to_string()).unwrap(),
                 },
-                Collection { id: CollectionId::new("col-2".to_string()).unwrap(),
+                Collection {
+                    id: CollectionId::new("col-2".to_string()).unwrap(),
                     name: encrypt_for_test("shared", &org_2_keys),
                     organization_id: OrgId::new("org-2".to_string()).unwrap(),
                 },
@@ -2514,9 +2534,10 @@ mod tests {
         #[test]
         fn test_resolve_collection_id_errors_without_matching_decrypted_name() {
             let config = Config::default();
-            let collections = vec![Collection { id: CollectionId::new("col-1".to_string()).unwrap(),
-            name: "2.unreadable".to_string(),
-            organization_id: OrgId::new("org-1".to_string()).unwrap(),
+            let collections = vec![Collection {
+                id: CollectionId::new("col-1".to_string()).unwrap(),
+                name: "2.unreadable".to_string(),
+                organization_id: OrgId::new("org-1".to_string()).unwrap(),
             }];
 
             let err = resolve_collection_id(&collections, "missing", None, &config).unwrap_err();
@@ -2990,7 +3011,8 @@ mod tests {
                 ..Default::default()
             };
             config
-                .org_keys.insert(OrgId::new("org-1".to_string()).unwrap(), "key".to_string());
+                .org_keys
+                .insert(OrgId::new("org-1".to_string()).unwrap(), "key".to_string());
             config.crypto_keys = Some(CryptoKeys::from_key_bytes([0u8; 32], [0u8; 32]));
             config.save().unwrap();
             config.save_keys().unwrap();
@@ -3612,8 +3634,10 @@ mod tests {
                 kdf_iterations: KdfIterations::new(100000),
                 ..Default::default()
             };
-            config
-                .org_keys.insert(OrgId::new("org-1".to_string()).unwrap(), encrypted_org_key_str);
+            config.org_keys.insert(
+                OrgId::new("org-1".to_string()).unwrap(),
+                encrypted_org_key_str,
+            );
             config.save().unwrap();
 
             let result = unlock(Some("master-password".to_string()), &Default::default()).await;
@@ -3756,8 +3780,9 @@ mod tests {
                     crypto_keys.mac_key_bytes(),
                 );
 
-            let ciphers = vec![Cipher { id: CipherId::new("cipher-1".to_string()).unwrap(),
-            organization_id: None,
+            let ciphers = vec![Cipher {
+                id: CipherId::new("cipher-1".to_string()).unwrap(),
+                organization_id: None,
                 name: Some(encrypted_name),
                 notes: None,
                 folder_id: None,
@@ -3794,8 +3819,9 @@ mod tests {
                     crypto_keys.mac_key_bytes(),
                 );
 
-            let ciphers = vec![Cipher { id: CipherId::new("cipher-1".to_string()).unwrap(),
-            organization_id: None,
+            let ciphers = vec![Cipher {
+                id: CipherId::new("cipher-1".to_string()).unwrap(),
+                organization_id: None,
                 name: Some(encrypted_name),
                 notes: None,
                 folder_id: None,
@@ -5981,7 +6007,8 @@ mod tests {
                 ..Default::default()
             };
             config
-                .org_crypto_keys.insert(OrgId::new("org-123".to_string()).unwrap(), org_keys.clone());
+                .org_crypto_keys
+                .insert(OrgId::new("org-123".to_string()).unwrap(), org_keys.clone());
 
             let cipher = create_minimal_cipher(Some("org-123"));
             let keys = get_cipher_keys(&config, &cipher).unwrap();
@@ -6634,7 +6661,8 @@ mod tests {
                 ..Default::default()
             };
 
-            let cipher = Cipher { id: CipherId::new("test-id".to_string()).unwrap(),
+            let cipher = Cipher {
+                id: CipherId::new("test-id".to_string()).unwrap(),
                 name: Some(encrypted_name),
                 organization_id: None,
                 notes: None,
@@ -6695,8 +6723,9 @@ mod tests {
         }
 
         fn cipher_with_login_uris(keys: &CryptoKeys, uris: &[&str]) -> Cipher {
-            Cipher { id: CipherId::new("cipher-1".to_string()).unwrap(),
-            organization_id: None,
+            Cipher {
+                id: CipherId::new("cipher-1".to_string()).unwrap(),
+                organization_id: None,
                 name: None,
                 notes: None,
                 folder_id: None,
@@ -6729,8 +6758,9 @@ mod tests {
         #[test]
         fn returns_false_when_no_uris_present() {
             let keys = keys();
-            let cipher = Cipher { id: CipherId::new("cipher-1".to_string()).unwrap(),
-            organization_id: None,
+            let cipher = Cipher {
+                id: CipherId::new("cipher-1".to_string()).unwrap(),
+                organization_id: None,
                 name: None,
                 notes: None,
                 folder_id: None,
@@ -6785,9 +6815,10 @@ mod tests {
         #[test]
         fn errors_when_org_keys_unavailable_for_decrypted_name() {
             let config = Config::default();
-            let collection = Collection { id: CollectionId::new("col-1".to_string()).unwrap(),
-            name: "2.encrypted-data".to_string(),
-            organization_id: OrgId::new("org-missing".to_string()).unwrap(),
+            let collection = Collection {
+                id: CollectionId::new("col-1".to_string()).unwrap(),
+                name: "2.encrypted-data".to_string(),
+                organization_id: OrgId::new("org-missing".to_string()).unwrap(),
             };
 
             let err =

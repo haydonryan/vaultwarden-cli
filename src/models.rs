@@ -1005,8 +1005,9 @@ mod tests {
 
         #[test]
         fn test_get_name_none() {
-            let cipher = Cipher { id: CipherId::new("test".to_string()).unwrap(),
-            organization_id: None,
+            let cipher = Cipher {
+                id: CipherId::new("test".to_string()).unwrap(),
+                organization_id: None,
                 name: None,
                 notes: None,
                 folder_id: None,
@@ -1061,8 +1062,9 @@ mod tests {
 
         #[test]
         fn test_get_uri_from_nested_uris_array() {
-            let cipher = Cipher { id: CipherId::new("test".to_string()).unwrap(),
-            organization_id: None,
+            let cipher = Cipher {
+                id: CipherId::new("test".to_string()).unwrap(),
+                organization_id: None,
                 name: None,
                 notes: None,
                 folder_id: None,
@@ -1216,7 +1218,10 @@ mod tests {
             }"#;
 
             let cipher: Cipher = serde_json::from_str(json).unwrap();
-            assert_eq!(cipher.organization_id, Some(OrgId::new("org-123".to_string()).unwrap()));
+            assert_eq!(
+                cipher.organization_id,
+                Some(OrgId::new("org-123".to_string()).unwrap())
+            );
         }
 
         #[test]

@@ -384,8 +384,10 @@ fn config_clear_removes_account_metadata_runtime_state_and_saved_keys() {
         crypto_keys: Some(CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32])),
         ..Default::default()
     });
-    config
-        .org_keys.insert(OrgId::new("org-1".to_string()).unwrap(), "encrypted-org-key".to_string());
+    config.org_keys.insert(
+        OrgId::new("org-1".to_string()).unwrap(),
+        "encrypted-org-key".to_string(),
+    );
     config.org_crypto_keys.insert(
         OrgId::new("org-1".to_string()).unwrap(),
         CryptoKeys::from_key_bytes([3u8; 32], [4u8; 32]),

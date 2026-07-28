@@ -668,8 +668,11 @@ impl Config {
                 self.crypto_keys = Some(Self::key_data_to_keys(keys_data)?);
             }
             for (id, keys_data) in saved.org_keys {
-                self.org_crypto_keys
-                    .insert(OrgId::new(id).map_err(|e| anyhow::anyhow!("Invalid org ID in saved keys: {}", e))?, Self::key_data_to_keys(keys_data)?);
+                self.org_crypto_keys.insert(
+                    OrgId::new(id)
+                        .map_err(|e| anyhow::anyhow!("Invalid org ID in saved keys: {}", e))?,
+                    Self::key_data_to_keys(keys_data)?,
+                );
             }
             return Ok(());
         }
@@ -695,8 +698,11 @@ impl Config {
             }
 
             for (id, keys_data) in saved.org_keys {
-                self.org_crypto_keys
-                    .insert(OrgId::new(id).map_err(|e| anyhow::anyhow!("Invalid org ID in saved keys: {}", e))?, Self::key_data_to_keys(keys_data)?);
+                self.org_crypto_keys.insert(
+                    OrgId::new(id)
+                        .map_err(|e| anyhow::anyhow!("Invalid org ID in saved keys: {}", e))?,
+                    Self::key_data_to_keys(keys_data)?,
+                );
             }
         }
         Ok(())
@@ -1237,7 +1243,8 @@ mod tests {
                 ..Default::default()
             };
             config
-                .org_crypto_keys.insert(OrgId::new("org-123".to_string()).unwrap(), org_keys.clone());
+                .org_crypto_keys
+                .insert(OrgId::new("org-123".to_string()).unwrap(), org_keys.clone());
 
             let keys = config.get_keys_for_cipher(Some("org-123")).unwrap();
             assert_eq!(*keys.enc_key_bytes(), *org_keys.enc_key_bytes());
@@ -1352,10 +1359,14 @@ mod tests {
         #[test]
         fn test_config_with_org_keys() {
             let mut config = Config::default();
-            config
-                .org_keys.insert(OrgId::new("org-1".to_string()).unwrap(), "encrypted-key-1".to_string());
-            config
-                .org_keys.insert(OrgId::new("org-2".to_string()).unwrap(), "encrypted-key-2".to_string());
+            config.org_keys.insert(
+                OrgId::new("org-1".to_string()).unwrap(),
+                "encrypted-key-1".to_string(),
+            );
+            config.org_keys.insert(
+                OrgId::new("org-2".to_string()).unwrap(),
+                "encrypted-key-2".to_string(),
+            );
 
             let json = serde_json::to_string(&config).unwrap();
             assert!(json.contains("org-1"));
@@ -1470,10 +1481,12 @@ mod tests {
             let keys_path = temp_dir.path().join("keys.json");
 
             let mut config = Config::default();
-            config.org_crypto_keys.insert(OrgId::new("org-1".to_string()).unwrap(),
+            config.org_crypto_keys.insert(
+                OrgId::new("org-1".to_string()).unwrap(),
                 CryptoKeys::from_key_bytes([0x11u8; 32], [0x12u8; 32]),
             );
-            config.org_crypto_keys.insert(OrgId::new("org-2".to_string()).unwrap(),
+            config.org_crypto_keys.insert(
+                OrgId::new("org-2".to_string()).unwrap(),
                 CryptoKeys::from_key_bytes([0x21u8; 32], [0x22u8; 32]),
             );
 
@@ -1550,8 +1563,10 @@ mod tests {
                 ..Default::default()
             };
             config
-                .org_keys.insert(OrgId::new("org-1".to_string()).unwrap(), "key".to_string());
-            config.org_crypto_keys.insert(OrgId::new("org-1".to_string()).unwrap(),
+                .org_keys
+                .insert(OrgId::new("org-1".to_string()).unwrap(), "key".to_string());
+            config.org_crypto_keys.insert(
+                OrgId::new("org-1".to_string()).unwrap(),
                 CryptoKeys::from_key_bytes([0u8; 32], [0u8; 32]),
             );
 

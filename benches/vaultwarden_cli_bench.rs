@@ -6,7 +6,7 @@ use serde_json::json;
 use std::hint::black_box;
 use std::time::Duration;
 use vaultwarden_cli::models::{
-    Cipher, CipherData, CipherOutput, CipherId, CollectionId, FieldData, FieldOutput, FieldType,
+    Cipher, CipherData, CipherId, CipherOutput, CollectionId, FieldData, FieldOutput, FieldType,
     FolderId, LoginData, OrgId, SyncResponse, UriData,
 };
 

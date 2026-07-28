@@ -17,7 +17,7 @@ use vaultwarden_cli::config::Config;
 use vaultwarden_cli::crypto::{CryptoKeys, KdfIterations, MasterKey};
 use vaultwarden_cli::models::{
     Cipher, CipherData, CipherId, Collection, CollectionId, FieldData, FieldType, Folder, FolderId,
-    KdfType, LoginData, NestedCipherData, Organization, OrgId, Profile, SyncResponse,
+    KdfType, LoginData, NestedCipherData, OrgId, Organization, Profile, SyncResponse,
     TokenResponse, UriData, UriMatchType, UserId,
 };
 
