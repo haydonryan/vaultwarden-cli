@@ -579,6 +579,49 @@ fn cipher_uri_matches(uri: &str, keys: &CryptoKeys, cipher: &Cipher) -> bool {
     false
 }
 
+fn cipher_has_usable_totp(cipher: &Cipher, keys: &CryptoKeys) -> bool {
+    matches!(cipher.cipher_data, Some(CipherData::Login(_)))
+        && cipher
+            .cipher_data
+            .as_ref()
+            .and_then(|data| match data {
+                CipherData::Login(login) => login.totp.as_deref(),
+                _ => None,
+            })
+            .or_else(|| cipher.data.as_ref().and_then(|data| data.totp.as_deref()))
+            .filter(|totp| !totp.trim().is_empty())
+            .and_then(|totp| keys.decrypt_to_string(totp).ok())
+            .is_some_and(|totp| !totp.trim().is_empty())
+}
+
+fn cipher_matches_totp_search(
+    cipher: &Cipher,
+    keys: &CryptoKeys,
+    query: &str,
+    query_lower: &str,
+) -> bool {
+    if query.len() >= 8
+        && cipher
+            .id
+            .as_str()
+            .get(..query.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(query))
+    {
+        return true;
+    }
+
+    for encrypted in [cipher.get_name(), cipher.get_username()] {
+        if encrypted
+            .and_then(|value| keys.decrypt_to_string(value).ok())
+            .is_some_and(|value| value.to_lowercase().contains(query_lower))
+        {
+            return true;
+        }
+    }
+
+    cipher_uri_matches(query, keys, cipher)
+}
+
 fn ambiguous_uri_message(uri: &str, count: usize) -> String {
     format!(
         "URI '{uri}' is ambiguous; {count} vault items match case-insensitively. Use an item id to disambiguate."
@@ -1099,6 +1142,46 @@ pub async fn list(
     json_output: bool,
     opts: &CommandOptions,
 ) -> Result<()> {
+    list_with_json_empty_array(
+        type_filter,
+        search,
+        org_filter,
+        collection_filter,
+        json_output,
+        false,
+        opts,
+    )
+    .await
+}
+
+pub async fn list_items(
+    type_filter: Option<String>,
+    search: Option<String>,
+    org_filter: Option<String>,
+    collection_filter: Option<String>,
+    opts: &CommandOptions,
+) -> Result<()> {
+    list_with_json_empty_array(
+        type_filter,
+        search,
+        org_filter,
+        collection_filter,
+        true,
+        true,
+        opts,
+    )
+    .await
+}
+
+async fn list_with_json_empty_array(
+    type_filter: Option<String>,
+    search: Option<String>,
+    org_filter: Option<String>,
+    collection_filter: Option<String>,
+    json_output: bool,
+    json_empty_array: bool,
+    opts: &CommandOptions,
+) -> Result<()> {
     let ctx = load_sync_context(opts.allow_insecure_http).await?;
     let (org_id_filter, collection_id_filter) = resolve_org_and_collection_filters(
         &ctx.sync_response,
@@ -1186,6 +1269,11 @@ pub async fn list(
     }
 
     if outputs.is_empty() {
+        if json_empty_array {
+            ensure_plaintext_json_allowed(opts)?;
+            println!("[]");
+            return Ok(());
+        }
         println!("No items found.");
         return Ok(());
     }
@@ -1288,6 +1376,76 @@ pub async fn get(
         ensure_plaintext_json_allowed(opts)?;
     }
     print_cipher_output(&output, format)
+}
+
+pub async fn get_totp(query: &str, opts: &CommandOptions) -> Result<()> {
+    let query = query.trim();
+    if query.is_empty() {
+        anyhow::bail!("TOTP item search cannot be empty");
+    }
+
+    let ctx = load_sync_context(opts.allow_insecure_http).await?;
+    let cipher = if let Some(cipher) = ctx
+        .sync_response
+        .ciphers
+        .iter()
+        .find(|cipher| cipher.id.as_str().eq_ignore_ascii_case(query))
+    {
+        cipher
+    } else {
+        let query_lower = query.to_lowercase();
+        let mut matches = Vec::new();
+        for cipher in ctx
+            .sync_response
+            .ciphers
+            .iter()
+            .filter(|cipher| cipher.deleted_date.is_none())
+        {
+            let keys = match get_cipher_keys(&ctx.config, cipher) {
+                Ok(keys) => keys,
+                Err(_) => continue,
+            };
+            if cipher_matches_totp_search(cipher, keys, query, &query_lower)
+                && cipher_has_usable_totp(cipher, keys)
+            {
+                matches.push(cipher);
+            }
+        }
+        match matches.as_slice() {
+            [cipher] => *cipher,
+            [] => anyhow::bail!("TOTP item '{query}' not found"),
+            matches => anyhow::bail!(
+                "TOTP search '{query}' is ambiguous; {} vault items match. Use an item id to disambiguate.",
+                matches.len()
+            ),
+        }
+    };
+
+    match cipher.cipher_data.as_ref() {
+        Some(CipherData::Login(_)) => {}
+        _ => anyhow::bail!("Selected item is not a login"),
+    }
+    let encrypted_totp = cipher
+        .cipher_data
+        .as_ref()
+        .and_then(|data| match data {
+            CipherData::Login(login) => login.totp.as_deref(),
+            _ => None,
+        })
+        .or_else(|| cipher.data.as_ref().and_then(|data| data.totp.as_deref()))
+        .filter(|totp| !totp.trim().is_empty())
+        .context("Selected login has no TOTP seed")?;
+    let keys = get_cipher_keys(&ctx.config, cipher)?;
+    let seed = keys
+        .decrypt_to_string(encrypted_totp)
+        .context("Failed to decrypt the selected login TOTP seed")?;
+    if seed.trim().is_empty() {
+        anyhow::bail!("Selected login has no TOTP seed");
+    }
+    let timestamp = u64::try_from(unix_now()?).context("System clock is before the Unix epoch")?;
+    let code = crate::totp::generate(&seed, timestamp).context("Failed to generate TOTP code")?;
+    println!("{code}");
+    Ok(())
 }
 
 pub async fn get_by_uri(
@@ -2368,6 +2526,7 @@ mod tests {
             let cipher = Cipher {
                 id: CipherId::new("cipher-1".to_string()).unwrap(),
                 organization_id: Some(OrgId::new("org-1".to_string()).unwrap()),
+                deleted_date: None,
                 name: None,
                 notes: None,
                 folder_id: None,
@@ -2390,6 +2549,7 @@ mod tests {
             let cipher = Cipher {
                 id: CipherId::new("cipher-1".to_string()).unwrap(),
                 organization_id: Some(OrgId::new("org-1".to_string()).unwrap()),
+                deleted_date: None,
                 name: None,
                 notes: None,
                 folder_id: None,
@@ -2432,6 +2592,7 @@ mod tests {
             let cipher = Cipher {
                 id: CipherId::new("cipher-1".to_string()).unwrap(),
                 organization_id: None,
+                deleted_date: None,
                 name: None,
                 notes: None,
                 folder_id: Some(FolderId::new("folder-1".to_string()).unwrap()),
@@ -2557,6 +2718,7 @@ mod tests {
             Cipher {
                 id: CipherId::new(id.to_string()).unwrap(),
                 organization_id: None,
+                deleted_date: None,
                 name: None,
                 notes: None,
                 folder_id: None,
@@ -3783,6 +3945,7 @@ mod tests {
             let ciphers = vec![Cipher {
                 id: CipherId::new("cipher-1".to_string()).unwrap(),
                 organization_id: None,
+                deleted_date: None,
                 name: Some(encrypted_name),
                 notes: None,
                 folder_id: None,
@@ -3822,6 +3985,7 @@ mod tests {
             let ciphers = vec![Cipher {
                 id: CipherId::new("cipher-1".to_string()).unwrap(),
                 organization_id: None,
+                deleted_date: None,
                 name: Some(encrypted_name),
                 notes: None,
                 folder_id: None,
@@ -5968,6 +6132,7 @@ mod tests {
             Cipher {
                 id: CipherId::new("test".to_string()).unwrap(),
                 organization_id: org_id.map(|s| OrgId::new(s.to_string()).unwrap()),
+                deleted_date: None,
                 name: None,
                 notes: None,
                 folder_id: None,
@@ -6115,6 +6280,13 @@ mod tests {
             assert!(out[0].contains("\"id\": \"cipher-1\""));
             assert!(out[0].contains("\"type\": \"login\""));
             assert!(out[0].contains("\"name\": \"My App\""));
+        }
+
+        #[test]
+        fn test_format_list_output_json_empty_array() {
+            let out = format_list_output(&[], true).unwrap();
+
+            assert_eq!(out, vec!["[]"]);
         }
 
         #[test]
@@ -6612,6 +6784,7 @@ mod tests {
             Cipher {
                 id: CipherId::new(id.to_string()).unwrap(),
                 organization_id: None,
+                deleted_date: None,
                 name: None,
                 notes: None,
                 folder_id: None,
@@ -6665,6 +6838,7 @@ mod tests {
                 id: CipherId::new("test-id".to_string()).unwrap(),
                 name: Some(encrypted_name),
                 organization_id: None,
+                deleted_date: None,
                 notes: None,
                 folder_id: None,
                 collection_ids: Vec::new(),
@@ -6726,6 +6900,7 @@ mod tests {
             Cipher {
                 id: CipherId::new("cipher-1".to_string()).unwrap(),
                 organization_id: None,
+                deleted_date: None,
                 name: None,
                 notes: None,
                 folder_id: None,
@@ -6761,6 +6936,7 @@ mod tests {
             let cipher = Cipher {
                 id: CipherId::new("cipher-1".to_string()).unwrap(),
                 organization_id: None,
+                deleted_date: None,
                 name: None,
                 notes: None,
                 folder_id: None,

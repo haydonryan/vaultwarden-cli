@@ -1,6 +1,6 @@
 #![allow(clippy::pedantic, clippy::nursery)]
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use vaultwarden_cli::commands::{self, OutputFormat};
 
 type Result<T> = std::result::Result<T, anyhow::Error>;
@@ -63,6 +63,9 @@ enum Commands {
 
     /// List items in the vault
     List {
+        /// Object to list
+        object: Option<ListObject>,
+
         /// Filter by item type (login, note, card, identity, ssh)
         #[arg(short, long)]
         r#type: Option<String>,
@@ -88,6 +91,9 @@ enum Commands {
     Get {
         /// Item ID or name to retrieve
         item: String,
+
+        /// Query for two-position get operations
+        query: Option<String>,
 
         /// Output format
         #[arg(short, long, default_value_t = OutputFormat::Json)]
@@ -202,6 +208,11 @@ enum Commands {
     },
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+enum ListObject {
+    Items,
+}
+
 const fn effective_format(format: OutputFormat, username: bool, password: bool) -> OutputFormat {
     if username {
         OutputFormat::Username
@@ -257,30 +268,56 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
             .await
             .map(|_| commands::CommandOutcome::Success),
         Commands::List {
+            object,
             r#type,
             search,
             org,
             collection,
             json,
-        } => commands::list(r#type, search, org, collection, json, &opts)
-            .await
-            .map(|_| commands::CommandOutcome::Success),
+        } => {
+            if object.is_some() {
+                commands::list_items(r#type, search, org, collection, &opts).await
+            } else {
+                commands::list(r#type, search, org, collection, json, &opts).await
+            }
+            .map(|_| commands::CommandOutcome::Success)
+        }
         Commands::Get {
             item,
+            query,
             format,
             username,
             password,
             org,
             collection,
-        } => commands::get(
-            &item,
-            effective_format(format, username, password),
-            org,
-            collection,
-            &opts,
-        )
-        .await
-        .map(|_| commands::CommandOutcome::Success),
+        } => {
+            if let Some(query) = query {
+                if !item.eq_ignore_ascii_case("totp") {
+                    anyhow::bail!(
+                        "Unknown two-position get form '{item} <query>'; supported form: get totp <id-or-search>"
+                    );
+                }
+                if username
+                    || password
+                    || format != OutputFormat::Json
+                    || org.is_some()
+                    || collection.is_some()
+                {
+                    anyhow::bail!("get totp does not support legacy get output or scope options");
+                }
+                commands::get_totp(&query, &opts).await
+            } else {
+                commands::get(
+                    &item,
+                    effective_format(format, username, password),
+                    org,
+                    collection,
+                    &opts,
+                )
+                .await
+            }
+            .map(|_| commands::CommandOutcome::Success)
+        }
         Commands::GetUri {
             uri,
             format,
@@ -742,6 +779,7 @@ mod tests {
         ]);
         let Commands::Get {
             item,
+            query,
             format,
             username,
             password,
@@ -752,6 +790,7 @@ mod tests {
             panic!("expected Get command");
         };
         assert_eq!(item, "item-name");
+        assert_eq!(query, None);
         assert!(username);
         assert!(!password);
         assert_eq!(format, OutputFormat::Json);
@@ -764,6 +803,7 @@ mod tests {
         let cli = Cli::parse_from(["vaultwarden-cli", "get", "item-name", "--password"]);
         let Commands::Get {
             item,
+            query,
             format,
             username,
             password,
@@ -774,6 +814,7 @@ mod tests {
             panic!("expected Get command");
         };
         assert_eq!(item, "item-name");
+        assert_eq!(query, None);
         assert!(!username);
         assert!(password);
         assert_eq!(format, OutputFormat::Json); // default
@@ -785,6 +826,7 @@ mod tests {
     fn test_cli_list_parsing_with_json() {
         let cli = Cli::parse_from(["vaultwarden-cli", "list", "--json"]);
         let Commands::List {
+            object,
             r#type,
             json,
             search,
@@ -794,11 +836,43 @@ mod tests {
         else {
             panic!("expected List command");
         };
+        assert_eq!(object, None);
         assert_eq!(r#type, None);
         assert!(json);
         assert_eq!(search, None);
         assert_eq!(org, None);
         assert_eq!(collection, None);
+    }
+
+    #[test]
+    fn test_cli_get_totp_two_position_parsing() {
+        let cli = Cli::parse_from(["vaultwarden-cli", "get", "totp", "item-search"]);
+        let Commands::Get { item, query, .. } = cli.command else {
+            panic!("expected Get command");
+        };
+
+        assert_eq!(item, "totp");
+        assert_eq!(query.as_deref(), Some("item-search"));
+    }
+
+    #[test]
+    fn test_cli_list_items_parsing() {
+        let cli = Cli::parse_from(["vaultwarden-cli", "list", "items"]);
+        let Commands::List { object, json, .. } = cli.command else {
+            panic!("expected List command");
+        };
+
+        assert_eq!(object, Some(ListObject::Items));
+        assert!(!json);
+    }
+
+    #[test]
+    fn test_cli_list_rejects_unsupported_object() {
+        let Err(err) = Cli::try_parse_from(["vaultwarden-cli", "list", "folders"]) else {
+            panic!("unsupported list object should be rejected");
+        };
+
+        assert!(err.to_string().contains("invalid value 'folders'"));
     }
 
     #[test]

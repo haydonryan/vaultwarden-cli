@@ -1039,7 +1039,7 @@ async fn list_with_json_flag_includes_complete_items() {
         .and(path("/api/sync"))
         .and(header("authorization", "Bearer access-token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
-        .expect(1)
+        .expect(2)
         .mount(&mock_server)
         .await;
 
@@ -1061,6 +1061,19 @@ async fn list_with_json_flag_includes_complete_items() {
         .stdout(predicate::str::starts_with("["))
         .stdout(predicate::str::contains("\"name\": \"Alpha Login\""))
         .stdout(predicate::str::contains("\"name\": \"Beta Note\""));
+
+    ctx.binary()
+        .arg("--allow-insecure-http")
+        .arg("list")
+        .arg("items")
+        .arg("--search")
+        .arg("alpha")
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("["))
+        .stdout(predicate::str::contains("\"type\": \"login\""))
+        .stdout(predicate::str::contains("\"name\": \"Alpha Login\""))
+        .stdout(predicate::str::contains("\"name\": \"Beta Note\"").not());
 }
 
 #[tokio::test]
@@ -1094,7 +1107,7 @@ async fn list_json_requires_opt_in_when_stdout_is_captured() {
         .and(path("/api/sync"))
         .and(header("authorization", "Bearer access-token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
-        .expect(2)
+        .expect(3)
         .mount(&mock_server)
         .await;
 
@@ -1126,6 +1139,59 @@ async fn list_json_requires_opt_in_when_stdout_is_captured() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"password\": \"alpha-secret\""));
+
+    ctx.binary()
+        .env_remove("VAULTWARDEN_ALLOW_PLAINTEXT_JSON")
+        .arg("--allow-insecure-http")
+        .arg("list")
+        .arg("items")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Plaintext JSON output"))
+        .stderr(predicate::str::contains("--allow-plaintext-json"));
+}
+
+#[tokio::test]
+async fn list_items_returns_empty_json_array() {
+    let ctx = TestContext::new();
+    let keys = test_crypto_keys();
+    let mock_server = MockServer::start().await;
+
+    let sync_response = serde_json::json!({
+        "Ciphers": [],
+        "Folders": [],
+        "Collections": [],
+        "Profile": {
+            "Id": "user-1",
+            "Email": "user@example.com",
+            "Organizations": []
+        }
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/api/sync"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    ctx.write_config(&Config {
+        server: Some(mock_server.uri()),
+        access_token: Some("access-token".to_string()),
+        token_expiry: Some(i64::MAX),
+        ..Default::default()
+    })
+    .unwrap();
+    ctx.write_saved_user_keys(&keys).unwrap();
+
+    ctx.binary()
+        .arg("--allow-insecure-http")
+        .arg("list")
+        .arg("items")
+        .assert()
+        .success()
+        .stdout("[]\n");
 }
 
 #[tokio::test]
@@ -1538,4 +1604,297 @@ async fn list_uses_sync_ciphers_without_ciphers_endpoint_fallback() {
         .success()
         .stdout(predicate::str::contains("\"name\": \"Alpha Login\""))
         .stderr(predicate::str::contains("Could not load /api/ciphers").not());
+}
+
+#[test]
+fn get_rejects_unknown_two_position_form_before_vault_access() {
+    let ctx = TestContext::new();
+
+    ctx.binary()
+        .args(["get", "password", "some-item"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Unknown two-position get form"))
+        .stderr(predicate::str::contains("get totp <id-or-search>"))
+        .stderr(predicate::str::contains("Not logged in").not());
+}
+
+#[tokio::test]
+async fn get_totp_fallback_ignores_whitespace_only_seed() {
+    let ctx = TestContext::new();
+    let keys = test_crypto_keys();
+    let mock_server = MockServer::start().await;
+    let seed = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+
+    let sync_response = serde_json::json!({
+        "Ciphers": [
+            {
+                "Id": "valid-totp-id",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Matching Account", &keys),
+                "Login": { "Totp": encrypt_string_for_test(seed, &keys) }
+            },
+            {
+                "Id": "blank-totp-id",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Matching Account", &keys),
+                "Login": { "Totp": encrypt_string_for_test(" \t\n", &keys) }
+            }
+        ],
+        "Folders": [],
+        "Collections": [],
+        "Profile": {
+            "Id": "user-1",
+            "Email": "user@example.com",
+            "Organizations": []
+        }
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/api/sync"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    ctx.write_config(&Config {
+        server: Some(mock_server.uri()),
+        access_token: Some("access-token".to_string()),
+        token_expiry: Some(i64::MAX),
+        ..Default::default()
+    })
+    .unwrap();
+    ctx.write_saved_user_keys(&keys).unwrap();
+
+    ctx.binary()
+        .arg("--allow-insecure-http")
+        .args(["get", "totp", "Matching Account"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_match(r"^[0-9]{6}\n$").unwrap());
+}
+
+#[tokio::test]
+async fn get_totp_supports_id_and_search_errors_without_changing_legacy_get() {
+    let ctx = TestContext::new();
+    let keys = test_crypto_keys();
+    let mock_server = MockServer::start().await;
+    let seed = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+
+    let sync_response = serde_json::json!({
+        "Ciphers": [
+            {
+                "Id": "totp-id",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Primary Account", &keys),
+                "Login": {
+                    "Username": "deliberately-not-encrypted",
+                    "Password": "deliberately-not-encrypted",
+                    "Totp": encrypt_string_for_test(seed, &keys)
+                }
+            },
+            {
+                "Id": "team-1",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Team Alpha", &keys),
+                "Login": { "Totp": encrypt_string_for_test(seed, &keys) }
+            },
+            {
+                "Id": "team-2",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Team Beta", &keys),
+                "Login": { "Totp": encrypt_string_for_test(seed, &keys) }
+            },
+            {
+                "Id": "username-search-id",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Username Account", &keys),
+                "Login": {
+                    "Username": encrypt_string_for_test("CaseUser@example.com", &keys),
+                    "Totp": encrypt_string_for_test(seed, &keys)
+                }
+            },
+            {
+                "Id": "uri-search-id",
+                "Type": 1,
+                "Name": encrypt_string_for_test("URI Account", &keys),
+                "Login": {
+                    "Totp": encrypt_string_for_test(seed, &keys),
+                    "Uris": [
+                        { "Uri": encrypt_string_for_test("https://first.invalid", &keys) },
+                        { "Uri": encrypt_string_for_test("https://Second.Example.com/login", &keys) }
+                    ]
+                }
+            },
+            {
+                "Id": "abcdef12-3456-7890-abcd-ef1234567890",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Prefix Account", &keys),
+                "Login": { "Totp": encrypt_string_for_test(seed, &keys) }
+            },
+            {
+                "Id": "mixed-usable",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Mixed Result", &keys),
+                "Login": { "Totp": encrypt_string_for_test(seed, &keys) }
+            },
+            {
+                "Id": "mixed-no-seed",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Mixed Result", &keys),
+                "Login": {}
+            },
+            {
+                "Id": "mixed-whitespace-seed",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Mixed Result", &keys),
+                "Login": { "Totp": encrypt_string_for_test(" \t\n", &keys) }
+            },
+            {
+                "Id": "mixed-note",
+                "Type": 2,
+                "Name": encrypt_string_for_test("Mixed Result", &keys),
+                "SecureNote": { "Type": 0 }
+            },
+            {
+                "Id": "deleted-active",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Deleted Collision", &keys),
+                "Login": { "Totp": encrypt_string_for_test(seed, &keys) }
+            },
+            {
+                "Id": "deleted-trashed",
+                "Type": 1,
+                "DeletedDate": "2026-07-29T12:00:00.000Z",
+                "Name": encrypt_string_for_test("Deleted Collision", &keys),
+                "Login": { "Totp": encrypt_string_for_test(seed, &keys) }
+            },
+            {
+                "Id": "note-id",
+                "Type": 2,
+                "Name": encrypt_string_for_test("TOTP Note", &keys),
+                "SecureNote": { "Type": 0 }
+            },
+            {
+                "Id": "no-seed-id",
+                "Type": 1,
+                "Name": encrypt_string_for_test("No Seed", &keys),
+                "Login": {}
+            },
+            {
+                "Id": "whitespace-seed-id",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Whitespace Seed", &keys),
+                "Login": { "Totp": encrypt_string_for_test(" \t\n", &keys) }
+            },
+            {
+                "Id": "invalid-seed-id",
+                "Type": 1,
+                "Name": encrypt_string_for_test("Invalid Seed", &keys),
+                "Login": { "Totp": encrypt_string_for_test("0189-+/=", &keys) }
+            },
+            {
+                "Id": "legacy-totp-item",
+                "Type": 1,
+                "Name": encrypt_string_for_test("totp", &keys),
+                "Login": {
+                    "Username": encrypt_string_for_test("legacy-user", &keys),
+                    "Password": encrypt_string_for_test("legacy-password", &keys)
+                }
+            }
+        ],
+        "Folders": [],
+        "Collections": [],
+        "Profile": {
+            "Id": "user-1",
+            "Email": "user@example.com",
+            "Organizations": []
+        }
+    });
+
+    Mock::given(method("GET"))
+        .and(path("/api/sync"))
+        .and(header("authorization", "Bearer access-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
+        .expect(14)
+        .mount(&mock_server)
+        .await;
+
+    ctx.write_config(&Config {
+        server: Some(mock_server.uri()),
+        access_token: Some("access-token".to_string()),
+        token_expiry: Some(i64::MAX),
+        ..Default::default()
+    })
+    .unwrap();
+    ctx.write_saved_user_keys(&keys).unwrap();
+
+    for query in [
+        "totp-id",
+        "Primary",
+        "CASEUSER@EXAMPLE.COM",
+        "SECOND.EXAMPLE.COM",
+        "ABCDEF12",
+        "Mixed Result",
+        "Deleted Collision",
+    ] {
+        ctx.binary()
+            .arg("--allow-insecure-http")
+            .args(["get", "totp", query])
+            .assert()
+            .success()
+            .stdout(predicate::str::is_match(r"^[0-9]{6}\n$").unwrap());
+    }
+
+    ctx.binary()
+        .arg("--allow-insecure-http")
+        .args(["get", "totp", "Team"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("TOTP search 'Team' is ambiguous"));
+
+    ctx.binary()
+        .arg("--allow-insecure-http")
+        .args(["get", "totp", "abcdef1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("TOTP item 'abcdef1' not found"));
+
+    ctx.binary()
+        .arg("--allow-insecure-http")
+        .args(["get", "totp", "note-id"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Selected item is not a login"));
+
+    ctx.binary()
+        .arg("--allow-insecure-http")
+        .args(["get", "totp", "no-seed-id"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Selected login has no TOTP seed"));
+
+    ctx.binary()
+        .arg("--allow-insecure-http")
+        .args(["get", "totp", "whitespace-seed-id"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Selected login has no TOTP seed"));
+
+    ctx.binary()
+        .arg("--allow-insecure-http")
+        .args(["get", "totp", "invalid-seed-id"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Failed to generate TOTP code"))
+        .stderr(predicate::str::contains("0189-+/=").not());
+
+    ctx.binary()
+        .arg("--allow-insecure-http")
+        .args(["get", "totp"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"name\": \"totp\""))
+        .stdout(predicate::str::contains("\"password\": \"legacy-password\""));
 }

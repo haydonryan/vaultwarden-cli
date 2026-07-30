@@ -110,6 +110,7 @@ fn fixture_ciphers(count: usize) -> Vec<Cipher> {
         .map(|i| Cipher {
             id: CipherId::new(format!("cipher-{i:04}")).unwrap(),
             organization_id: Some(OrgId::new(format!("org-{}", i % 4)).unwrap()),
+            deleted_date: None,
             name: Some(format!("service-{i:04}")),
             notes: Some(format!("deterministic note {i}")),
             folder_id: Some(FolderId::new(format!("folder-{}", i % 8)).unwrap()),

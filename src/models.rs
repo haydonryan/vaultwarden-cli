@@ -505,6 +505,7 @@ pub fn cipher_ssh_key_data(data: &CipherData) -> Option<&SshKeyData> {
 pub struct Cipher {
     pub id: CipherId,
     pub organization_id: Option<OrgId>,
+    pub deleted_date: Option<String>,
     pub name: Option<String>,
     pub notes: Option<String>,
     pub folder_id: Option<FolderId>,
@@ -529,6 +530,8 @@ impl<'de> Deserialize<'de> for Cipher {
             id: CipherId,
             #[serde(alias = "OrganizationId", alias = "organizationId")]
             organization_id: Option<OrgId>,
+            #[serde(alias = "DeletedDate", alias = "deletedDate")]
+            deleted_date: Option<String>,
             #[serde(alias = "Name", alias = "name")]
             name: Option<String>,
             #[serde(alias = "Notes", alias = "notes")]
@@ -592,6 +595,7 @@ impl<'de> Deserialize<'de> for Cipher {
         Ok(Cipher {
             id: h.id,
             organization_id: h.organization_id,
+            deleted_date: h.deleted_date,
             name: h.name,
             notes: h.notes,
             folder_id: h.folder_id,
@@ -921,6 +925,7 @@ mod tests {
             Cipher {
                 id: CipherId::new("test-id".to_string()).unwrap(),
                 organization_id: None,
+                deleted_date: None,
                 name: Some("encrypted-name".to_string()),
                 notes: Some("encrypted-notes".to_string()),
                 folder_id: None,
@@ -947,6 +952,7 @@ mod tests {
             Cipher {
                 id: CipherId::new("test-id".to_string()).unwrap(),
                 organization_id: None,
+                deleted_date: None,
                 name: None,
                 notes: None,
                 folder_id: None,
@@ -1008,6 +1014,7 @@ mod tests {
             let cipher = Cipher {
                 id: CipherId::new("test".to_string()).unwrap(),
                 organization_id: None,
+                deleted_date: None,
                 name: None,
                 notes: None,
                 folder_id: None,
@@ -1065,6 +1072,7 @@ mod tests {
             let cipher = Cipher {
                 id: CipherId::new("test".to_string()).unwrap(),
                 organization_id: None,
+                deleted_date: None,
                 name: None,
                 notes: None,
                 folder_id: None,
