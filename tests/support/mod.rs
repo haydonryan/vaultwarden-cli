@@ -402,6 +402,7 @@ pub fn login_cipher(id: &str, name: &str, username: &str, password: &str, uri: &
     Cipher {
         id: CipherId::new(id.to_string()).unwrap(),
         organization_id: None,
+        deleted_date: None,
         name: Some(name.to_string()),
         notes: None,
         folder_id: None,
@@ -430,6 +431,7 @@ pub fn nested_login_cipher(
     Cipher {
         id: CipherId::new(id.to_string()).unwrap(),
         organization_id: None,
+        deleted_date: None,
         name: None,
         notes: None,
         folder_id: None,
