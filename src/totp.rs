@@ -28,9 +28,15 @@ pub(crate) fn generate(seed: &str, timestamp: u64) -> Result<String> {
 
 fn parse(seed: &str) -> Result<TotpConfig> {
     let seed = seed.trim();
-    if seed.get(..10).is_some_and(|s| s.eq_ignore_ascii_case("otpauth://")) {
+    if seed
+        .get(..10)
+        .is_some_and(|s| s.eq_ignore_ascii_case("otpauth://"))
+    {
         parse_otpauth(seed)
-    } else if seed.get(..8).is_some_and(|s| s.eq_ignore_ascii_case("steam://")) {
+    } else if seed
+        .get(..8)
+        .is_some_and(|s| s.eq_ignore_ascii_case("steam://"))
+    {
         let secret = seed.get(8..).unwrap_or_default();
         Ok(TotpConfig {
             secret: decode_base32(secret)?,
@@ -52,7 +58,9 @@ fn parse(seed: &str) -> Result<TotpConfig> {
 
 fn parse_otpauth(uri: &str) -> Result<TotpConfig> {
     let rest = uri.get(10..).context("Invalid otpauth URI")?;
-    let (path, query) = rest.split_once('?').context("otpauth URI has no parameters")?;
+    let (path, query) = rest
+        .split_once('?')
+        .context("otpauth URI has no parameters")?;
     let kind = path.split('/').next().unwrap_or_default();
     if !kind.eq_ignore_ascii_case("totp") {
         anyhow::bail!("Only TOTP otpauth URIs are supported");
@@ -209,8 +217,8 @@ fn hmac<D>(secret: &[u8], counter: &[u8]) -> Result<Vec<u8>>
 where
     D: hmac::digest::block_api::EagerHash,
 {
-    let mut mac = Hmac::<D>::new_from_slice(secret)
-        .map_err(|_| anyhow::anyhow!("Invalid TOTP secret"))?;
+    let mut mac =
+        Hmac::<D>::new_from_slice(secret).map_err(|_| anyhow::anyhow!("Invalid TOTP secret"))?;
     mac.update(counter);
     Ok(mac.finalize().into_bytes().to_vec())
 }
@@ -263,7 +271,10 @@ mod tests {
 
     #[test]
     fn steam_uses_steam_alphabet_and_length() {
-        assert_eq!(generate(&format!("steam://{SHA1_SECRET}"), 59).unwrap(), "PV9M4");
+        assert_eq!(
+            generate(&format!("steam://{SHA1_SECRET}"), 59).unwrap(),
+            "PV9M4"
+        );
         assert_eq!(
             generate("steam://GEZD-GNBV GY3T.QOJQ/GEZDGNBVGY3TQOJQ==", 59).unwrap(),
             "PV9M4"

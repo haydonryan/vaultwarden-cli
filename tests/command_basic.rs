@@ -1896,5 +1896,7 @@ async fn get_totp_supports_id_and_search_errors_without_changing_legacy_get() {
         .assert()
         .success()
         .stdout(predicate::str::contains("\"name\": \"totp\""))
-        .stdout(predicate::str::contains("\"password\": \"legacy-password\""));
+        .stdout(predicate::str::contains(
+            "\"password\": \"legacy-password\"",
+        ));
 }
