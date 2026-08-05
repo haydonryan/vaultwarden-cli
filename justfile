@@ -27,7 +27,6 @@ benchmark:
 pre-commit:
     #!/usr/bin/env bash
     set -euo pipefail
-    ./scripts/scan-staged-secrets.sh
     before_fmt_diff="$(mktemp)"
     after_fmt_diff="$(mktemp)"
     trap 'rm -f "$before_fmt_diff" "$after_fmt_diff"' EXIT
@@ -42,6 +41,7 @@ pre-commit:
     cargo audit
     cargo deny check all
     cargo test
+    ./scripts/scan-staged-secrets.sh
 
 release *args:
     git pull --rebase

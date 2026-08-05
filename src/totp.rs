@@ -254,11 +254,11 @@ mod tests {
         .unwrap();
         assert_eq!(generate_config(&sha1, 59).unwrap(), "94287082");
 
-        let sha256 = parse("otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZA%3D%3D%3D%3D&algorithm=SHA256&digits=8")
+        let sha256 = parse("otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZA%3D%3D%3D%3D&algorithm=SHA256&digits=8") // secrets-ignore: RFC 6238 public test vector
             .unwrap();
         assert_eq!(generate_config(&sha256, 59).unwrap(), "46119246");
 
-        let sha512 = parse("otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNA%3D&algorithm=sha512&digits=8")
+        let sha512 = parse("otpauth://totp/Test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNA%3D&algorithm=sha512&digits=8") // secrets-ignore: RFC 6238 public test vector
             .unwrap();
         assert_eq!(generate_config(&sha512, 59).unwrap(), "90693936");
 
