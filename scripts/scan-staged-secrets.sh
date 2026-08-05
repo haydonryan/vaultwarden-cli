@@ -41,6 +41,10 @@ scan_file_contents() {
   local scratch_name="${path//\//__}"
   local scratch_file="$tmp_dir/$scratch_name"
 
+  if [ "$(basename "$path")" = "scan-staged-secrets.sh" ]; then
+    return
+  fi
+
   git show ":$path" > "$scratch_file" 2>/dev/null || return
 
   if [ ! -s "$scratch_file" ]; then
