@@ -217,8 +217,8 @@ fn hmac<D>(secret: &[u8], counter: &[u8]) -> Result<Vec<u8>>
 where
     D: hmac::digest::block_api::EagerHash,
 {
-    let mut mac =
-        Hmac::<D>::new_from_slice(secret).map_err(|_| anyhow::anyhow!("Invalid TOTP secret"))?;
+    let mut mac = Hmac::<D>::new_from_slice(secret)
+        .map_err(|e| anyhow::anyhow!("Invalid TOTP secret: {e}"))?;
     mac.update(counter);
     Ok(mac.finalize().into_bytes().to_vec())
 }
