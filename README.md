@@ -60,6 +60,32 @@ yay -S vaultwarden-cli
 Both packages install `vaultwarden-cli` to `/usr/bin`. The PKGBUILDs live in
 `packaging/aur/` in this repository.
 
+### With Nix
+
+This repository is a Nix flake exposing two packages (plus a `nix develop`
+shell with the Rust toolchain and native build deps):
+
+- `.#app-bin` — installs the prebuilt release artifact (fast, no compilation).
+  This is also the `default` package.
+- `.#app-src` — builds `vaultwarden-cli` from source via the committed
+  `Cargo.lock` (no network at build time).
+
+```bash
+# Run the prebuilt binary (fast path)
+nix run .#app-bin -- --version
+
+# Run a from-source build
+nix run .#app-src -- --version
+
+# Build either into ./result
+nix build .#app-bin
+nix build .#app-src
+```
+
+Both packages install the same `vaultwarden-cli` executable. To add it to your
+profile: `nix profile install .#app-bin`. The flake supports `x86_64-linux` and
+`aarch64-linux`.
+
 ## Development
 
 Enable the repo's pre-commit hook to run `just pre-commit` before each commit:
