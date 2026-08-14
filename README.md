@@ -44,6 +44,22 @@ cargo build --release
 
 The binary will be at `target/release/vaultwarden-cli`.
 
+### From the Arch User Repository (AUR)
+
+On Arch Linux you can install a prebuilt binary from the AUR, or build from source:
+
+```bash
+# Prebuilt binary
+yay -S vaultwarden-cli-bin
+# or: paru -S vaultwarden-cli-bin
+
+# Build from source
+yay -S vaultwarden-cli
+```
+
+Both packages install `vaultwarden-cli` to `/usr/bin`. The PKGBUILDs live in
+`packaging/aur/` in this repository.
+
 ## Development
 
 Enable the repo's pre-commit hook to run `just pre-commit` before each commit:

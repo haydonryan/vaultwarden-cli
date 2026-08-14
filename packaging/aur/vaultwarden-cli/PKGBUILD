@@ -1,0 +1,25 @@
+# Maintainer: Haydon Ryan
+
+pkgname=vaultwarden-cli
+pkgver=0.5.4
+pkgrel=1
+pkgdesc="CLI client for Vaultwarden - retrieve secrets for batch files and environment variables"
+arch=('x86_64' 'aarch64')
+url="https://github.com/haydonryan/vaultwarden-cli"
+license=('MIT')
+depends=('glibc' 'gcc-libs' 'ca-certificates')
+makedepends=('rust')
+options=('!lto' '!debug')
+source=("$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('6c0cef9aca50ecb814eafa59ee98a03f45006a6c3cc457dc2e5ff13647031e8a')
+
+build() {
+  cd "$srcdir/vaultwarden-cli-$pkgver"
+  cargo build --release --locked
+}
+
+package() {
+  cd "$srcdir/vaultwarden-cli-$pkgver"
+  install -Dm755 target/release/vaultwarden-cli "$pkgdir/usr/bin/vaultwarden-cli"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -1,0 +1,24 @@
+# Maintainer: Haydon Ryan
+
+pkgname=vaultwarden-cli-bin
+pkgver=0.5.4
+pkgrel=1
+pkgdesc="CLI client for Vaultwarden - retrieve secrets for batch files and environment variables (prebuilt binary)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/haydonryan/vaultwarden-cli"
+license=('MIT')
+depends=('glibc' 'gcc-libs' 'ca-certificates')
+options=('!debug')
+source_x86_64=("$url/releases/download/v$pkgver/vaultwarden-cli-x86_64-unknown-linux-gnu.tar.gz"
+               "$url/raw/v$pkgver/LICENSE")
+source_aarch64=("$url/releases/download/v$pkgver/vaultwarden-cli-aarch64-unknown-linux-gnu.tar.gz"
+                "$url/raw/v$pkgver/LICENSE")
+sha256sums_x86_64=('8e7b964c687d28648091da4a184f7f4da2bac04a49011a6d7ebda53391711ed4'
+                   'f9ad0048ae98520c3997d57dcb20989af3f500f5ef8ec67d31461cbe94f33297')
+sha256sums_aarch64=('d9b17060b3a4ed4cd7333230c08d466ae4a6d2627aee531793c5c31191d5d8d7'
+                    'f9ad0048ae98520c3997d57dcb20989af3f500f5ef8ec67d31461cbe94f33297')
+
+package() {
+  install -Dm755 "$srcdir/vaultwarden-cli" "$pkgdir/usr/bin/vaultwarden-cli"
+  install -Dm644 "$srcdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
