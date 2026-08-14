@@ -119,18 +119,32 @@ impl CryptoKeys {
             anyhow::bail!("Unsupported encryption type: {enc_type}");
         }
 
-        let parts: Vec<&str> = data.split('|').collect();
-        if parts.len() < 2 {
-            anyhow::bail!("Invalid encrypted data format");
-        }
+        let mut parts = data.split('|');
+        let iv_b64 = parts.next();
+        let ct_b64 = parts.next();
+        let mac_b64 = parts.next();
 
-        let iv = BASE64.decode(parts[0]).context("Failed to decode IV")?;
+        let (Some(iv_b64), Some(ct_b64)) = (iv_b64, ct_b64) else {
+            anyhow::bail!("Invalid encrypted data format");
+        };
+
+        let iv = BASE64.decode(iv_b64).context("Failed to decode IV")?;
         let ciphertext = BASE64
-            .decode(parts[1])
+            .decode(ct_b64)
             .context("Failed to decode ciphertext")?;
 
         // Verify MAC — reject ciphertext that lacks integrity protection
-        if parts.len() < 3 {
+        if let Some(mac_b64) = mac_b64 {
+            let mac = BASE64.decode(mac_b64).context("Failed to decode MAC")?;
+
+            let mut hmac = Hmac::<Sha256>::new_from_slice(mac_key.as_slice())
+                .map_err(|e| anyhow::anyhow!("HMAC init failed: {e}"))?;
+            hmac.update(&iv);
+            hmac.update(&ciphertext);
+
+            hmac.verify_slice(&mac)
+                .map_err(|err| anyhow::anyhow!("MAC verification failed: {err}"))?;
+        } else {
             let allow = allow_insecure_mac()
                 || std::env::var("VAULTWARDEN_ALLOW_INSECURE_MAC")
                     .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -145,16 +159,6 @@ impl CryptoKeys {
             eprintln!(
                 "Warning: Decrypting ciphertext without MAC integrity verification. Data authenticity cannot be confirmed."
             );
-        } else {
-            let mac = BASE64.decode(parts[2]).context("Failed to decode MAC")?;
-
-            let mut hmac = Hmac::<Sha256>::new_from_slice(mac_key.as_slice())
-                .map_err(|e| anyhow::anyhow!("HMAC init failed: {e}"))?;
-            hmac.update(&iv);
-            hmac.update(&ciphertext);
-
-            hmac.verify_slice(&mac)
-                .map_err(|err| anyhow::anyhow!("MAC verification failed: {err}"))?;
         }
 
         let mut buf = ciphertext;
@@ -162,8 +166,12 @@ impl CryptoKeys {
             .map_err(|e| anyhow::anyhow!("AES init failed: {e}"))?
             .decrypt_padded::<Pkcs7>(&mut buf)
             .map_err(|e| anyhow::anyhow!("AES decrypt failed: {e}"))?;
-
-        Ok(decrypted.to_vec())
+        // The in-place decryption leaves the unpadded plaintext as a prefix of
+        // `buf`; truncate to its length and return the buffer directly instead
+        // of allocating a fresh `to_vec()` copy.
+        let plaintext_len = decrypted.len();
+        buf.truncate(plaintext_len);
+        Ok(buf)
     }
 
     /// Expose enc_key for tests.
