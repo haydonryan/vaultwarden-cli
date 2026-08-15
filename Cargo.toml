@@ -56,6 +56,10 @@ criterion = { version = "0.8", default-features = false }
 name = "vaultwarden_cli_bench"
 harness = false
 
+[profile.dev]
+opt-level = 0
+debug = "line-tables-only"
+
 [profile.release]
 strip = "symbols"
 codegen-units = 1
