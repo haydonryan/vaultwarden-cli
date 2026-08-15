@@ -52,7 +52,7 @@ bump version:
     cargo release version {{version}} --execute --no-confirm
 
 install:
-    cargo install --path .
+    cargo install --path . --target-dir "${CARGO_TARGET_DIR:-target}"
 
 run *args:
     cargo run --bin vaultwarden-cli -- {{args}}
