@@ -1220,26 +1220,21 @@ async fn list_with_json_empty_array(
         ctx.sync_response.ciphers.as_slice()
     };
 
-    let ciphers: Vec<&Cipher> = ciphers_source
-        .iter()
-        .filter(|c| {
-            cipher_matches_filters(
-                c,
-                org_id_filter.as_deref(),
-                collection_id_filter.as_deref(),
-                None,
-            ) && cipher_type_filter.is_none_or(|cipher_type| {
-                c.cipher_data
-                    .as_ref()
-                    .is_some_and(|cd| cd.cipher_type() == cipher_type)
-            })
-        })
-        .collect();
-
     // Decrypt and filter
     let search_lower = search.as_ref().map(|s| s.to_lowercase());
     let mut outputs: Vec<CipherOutput> = Vec::new();
-    for cipher in ciphers {
+    for cipher in ciphers_source.iter().filter(|c| {
+        cipher_matches_filters(
+            c,
+            org_id_filter.as_deref(),
+            collection_id_filter.as_deref(),
+            None,
+        ) && cipher_type_filter.is_none_or(|cipher_type| {
+            c.cipher_data
+                .as_ref()
+                .is_some_and(|cd| cd.cipher_type() == cipher_type)
+        })
+    }) {
         let keys = match get_cipher_keys(&ctx.config, cipher) {
             Ok(k) => k,
             Err(e) => {
@@ -1484,14 +1479,14 @@ pub async fn get_by_uri(
     print_cipher_output(&output, format)
 }
 
-fn parse_placeholder(placeholder: &str) -> Result<(String, String)> {
+fn parse_placeholder(placeholder: &str) -> Result<(&str, &str)> {
     let mut parts = placeholder.rsplitn(2, '.');
     let component = parts.next().unwrap_or_default();
     let name = parts.next().unwrap_or_default();
     if name.is_empty() || component.is_empty() {
         anyhow::bail!("Expected format name.component");
     }
-    Ok((name.to_string(), component.to_string()))
+    Ok((name, component))
 }
 
 fn resolve_component(output: &CipherOutput, component: &str) -> Result<String> {
@@ -1629,13 +1624,13 @@ pub async fn interpolate(
     let mut unmatched_placeholders: Vec<String> = Vec::new();
 
     let output = PLACEHOLDER_RE.replace_all(&input, |caps: &regex::Captures| {
-        let full_placeholder = caps[0].to_string();
+        let full_placeholder = &caps[0];
         let placeholder = &caps[1];
         match parse_placeholder(placeholder) {
             Ok((raw_name, component)) => {
                 match resolve_interpolation_placeholder(
-                    &raw_name,
-                    &component,
+                    raw_name,
+                    component,
                     &sync_response.ciphers,
                     &api_ctx.config,
                     &by_name,
@@ -1645,7 +1640,7 @@ pub async fn interpolate(
                     Err(err) => track_missing_placeholder(
                         placeholder,
                         &err.to_string(),
-                        &full_placeholder,
+                        full_placeholder,
                         skip_missing,
                         &mut missing,
                         &mut unmatched_placeholders,
@@ -1655,7 +1650,7 @@ pub async fn interpolate(
             Err(err) => track_missing_placeholder(
                 placeholder,
                 &err.to_string(),
-                &full_placeholder,
+                full_placeholder,
                 skip_missing,
                 &mut missing,
                 &mut unmatched_placeholders,
