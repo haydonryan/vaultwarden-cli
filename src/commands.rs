@@ -1761,7 +1761,7 @@ fn write_atomic_owner_only_once(
 
 fn cipher_to_env_vars(output: &CipherOutput) -> Vec<(String, String)> {
     let prefix = sanitize_env_name(&output.name);
-    let mut vars: Vec<(String, String)> = Vec::new();
+    let mut vars: Vec<(String, String)> = Vec::with_capacity(6);
     if let Some(v) = &output.uri {
         vars.push((format!("{prefix}_URI"), v.clone()));
     }
