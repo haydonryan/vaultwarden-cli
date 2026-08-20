@@ -1870,7 +1870,17 @@ fn shell_quote_env_value(value: &str) -> Result<String> {
         anyhow::bail!("env output cannot represent values containing NUL bytes");
     }
 
-    Ok(format!("'{}'", value.replace('\'', "'\\''")))
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('\'');
+    for c in value.chars() {
+        if c == '\'' {
+            quoted.push_str("'\\''");
+        } else {
+            quoted.push(c);
+        }
+    }
+    quoted.push('\'');
+    Ok(quoted)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2331,6 +2341,33 @@ mod tests {
                 shell_quote_env_value("can't stop").unwrap(),
                 "'can'\\''t stop'"
             );
+        }
+
+        #[test]
+        fn test_quote_followed_by_escaped_sequence() {
+            // Regression: a single quote immediately followed by an escaped
+            // sequence (backslash) must both be preserved exactly, with the
+            // quote escaped and the backslash left intact.
+            let value = "it's a \\'weird\\' path";
+            assert_eq!(
+                shell_quote_env_value(value).unwrap(),
+                "'it'\\''s a \\'\\''weird\\'\\'' path'"
+            );
+        }
+
+        #[test]
+        #[cfg(unix)]
+        fn test_quote_plus_escaped_sequence_round_trips_through_shell() {
+            let value = "it's a \\'weird\\' path";
+            let assignment = format!("export SECRET={}", shell_quote_env_value(value).unwrap());
+            let output = Command::new("sh")
+                .arg("-c")
+                .arg(format!("{assignment}; printf %s \"$SECRET\""))
+                .output()
+                .unwrap();
+
+            assert!(output.status.success());
+            assert_eq!(output.stdout, value.as_bytes());
         }
 
         #[test]
