@@ -149,14 +149,15 @@ const fn hex_value(byte: u8) -> Option<u8> {
 }
 
 fn decode_base32(value: &str) -> Result<Vec<u8>> {
-    let mut output = Vec::new();
+    let mut output = Vec::with_capacity(value.len() * 5 / 8 + 1);
     let mut accumulator = 0_u32;
     let mut bits = 0_u32;
 
     for byte in value.bytes() {
-        let digit = match byte.to_ascii_uppercase() {
-            b'A'..=b'Z' => byte.to_ascii_uppercase() - b'A',
-            b'2'..=b'7' => byte - b'2' + 26,
+        let upper = byte.to_ascii_uppercase();
+        let digit = match upper {
+            b'A'..=b'Z' => upper - b'A',
+            b'2'..=b'7' => upper - b'2' + 26,
             _ => continue,
         };
         accumulator = (accumulator << 5) | u32::from(digit);

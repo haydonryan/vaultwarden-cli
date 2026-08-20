@@ -1293,7 +1293,7 @@ fn format_list_output(outputs: &[CipherOutput], json_output: bool) -> Result<Vec
     for (idx, output) in outputs.iter().enumerate() {
         let mut had_var = false;
 
-        for (name, _) in cipher_to_env_vars(output) {
+        for name in cipher_env_var_names(output) {
             lines.push(name);
             had_var = true;
         }
@@ -1535,12 +1535,15 @@ fn track_missing_placeholder(
     full.to_string()
 }
 
-fn build_interpolation_indexes(
-    ciphers: &[Cipher],
+fn build_interpolation_indexes<'a>(
+    ciphers: &'a [Cipher],
     config: &Config,
-) -> (HashMap<String, Vec<String>>, HashMap<String, String>) {
-    let mut by_name: HashMap<String, Vec<String>> = HashMap::new();
-    let mut by_id: HashMap<String, String> = HashMap::new();
+) -> (
+    HashMap<String, Vec<&'a Cipher>>,
+    HashMap<String, &'a Cipher>,
+) {
+    let mut by_name: HashMap<String, Vec<&'a Cipher>> = HashMap::new();
+    let mut by_id: HashMap<String, &'a Cipher> = HashMap::new();
 
     for cipher in ciphers {
         let keys = match get_cipher_keys(config, cipher) {
@@ -1550,11 +1553,11 @@ fn build_interpolation_indexes(
         if let Ok(output) =
             decrypt_cipher_with_profile(cipher, keys, CipherDecryptionProfile::list_env_names())
         {
-            by_id.insert(output.id.clone(), output.id.clone());
+            by_id.insert(output.id.clone(), cipher);
             by_name
                 .entry(output.name.to_lowercase())
                 .or_default()
-                .push(output.id);
+                .push(cipher);
         }
     }
 
@@ -1564,16 +1567,11 @@ fn build_interpolation_indexes(
 fn resolve_interpolation_placeholder(
     raw_name: &str,
     component: &str,
-    ciphers: &[Cipher],
     config: &Config,
-    by_name: &HashMap<String, Vec<String>>,
-    by_id: &HashMap<String, String>,
+    by_name: &HashMap<String, Vec<&Cipher>>,
+    by_id: &HashMap<String, &Cipher>,
 ) -> Result<String> {
-    if let Some(cipher_id) = by_id.get(raw_name) {
-        let cipher = ciphers
-            .iter()
-            .find(|cipher| cipher.id == *cipher_id)
-            .context("indexed item not found")?;
+    if let Some(cipher) = by_id.get(raw_name) {
         let keys = get_cipher_keys(config, cipher)?;
         let output = decrypt_cipher_with_profile(
             cipher,
@@ -1585,11 +1583,7 @@ fn resolve_interpolation_placeholder(
 
     let key = raw_name.to_lowercase();
     match by_name.get(&key).map(Vec::as_slice) {
-        Some([cipher_id]) => {
-            let cipher = ciphers
-                .iter()
-                .find(|cipher| cipher.id == *cipher_id)
-                .context("indexed item not found")?;
+        Some([cipher]) => {
             let keys = get_cipher_keys(config, cipher)?;
             let output = decrypt_cipher_with_profile(
                 cipher,
@@ -1631,7 +1625,6 @@ pub async fn interpolate(
                 match resolve_interpolation_placeholder(
                     raw_name,
                     component,
-                    &sync_response.ciphers,
                     &api_ctx.config,
                     &by_name,
                     &by_id,
@@ -1768,7 +1761,7 @@ fn write_atomic_owner_only_once(
 
 fn cipher_to_env_vars(output: &CipherOutput) -> Vec<(String, String)> {
     let prefix = sanitize_env_name(&output.name);
-    let mut vars: Vec<(String, String)> = Vec::new();
+    let mut vars: Vec<(String, String)> = Vec::with_capacity(6);
     if let Some(v) = &output.uri {
         vars.push((format!("{prefix}_URI"), v.clone()));
     }
@@ -1796,6 +1789,37 @@ fn cipher_to_env_vars(output: &CipherOutput) -> Vec<(String, String)> {
         }
     }
     vars
+}
+
+// Mirror the name set produced by cipher_to_env_vars, but build only names
+// (no value clones). Keep in sync with cipher_to_env_vars.
+fn cipher_env_var_names(output: &CipherOutput) -> Vec<String> {
+    let prefix = sanitize_env_name(&output.name);
+    let mut names = Vec::new();
+    if output.uri.is_some() {
+        names.push(format!("{prefix}_URI"));
+    }
+    if output.username.is_some() {
+        names.push(format!("{prefix}_USERNAME"));
+    }
+    if output.password.is_some() {
+        names.push(format!("{prefix}_PASSWORD"));
+    }
+    if output.ssh_public_key.is_some() {
+        names.push(format!("{prefix}_SSH_PUBLIC_KEY"));
+    }
+    if output.ssh_private_key.is_some() {
+        names.push(format!("{prefix}_SSH_PRIVATE_KEY"));
+    }
+    if output.ssh_fingerprint.is_some() {
+        names.push(format!("{prefix}_SSH_FINGERPRINT"));
+    }
+    if let Some(fields) = &output.fields {
+        for field in fields {
+            names.push(format!("{}_{}", prefix, sanitize_env_name(&field.name)));
+        }
+    }
+    names
 }
 
 fn get_field_string(field: &Option<String>, name: &str) -> Result<String> {
@@ -1877,7 +1901,17 @@ fn shell_quote_env_value(value: &str) -> Result<String> {
         anyhow::bail!("env output cannot represent values containing NUL bytes");
     }
 
-    Ok(format!("'{}'", value.replace('\'', "'\\''")))
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('\'');
+    for c in value.chars() {
+        if c == '\'' {
+            quoted.push_str("'\\''");
+        } else {
+            quoted.push(c);
+        }
+    }
+    quoted.push('\'');
+    Ok(quoted)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2338,6 +2372,33 @@ mod tests {
                 shell_quote_env_value("can't stop").unwrap(),
                 "'can'\\''t stop'"
             );
+        }
+
+        #[test]
+        fn test_quote_followed_by_escaped_sequence() {
+            // Regression: a single quote immediately followed by an escaped
+            // sequence (backslash) must both be preserved exactly, with the
+            // quote escaped and the backslash left intact.
+            let value = "it's a \\'weird\\' path";
+            assert_eq!(
+                shell_quote_env_value(value).unwrap(),
+                "'it'\\''s a \\'\\''weird\\'\\'' path'"
+            );
+        }
+
+        #[test]
+        #[cfg(unix)]
+        fn test_quote_plus_escaped_sequence_round_trips_through_shell() {
+            let value = "it's a \\'weird\\' path";
+            let assignment = format!("export SECRET={}", shell_quote_env_value(value).unwrap());
+            let output = Command::new("sh")
+                .arg("-c")
+                .arg(format!("{assignment}; printf %s \"$SECRET\""))
+                .output()
+                .unwrap();
+
+            assert!(output.status.success());
+            assert_eq!(output.stdout, value.as_bytes());
         }
 
         #[test]
@@ -4702,6 +4763,57 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_interpolate_resolves_placeholder_by_id_with_many_ciphers() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+
+            // Build many ciphers; the id-resolved target sits deep in the list so
+            // the &Cipher index path must resolve it without scanning the whole slice.
+            let logins: Vec<(String, String, String, String)> = (0..500)
+                .map(|i| {
+                    (
+                        format!("cipher-{i:03}"),
+                        format!("Login{i:03}"),
+                        format!("user{i:03}"),
+                        format!("pass{i:03}"),
+                    )
+                })
+                .collect();
+            let login_refs: Vec<(&str, &str, &str, &str)> = logins
+                .iter()
+                .map(|(id, name, user, pass)| {
+                    (id.as_str(), name.as_str(), user.as_str(), pass.as_str())
+                })
+                .collect();
+            let sync_response = make_sync_response_with_logins(&login_refs);
+            mount_sync_response(&mock_server, sync_response).await;
+            save_unlocked_test_config(&mock_server);
+
+            let input_path = temp_dir.path().join("input.yml");
+            // Resolve a placeholder by cipher id (not name), deep in the index.
+            std::fs::write(&input_path, "user: ((cipher-487.username))\n").unwrap();
+
+            let output_path = temp_dir.path().join("output.yml");
+            let result = interpolate(
+                input_path.to_str().unwrap(),
+                Some(output_path.to_str().unwrap()),
+                false,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            assert!(result.is_ok());
+            let output = std::fs::read_to_string(&output_path).unwrap();
+            assert_eq!(output, "user: user487\n");
+        }
+
+        #[tokio::test]
         async fn test_interpolate_skip_missing_leaves_ambiguous_placeholder_unchanged() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
@@ -6352,6 +6464,40 @@ mod tests {
                     "MY_APP_SSH_FINGERPRINT".to_string(),
                 ]
             );
+        }
+
+        #[test]
+        fn test_format_list_output_plain_env_names_match_cipher_to_env_vars() {
+            // Regression: list env output must print only the env-var NAMES in the
+            // exact order cipher_to_env_vars produces them, with blank-line
+            // separators between ciphers. Guards name ordering/presence if
+            // cipher_to_env_vars is later edited.
+            let first = sample_output();
+            let mut second = sample_output();
+            second.name = "Another".to_string();
+            second.uri = None;
+            second.password = None;
+            second.fields = Some(vec![FieldOutput {
+                name: "token".to_string(),
+                value: "secret".to_string(),
+                hidden: true,
+            }]);
+
+            let out = format_list_output(&[first.clone(), second.clone()], false).unwrap();
+
+            let mut expected: Vec<String> = Vec::new();
+            for (idx, output) in [&first, &second].iter().enumerate() {
+                let names: Vec<String> = cipher_to_env_vars(output)
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect();
+                assert!(!names.is_empty());
+                expected.extend(names);
+                if idx + 1 < 2 {
+                    expected.push(String::new());
+                }
+            }
+            assert_eq!(out, expected);
         }
 
         #[test]
