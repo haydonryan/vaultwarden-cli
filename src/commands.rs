@@ -1293,7 +1293,7 @@ fn format_list_output(outputs: &[CipherOutput], json_output: bool) -> Result<Vec
     for (idx, output) in outputs.iter().enumerate() {
         let mut had_var = false;
 
-        for (name, _) in cipher_to_env_vars(output) {
+        for name in cipher_env_var_names(output) {
             lines.push(name);
             had_var = true;
         }
@@ -1789,6 +1789,37 @@ fn cipher_to_env_vars(output: &CipherOutput) -> Vec<(String, String)> {
         }
     }
     vars
+}
+
+// Mirror the name set produced by cipher_to_env_vars, but build only names
+// (no value clones). Keep in sync with cipher_to_env_vars.
+fn cipher_env_var_names(output: &CipherOutput) -> Vec<String> {
+    let prefix = sanitize_env_name(&output.name);
+    let mut names = Vec::new();
+    if output.uri.is_some() {
+        names.push(format!("{prefix}_URI"));
+    }
+    if output.username.is_some() {
+        names.push(format!("{prefix}_USERNAME"));
+    }
+    if output.password.is_some() {
+        names.push(format!("{prefix}_PASSWORD"));
+    }
+    if output.ssh_public_key.is_some() {
+        names.push(format!("{prefix}_SSH_PUBLIC_KEY"));
+    }
+    if output.ssh_private_key.is_some() {
+        names.push(format!("{prefix}_SSH_PRIVATE_KEY"));
+    }
+    if output.ssh_fingerprint.is_some() {
+        names.push(format!("{prefix}_SSH_FINGERPRINT"));
+    }
+    if let Some(fields) = &output.fields {
+        for field in fields {
+            names.push(format!("{}_{}", prefix, sanitize_env_name(&field.name)));
+        }
+    }
+    names
 }
 
 fn get_field_string(field: &Option<String>, name: &str) -> Result<String> {
@@ -6433,6 +6464,40 @@ mod tests {
                     "MY_APP_SSH_FINGERPRINT".to_string(),
                 ]
             );
+        }
+
+        #[test]
+        fn test_format_list_output_plain_env_names_match_cipher_to_env_vars() {
+            // Regression: list env output must print only the env-var NAMES in the
+            // exact order cipher_to_env_vars produces them, with blank-line
+            // separators between ciphers. Guards name ordering/presence if
+            // cipher_to_env_vars is later edited.
+            let first = sample_output();
+            let mut second = sample_output();
+            second.name = "Another".to_string();
+            second.uri = None;
+            second.password = None;
+            second.fields = Some(vec![FieldOutput {
+                name: "token".to_string(),
+                value: "secret".to_string(),
+                hidden: true,
+            }]);
+
+            let out = format_list_output(&[first.clone(), second.clone()], false).unwrap();
+
+            let mut expected: Vec<String> = Vec::new();
+            for (idx, output) in [&first, &second].iter().enumerate() {
+                let names: Vec<String> = cipher_to_env_vars(output)
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect();
+                assert!(!names.is_empty());
+                expected.extend(names);
+                if idx + 1 < 2 {
+                    expected.push(String::new());
+                }
+            }
+            assert_eq!(out, expected);
         }
 
         #[test]
