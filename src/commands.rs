@@ -1535,12 +1535,15 @@ fn track_missing_placeholder(
     full.to_string()
 }
 
-fn build_interpolation_indexes(
-    ciphers: &[Cipher],
+fn build_interpolation_indexes<'a>(
+    ciphers: &'a [Cipher],
     config: &Config,
-) -> (HashMap<String, Vec<String>>, HashMap<String, String>) {
-    let mut by_name: HashMap<String, Vec<String>> = HashMap::new();
-    let mut by_id: HashMap<String, String> = HashMap::new();
+) -> (
+    HashMap<String, Vec<&'a Cipher>>,
+    HashMap<String, &'a Cipher>,
+) {
+    let mut by_name: HashMap<String, Vec<&'a Cipher>> = HashMap::new();
+    let mut by_id: HashMap<String, &'a Cipher> = HashMap::new();
 
     for cipher in ciphers {
         let keys = match get_cipher_keys(config, cipher) {
@@ -1550,11 +1553,11 @@ fn build_interpolation_indexes(
         if let Ok(output) =
             decrypt_cipher_with_profile(cipher, keys, CipherDecryptionProfile::list_env_names())
         {
-            by_id.insert(output.id.clone(), output.id.clone());
+            by_id.insert(output.id.clone(), cipher);
             by_name
                 .entry(output.name.to_lowercase())
                 .or_default()
-                .push(output.id);
+                .push(cipher);
         }
     }
 
@@ -1564,16 +1567,11 @@ fn build_interpolation_indexes(
 fn resolve_interpolation_placeholder(
     raw_name: &str,
     component: &str,
-    ciphers: &[Cipher],
     config: &Config,
-    by_name: &HashMap<String, Vec<String>>,
-    by_id: &HashMap<String, String>,
+    by_name: &HashMap<String, Vec<&Cipher>>,
+    by_id: &HashMap<String, &Cipher>,
 ) -> Result<String> {
-    if let Some(cipher_id) = by_id.get(raw_name) {
-        let cipher = ciphers
-            .iter()
-            .find(|cipher| cipher.id == *cipher_id)
-            .context("indexed item not found")?;
+    if let Some(cipher) = by_id.get(raw_name) {
         let keys = get_cipher_keys(config, cipher)?;
         let output = decrypt_cipher_with_profile(
             cipher,
@@ -1585,11 +1583,7 @@ fn resolve_interpolation_placeholder(
 
     let key = raw_name.to_lowercase();
     match by_name.get(&key).map(Vec::as_slice) {
-        Some([cipher_id]) => {
-            let cipher = ciphers
-                .iter()
-                .find(|cipher| cipher.id == *cipher_id)
-                .context("indexed item not found")?;
+        Some([cipher]) => {
             let keys = get_cipher_keys(config, cipher)?;
             let output = decrypt_cipher_with_profile(
                 cipher,
@@ -1631,7 +1625,6 @@ pub async fn interpolate(
                 match resolve_interpolation_placeholder(
                     raw_name,
                     component,
-                    &sync_response.ciphers,
                     &api_ctx.config,
                     &by_name,
                     &by_id,
@@ -4699,6 +4692,57 @@ mod tests {
             assert!(result.is_ok());
             let output = std::fs::read_to_string(&output_path).unwrap();
             assert_eq!(output, "user: second-user\n");
+        }
+
+        #[tokio::test]
+        async fn test_interpolate_resolves_placeholder_by_id_with_many_ciphers() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+
+            // Build many ciphers; the id-resolved target sits deep in the list so
+            // the &Cipher index path must resolve it without scanning the whole slice.
+            let logins: Vec<(String, String, String, String)> = (0..500)
+                .map(|i| {
+                    (
+                        format!("cipher-{i:03}"),
+                        format!("Login{i:03}"),
+                        format!("user{i:03}"),
+                        format!("pass{i:03}"),
+                    )
+                })
+                .collect();
+            let login_refs: Vec<(&str, &str, &str, &str)> = logins
+                .iter()
+                .map(|(id, name, user, pass)| {
+                    (id.as_str(), name.as_str(), user.as_str(), pass.as_str())
+                })
+                .collect();
+            let sync_response = make_sync_response_with_logins(&login_refs);
+            mount_sync_response(&mock_server, sync_response).await;
+            save_unlocked_test_config(&mock_server);
+
+            let input_path = temp_dir.path().join("input.yml");
+            // Resolve a placeholder by cipher id (not name), deep in the index.
+            std::fs::write(&input_path, "user: ((cipher-487.username))\n").unwrap();
+
+            let output_path = temp_dir.path().join("output.yml");
+            let result = interpolate(
+                input_path.to_str().unwrap(),
+                Some(output_path.to_str().unwrap()),
+                false,
+                &CommandOptions {
+                    allow_insecure_http: true,
+                    ..Default::default()
+                },
+            )
+            .await;
+
+            assert!(result.is_ok());
+            let output = std::fs::read_to_string(&output_path).unwrap();
+            assert_eq!(output, "user: user487\n");
         }
 
         #[tokio::test]
