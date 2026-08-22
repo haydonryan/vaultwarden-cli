@@ -6,7 +6,13 @@ check:
     cargo test
 
 test:
-    cargo test
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if cargo nextest --version >/dev/null 2>&1; then
+      cargo nextest run --no-fail-fast
+    else
+      cargo test
+    fi
 
 coverage:
     #!/usr/bin/env bash
