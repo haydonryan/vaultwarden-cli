@@ -1,4 +1,4 @@
-#![allow(clippy::let_underscore_must_use, clippy::pedantic, clippy::nursery)]
+#![allow(clippy::let_underscore_must_use)]
 
 //! Integration tests for vaultwarden-cli
 //!
@@ -67,7 +67,7 @@ mod api_tests {
             "token_type": "Bearer",
             "refresh_token": "test-refresh-token",
             "Key": "2.encrypted-key",
-            "KdfIterations": 600000
+            "KdfIterations": 600_000
         });
 
         Mock::given(method("POST"))
@@ -238,7 +238,7 @@ mod crypto_integration_tests {
         // Simulate the full key derivation process
         let test_input = "fixture-passphrase";
         let email = "user@example.com";
-        let iterations = 100000; // Lower for test speed
+        let iterations = 100_000; // Lower for test speed
 
         // Step 1: Derive master key from password
         let master_key = MasterKey::derive(
@@ -277,7 +277,7 @@ mod crypto_integration_tests {
     #[test]
     fn test_different_users_different_keys() {
         let password = "SamePassword";
-        let iterations = 100000;
+        let iterations = 100_000;
 
         let key1 = MasterKey::derive(
             password,
@@ -297,7 +297,7 @@ mod crypto_integration_tests {
 
 /// Tests for model parsing with realistic API responses
 mod model_integration_tests {
-    use vaultwarden_cli::models::{CipherType, SyncResponse, TokenResponse};
+    use vaultwarden_cli::models::{CipherData, CipherType, SyncResponse, TokenResponse};
 
     #[test]
     fn test_parse_realistic_token_response() {
@@ -316,7 +316,7 @@ mod model_integration_tests {
         let response: TokenResponse = serde_json::from_str(json).unwrap();
         assert!(response.access_token.starts_with("eyJ"));
         assert_eq!(response.expires_in, 3600);
-        assert_eq!(response.kdf_iterations, Some(600000));
+        assert_eq!(response.kdf_iterations, Some(600_000));
     }
 
     #[test]
@@ -380,14 +380,14 @@ mod model_integration_tests {
             response.ciphers[0]
                 .cipher_data
                 .as_ref()
-                .map(|cd| cd.cipher_type()),
+                .map(CipherData::cipher_type),
             Some(CipherType::Login)
         );
         assert_eq!(
             response.ciphers[1]
                 .cipher_data
                 .as_ref()
-                .map(|cd| cd.cipher_type()),
+                .map(CipherData::cipher_type),
             Some(CipherType::SecureNote)
         );
     }
@@ -458,7 +458,7 @@ mod edge_case_tests {
         let key = MasterKey::derive(
             "",
             "user@example.com",
-            KdfIterations::new(100000).expect("non-zero iterations"),
+            KdfIterations::new(100_000).expect("non-zero iterations"),
         );
         assert_eq!(key.len(), 32);
     }
@@ -468,7 +468,7 @@ mod edge_case_tests {
         let key = MasterKey::derive(
             "密码🔐パスワード",
             "user@example.com",
-            KdfIterations::new(100000).expect("non-zero iterations"),
+            KdfIterations::new(100_000).expect("non-zero iterations"),
         );
         assert_eq!(key.len(), 32);
     }
@@ -479,7 +479,7 @@ mod edge_case_tests {
         let key = MasterKey::derive(
             &long_password,
             "user@example.com",
-            KdfIterations::new(100000).expect("non-zero iterations"),
+            KdfIterations::new(100_000).expect("non-zero iterations"),
         );
         assert_eq!(key.len(), 32);
     }

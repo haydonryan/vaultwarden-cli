@@ -452,7 +452,7 @@ pub enum CipherData {
 impl CipherData {
     /// Return the corresponding `CipherType` for this variant.
     #[must_use]
-    pub fn cipher_type(&self) -> CipherType {
+    pub const fn cipher_type(&self) -> CipherType {
         match self {
             Self::Login(_) => CipherType::Login,
             Self::SecureNote(_) => CipherType::SecureNote,
@@ -463,9 +463,9 @@ impl CipherData {
     }
 }
 
-/// Helper to get typed data from a CipherData reference.
+/// Helper to get typed data from a `CipherData` reference.
 #[must_use]
-pub fn cipher_login_data(data: &CipherData) -> Option<&LoginData> {
+pub const fn cipher_login_data(data: &CipherData) -> Option<&LoginData> {
     if let CipherData::Login(v) = data {
         Some(v)
     } else {
@@ -473,7 +473,7 @@ pub fn cipher_login_data(data: &CipherData) -> Option<&LoginData> {
     }
 }
 #[must_use]
-pub fn cipher_card_data(data: &CipherData) -> Option<&CardData> {
+pub const fn cipher_card_data(data: &CipherData) -> Option<&CardData> {
     if let CipherData::Card(v) = data {
         Some(v)
     } else {
@@ -481,7 +481,7 @@ pub fn cipher_card_data(data: &CipherData) -> Option<&CardData> {
     }
 }
 #[must_use]
-pub fn cipher_identity_data(data: &CipherData) -> Option<&IdentityData> {
+pub const fn cipher_identity_data(data: &CipherData) -> Option<&IdentityData> {
     if let CipherData::Identity(v) = data {
         Some(v)
     } else {
@@ -489,7 +489,7 @@ pub fn cipher_identity_data(data: &CipherData) -> Option<&IdentityData> {
     }
 }
 #[must_use]
-pub fn cipher_secure_note_data(data: &CipherData) -> Option<&SecureNoteData> {
+pub const fn cipher_secure_note_data(data: &CipherData) -> Option<&SecureNoteData> {
     if let CipherData::SecureNote(v) = data {
         Some(v)
     } else {
@@ -497,7 +497,7 @@ pub fn cipher_secure_note_data(data: &CipherData) -> Option<&SecureNoteData> {
     }
 }
 #[must_use]
-pub fn cipher_ssh_key_data(data: &CipherData) -> Option<&SshKeyData> {
+pub const fn cipher_ssh_key_data(data: &CipherData) -> Option<&SshKeyData> {
     if let CipherData::SshKey(v) = data {
         Some(v)
     } else {
@@ -522,7 +522,7 @@ pub struct Cipher {
 }
 
 /// Custom Deserialize for Cipher: reads the flat JSON layout (Type + separate
-/// Login/Card/Identity/SecureNote/SshKey fields) and constructs the CipherData enum.
+/// Login/Card/Identity/SecureNote/SshKey fields) and constructs the `CipherData` enum.
 impl<'de> Deserialize<'de> for Cipher {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -596,7 +596,7 @@ impl<'de> Deserialize<'de> for Cipher {
                 fingerprint: None,
             })),
         });
-        Ok(Cipher {
+        Ok(Self {
             id: h.id,
             organization_id: h.organization_id,
             deleted_date: h.deleted_date,
@@ -989,7 +989,10 @@ mod tests {
         fn test_cipher_type_is_enum() {
             let cipher = create_test_cipher();
             assert_eq!(
-                cipher.cipher_data.as_ref().map(|cd| cd.cipher_type()),
+                cipher
+                    .cipher_data
+                    .as_ref()
+                    .map(super::super::CipherData::cipher_type),
                 Some(CipherType::Login)
             );
         }
@@ -1191,7 +1194,10 @@ mod tests {
             let cipher: Cipher = serde_json::from_str(json).unwrap();
             assert_eq!(cipher.id, "cipher-123");
             assert_eq!(
-                cipher.cipher_data.as_ref().map(|cd| cd.cipher_type()),
+                cipher
+                    .cipher_data
+                    .as_ref()
+                    .map(super::super::CipherData::cipher_type),
                 Some(CipherType::Login)
             );
             assert_eq!(cipher.get_name(), Some("My Login"));
@@ -1463,7 +1469,10 @@ mod tests {
             let cipher_json = r#"{"Id": "test", "Type": 1}"#;
             let cipher: Cipher = serde_json::from_str(cipher_json).unwrap();
             assert_eq!(
-                cipher.cipher_data.as_ref().map(|cd| cd.cipher_type()),
+                cipher
+                    .cipher_data
+                    .as_ref()
+                    .map(super::super::CipherData::cipher_type),
                 Some(CipherType::Login)
             );
         }

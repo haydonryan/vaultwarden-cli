@@ -58,7 +58,7 @@ impl KdfIterations {
 
     /// Return the iteration count as a `u32`.
     #[must_use]
-    pub fn get(self) -> u32 {
+    pub const fn get(self) -> u32 {
         self.0.get()
     }
 }
@@ -133,26 +133,27 @@ impl MasterKey {
     /// Return the raw 32‑byte key material.
     ///
     /// Needed for serialization and testing.
-    pub fn as_bytes(&self) -> &[u8; 32] {
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 
     /// Always returns 32 (compile‑time guarantee via the type).
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         32
     }
 
     /// Returns `true` if the key is empty — always `false` for `MasterKey`.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         false
     }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
 #[cfg(test)]
-pub(crate) mod tests {
+pub mod tests {
     use super::*;
 
     #[test]

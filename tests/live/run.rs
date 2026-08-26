@@ -1,5 +1,5 @@
-//! Live tests: `run` and `run-uri` — env injection, env_clear isolation, info flag.
-#![allow(dead_code, clippy::pedantic, clippy::nursery)]
+//! Live tests: `run` and `run-uri` — env injection, `env_clear` isolation, info flag.
+#![allow(dead_code)]
 
 use crate::live_env::{
     FIXTURE_LOGIN_FIELD_API_KEY_VALUE, FIXTURE_LOGIN_NAME, FIXTURE_LOGIN_PASSWORD,

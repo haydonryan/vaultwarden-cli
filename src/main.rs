@@ -1,5 +1,3 @@
-#![allow(clippy::pedantic, clippy::nursery)]
-
 use clap::{Parser, Subcommand, ValueEnum};
 use vaultwarden_cli::commands::{self, OutputFormat};
 
@@ -13,17 +11,17 @@ type Result<T> = std::result::Result<T, anyhow::Error>;
 #[command(version)]
 struct Cli {
     /// Allow insecure HTTP connections (secrets sent unencrypted).
-    /// Also settable via VAULTWARDEN_ALLOW_HTTP=1 env var.
+    /// Also settable via `VAULTWARDEN_ALLOW_HTTP=1` env var.
     #[arg(long, global = true)]
     allow_insecure_http: bool,
 
     /// Allow decryption of ciphertext without MAC integrity verification.
-    /// Also settable via VAULTWARDEN_ALLOW_INSECURE_MAC=1 env var.
+    /// Also settable via `VAULTWARDEN_ALLOW_INSECURE_MAC=1` env var.
     #[arg(long, global = true)]
     allow_insecure_mac: bool,
 
     /// Allow plaintext JSON secret output when stdout is redirected or captured.
-    /// Also settable via VAULTWARDEN_ALLOW_PLAINTEXT_JSON=true env var.
+    /// Also settable via `VAULTWARDEN_ALLOW_PLAINTEXT_JSON=true` env var.
     #[arg(long, global = true, env = "VAULTWARDEN_ALLOW_PLAINTEXT_JSON")]
     allow_plaintext_json: bool,
 
@@ -238,12 +236,12 @@ async fn main() {
 }
 
 fn result_exit_code(result: &Result<commands::CommandOutcome>) -> i32 {
-    match result {
-        Ok(outcome) => outcome.exit_code(),
-        Err(_) => 1,
-    }
+    result
+        .as_ref()
+        .map_or(1, commands::CommandOutcome::exit_code)
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
     // Propagate global security flags to library code
     vaultwarden_cli::crypto::set_allow_insecure_mac(cli.allow_insecure_mac);
@@ -262,10 +260,8 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
             .await
             .map(|_| commands::CommandOutcome::Success),
         Commands::Lock => commands::lock()
-            .await
             .map(|_| commands::CommandOutcome::Success),
         Commands::Logout => commands::logout()
-            .await
             .map(|_| commands::CommandOutcome::Success),
         Commands::List {
             object,
@@ -280,7 +276,7 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
             } else {
                 commands::list(r#type, search, org, collection, json, &opts).await
             }
-            .map(|_| commands::CommandOutcome::Success)
+            .map(|()| commands::CommandOutcome::Success)
         }
         Commands::Get {
             item,
@@ -316,7 +312,7 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
                 )
                 .await
             }
-            .map(|_| commands::CommandOutcome::Success)
+            .map(|()| commands::CommandOutcome::Success)
         }
         Commands::GetUri {
             uri,
@@ -333,7 +329,7 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
             &opts,
         )
         .await
-        .map(|_| commands::CommandOutcome::Success),
+        .map(|()| commands::CommandOutcome::Success),
         Commands::Run {
             name,
             item,
@@ -375,19 +371,19 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
             .await
         }
         Commands::Status => commands::status()
-            .await
-            .map(|_| commands::CommandOutcome::Success),
+            .map(|()| commands::CommandOutcome::Success),
         Commands::Interpolate {
             file,
             output,
             skip_missing,
         } => commands::interpolate(&file, output.as_deref(), skip_missing, &opts)
             .await
-            .map(|_| commands::CommandOutcome::Success),
+            .map(|()| commands::CommandOutcome::Success),
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::significant_drop_tightening)]
 mod tests {
     use super::*;
     use std::sync::{Mutex, MutexGuard};
@@ -401,7 +397,7 @@ mod tests {
 
     struct TestEnv {
         _guard: MutexGuard<'static, ()>,
-        _temp_dir: TempDir,
+        temp_dir: TempDir,
         _config_dir_override: ConfigDirOverride,
         config_dir: std::path::PathBuf,
     }
@@ -410,7 +406,7 @@ mod tests {
         fn new() -> Self {
             let guard = ENV_LOCK
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let temp_dir = TempDir::new().expect("create temp dir");
             let config_root = temp_dir.path().join("config-root");
             std::fs::create_dir_all(&config_root).expect("create config root");
@@ -423,7 +419,7 @@ mod tests {
 
             Self {
                 _guard: guard,
-                _temp_dir: temp_dir,
+                temp_dir,
                 _config_dir_override: config_dir_override,
                 config_dir,
             }
@@ -442,7 +438,7 @@ mod tests {
         }
 
         fn fixture_file(&self, name: &str, contents: &str) -> String {
-            let path = self._temp_dir.path().join(name);
+            let path = self.temp_dir.path().join(name);
             std::fs::write(&path, contents).expect("write fixture");
             path.to_string_lossy().into_owned()
         }

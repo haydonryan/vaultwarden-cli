@@ -1,5 +1,3 @@
-#![allow(clippy::pedantic, clippy::nursery)]
-
 mod support;
 
 use assert_cmd::Command;
@@ -106,8 +104,8 @@ fn unlock_reads_password_from_environment() {
         email: Some(email.to_string()),
         access_token: Some("token".to_string()),
         token_expiry: Some(i64::MAX),
-        encrypted_key: Some(encrypted_user_key(password, email, 600000, &keys)),
-        kdf_iterations: KdfIterations::new(600000),
+        encrypted_key: Some(encrypted_user_key(password, email, 600_000, &keys)),
+        kdf_iterations: KdfIterations::new(600_000),
         ..Default::default()
     })
     .unwrap();
@@ -139,8 +137,8 @@ fn unlock_fails_when_keys_cannot_be_persisted() {
         email: Some(email.to_string()),
         access_token: Some("token".to_string()),
         token_expiry: Some(i64::MAX),
-        encrypted_key: Some(encrypted_user_key(password, email, 600000, &keys)),
-        kdf_iterations: KdfIterations::new(600000),
+        encrypted_key: Some(encrypted_user_key(password, email, 600_000, &keys)),
+        kdf_iterations: KdfIterations::new(600_000),
         ..Default::default()
     })
     .unwrap();
@@ -1676,6 +1674,7 @@ async fn get_totp_fallback_ignores_whitespace_only_seed() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn get_totp_supports_id_and_search_errors_without_changing_legacy_get() {
     let ctx = TestContext::new();
     let keys = test_crypto_keys();

@@ -1,5 +1,3 @@
-#![allow(clippy::pedantic, clippy::nursery)]
-
 mod support;
 
 use support::TestContext;
@@ -30,9 +28,8 @@ async fn api_client_new_trims_trailing_slash_for_requests() {
 fn api_client_from_config_requires_server() {
     let config = Config::default();
 
-    let err = match ApiClient::from_config(&config) {
-        Ok(_) => panic!("missing server"),
-        Err(err) => err,
+    let Err(err) = ApiClient::from_config(&config) else {
+        panic!("missing server");
     };
     assert!(err.to_string().contains("No server configured"));
 }
@@ -75,7 +72,7 @@ async fn api_client_login_sends_expected_form_fields() {
         "refresh_token": "refresh-token",
         "scope": "api",
         "Key": "2.encrypted-key",
-        "KdfIterations": 600000
+        "KdfIterations": 600_000
     });
 
     Mock::given(method("POST"))
@@ -97,7 +94,7 @@ async fn api_client_login_sends_expected_form_fields() {
 
     assert_eq!(token.access_token, "access-token");
     assert_eq!(token.refresh_token.as_deref(), Some("refresh-token"));
-    assert_eq!(token.kdf_iterations, Some(600000));
+    assert_eq!(token.kdf_iterations, Some(600_000));
 }
 
 #[tokio::test]
@@ -383,7 +380,7 @@ async fn api_client_ciphers_sends_bearer_token_and_parses_response() {
         ciphers.data[0]
             .cipher_data
             .as_ref()
-            .map(|cd| cd.cipher_type()),
+            .map(vaultwarden_cli::models::CipherData::cipher_type),
         Some(CipherType::SshKey)
     );
     assert!(
@@ -424,7 +421,10 @@ async fn api_client_cipher_by_id_sends_bearer_token_and_parses_response() {
 
     assert_eq!(cipher.id, "cipher-ssh");
     assert_eq!(
-        cipher.cipher_data.as_ref().map(|cd| cd.cipher_type()),
+        cipher
+            .cipher_data
+            .as_ref()
+            .map(vaultwarden_cli::models::CipherData::cipher_type),
         Some(CipherType::SshKey)
     );
     assert!(

@@ -57,6 +57,10 @@ fn emit_warning(msg: &str) {
 /// Because capture is process-wide (not thread-local), callers must ensure
 /// mutual exclusion — in tests, hold the `env_lock()` for the guard's
 /// lifetime so parallel tests cannot interfere.
+///
+/// # Panics
+///
+/// Panics if the warning capture mutex is poisoned.
 pub fn capture_warnings() -> WarnCapture {
     *WARN_CAPTURE.lock().expect("WARN_CAPTURE poisoned") = Some(Vec::new());
     WarnCapture { _private: () }
@@ -70,6 +74,10 @@ pub struct WarnCapture {
 impl WarnCapture {
     /// Drain and return all warnings collected since capture was activated
     /// (or since the last `drain` call).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the warning capture mutex is poisoned.
     pub fn drain(&self) -> Vec<String> {
         WARN_CAPTURE
             .lock()
@@ -108,12 +116,11 @@ where
 {
     let opt = Option::<serde_json::Value>::deserialize(deserializer)?;
     match opt {
-        None => Ok(None),
         Some(serde_json::Value::Number(n)) => {
             let val = n.as_u64().and_then(|v| u32::try_from(v).ok());
             Ok(val.and_then(KdfIterations::new))
         }
-        Some(_) => Ok(None),
+        Some(_) | None => Ok(None),
     }
 }
 
@@ -187,7 +194,7 @@ fn set_secure_dir_permissions(path: &std::path::Path) -> Result<()> {
     #[cfg(unix)]
     {
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-            .with_context(|| format!("Failed to set secure permissions on {path:?}"))?;
+            .with_context(|| format!("Failed to set secure permissions on {}", path.display()))?;
     }
     #[allow(unreachable_code)]
     Ok(())
@@ -197,7 +204,7 @@ fn set_secure_file_permissions(path: &std::path::Path) -> Result<()> {
     #[cfg(unix)]
     {
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("Failed to set secure permissions on {path:?}"))?;
+            .with_context(|| format!("Failed to set secure permissions on {}", path.display()))?;
     }
     #[allow(unreachable_code)]
     Ok(())
@@ -206,8 +213,7 @@ fn set_secure_file_permissions(path: &std::path::Path) -> Result<()> {
 fn insecure_key_file_fallback_allowed() -> bool {
     cfg!(test)
         || std::env::var(ALLOW_INSECURE_KEY_FILE_ENV)
-            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-            .unwrap_or(false)
+            .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
 }
 
 // ── Session lifecycle marker types ─────────────────────────────────────────
@@ -323,6 +329,7 @@ impl Session<LoggedOut> {
     /// Transition from logged-out to logged-in-locked after a successful login.
     /// This does NOT perform the login — it's a type-safe wrapper for code that
     /// has already populated the Config fields.
+    #[must_use]
     pub fn into_logged_in_locked(self) -> Session<LoggedInLocked> {
         Session {
             config: self.config,
@@ -334,6 +341,7 @@ impl Session<LoggedOut> {
 impl Session<LoggedInLocked> {
     /// Transition from logged-in-locked to logged-in-unlocked after a successful
     /// unlock.  This does NOT perform the unlock — it's a type-safe wrapper.
+    #[must_use]
     pub fn into_unlocked(self) -> Session<LoggedInUnlocked> {
         Session {
             config: self.config,
@@ -533,7 +541,7 @@ impl Config {
         let path = config_dir.join("config.json");
         if path.exists() {
             let content = fs::read_to_string(&path)
-                .with_context(|| format!("Failed to read config from {path:?}"))?;
+                .with_context(|| format!("Failed to read config from {}", path.display()))?;
             let mut config: Self =
                 serde_json::from_str(&content).context("Failed to parse config")?;
             config.config_dir_override = Some(config_dir);
@@ -606,8 +614,9 @@ impl Config {
     pub fn save(&self) -> Result<()> {
         let path = self.config_file_path()?;
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create config directory {parent:?}"))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create config directory {}", parent.display())
+            })?;
             set_secure_dir_permissions(parent)?;
         }
         let content = serde_json::to_string_pretty(self)?;
@@ -630,7 +639,7 @@ impl Config {
         }
     }
 
-    fn key_data_to_keys(data: KeyData) -> Result<CryptoKeys> {
+    fn key_data_to_keys(data: &KeyData) -> Result<CryptoKeys> {
         let enc_key: [u8; 32] = BASE64
             .decode(&data.enc_key)?
             .try_into()
@@ -649,6 +658,7 @@ impl Config {
     ///
     /// Returns an error if the keys cannot be serialized or written to the
     /// selected storage.
+    #[allow(clippy::option_if_let_else)]
     pub fn save_keys(&self) -> Result<KeyPersistenceOutcome> {
         // Store keys in the OS keyring instead of a plaintext file.
         // If keyring is unavailable, default to no-persist rather than writing
@@ -755,13 +765,13 @@ impl Config {
         {
             let saved: SavedKeys = serde_json::from_str(&content)?;
             if let Some(keys_data) = saved.user_keys {
-                self.crypto_keys = Some(Self::key_data_to_keys(keys_data)?);
+                self.crypto_keys = Some(Self::key_data_to_keys(&keys_data)?);
             }
             for (id, keys_data) in saved.org_keys {
                 self.org_crypto_keys.insert(
                     OrgId::new(id)
-                        .map_err(|e| anyhow::anyhow!("Invalid org ID in saved keys: {}", e))?,
-                    Self::key_data_to_keys(keys_data)?,
+                        .map_err(|e| anyhow::anyhow!("Invalid org ID in saved keys: {e}"))?,
+                    Self::key_data_to_keys(&keys_data)?,
                 );
             }
             return Ok(());
@@ -784,14 +794,14 @@ impl Config {
             let saved: SavedKeys = serde_json::from_str(&content)?;
 
             if let Some(keys_data) = saved.user_keys {
-                self.crypto_keys = Some(Self::key_data_to_keys(keys_data)?);
+                self.crypto_keys = Some(Self::key_data_to_keys(&keys_data)?);
             }
 
             for (id, keys_data) in saved.org_keys {
                 self.org_crypto_keys.insert(
                     OrgId::new(id)
-                        .map_err(|e| anyhow::anyhow!("Invalid org ID in saved keys: {}", e))?,
-                    Self::key_data_to_keys(keys_data)?,
+                        .map_err(|e| anyhow::anyhow!("Invalid org ID in saved keys: {e}"))?,
+                    Self::key_data_to_keys(&keys_data)?,
                 );
             }
         }
@@ -815,7 +825,7 @@ impl Config {
                 "saved vault keys",
             )?
         {
-            delete_keyring_credential(entry, "saved vault keys")?;
+            delete_keyring_credential(&entry, "saved vault keys")?;
         }
 
         // Also remove legacy keys.json if it exists
@@ -831,6 +841,7 @@ impl Config {
     /// # Errors
     ///
     /// Returns an error if the tokens cannot be serialized or written.
+    #[allow(clippy::option_if_let_else)]
     pub fn save_tokens(&self) -> Result<()> {
         let access_token = match &self.access_token {
             None => return Ok(()), // nothing to persist
@@ -939,7 +950,7 @@ impl Config {
                 "saved tokens",
             )?
         {
-            delete_keyring_credential(entry, "saved tokens")?;
+            delete_keyring_credential(&entry, "saved tokens")?;
         }
 
         // Also remove tokens.json if it exists
@@ -975,11 +986,9 @@ impl Config {
 
     #[must_use]
     pub fn get_keys_for_cipher(&self, org_id: Option<&str>) -> Option<&CryptoKeys> {
-        if let Some(org_id) = org_id {
+        org_id.map_or(self.crypto_keys.as_ref(), |org_id| {
             self.org_crypto_keys.get(org_id)
-        } else {
-            self.crypto_keys.as_ref()
-        }
+        })
     }
 
     #[must_use]
@@ -1045,7 +1054,8 @@ fn ensure_native_keyring_store() -> Result<()> {
 }
 
 #[cfg(test)]
-fn install_native_keyring_store() -> Result<()> {
+#[allow(clippy::unnecessary_wraps)]
+const fn install_native_keyring_store() -> Result<()> {
     Ok(())
 }
 
@@ -1093,7 +1103,7 @@ fn optional_keyring_entry_for_delete(entry: Result<Entry>, label: &str) -> Resul
     }
 }
 
-fn delete_keyring_credential(entry: Entry, label: &str) -> Result<()> {
+fn delete_keyring_credential(entry: &Entry, label: &str) -> Result<()> {
     match entry.delete_credential() {
         Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
         Err(err) => {
@@ -1136,7 +1146,7 @@ pub fn delete_client_secret(client_id: &str) -> Result<()> {
     if let Some(entry) =
         optional_keyring_entry_for_delete(keyring_entry(client_id), "client secret")?
     {
-        delete_keyring_credential(entry, "client secret")?;
+        delete_keyring_credential(&entry, "client secret")?;
     }
     Ok(())
 }
@@ -1463,6 +1473,23 @@ mod tests {
             assert_eq!(config.token_expiry, Some(1_234_567_890));
             // Pure in-memory fields are never present in JSON.
             assert!(config.crypto_keys.is_none());
+        }
+
+        #[test]
+        fn test_config_deserialization_maps_zero_and_invalid_kdf_iterations_to_none() {
+            for kdf_json in ["\"kdf_iterations\": 0", "\"kdf_iterations\": \"invalid\""] {
+                let json = format!(r#"{{ "server": "https://vault.example.com", {kdf_json} }}"#);
+                let config: Config = serde_json::from_str(&json).unwrap();
+                assert_eq!(
+                    config.kdf_iterations, None,
+                    "expected kdf_iterations to fall back to None for {kdf_json}"
+                );
+            }
+
+            // A valid value is still preserved through the same deserializer.
+            let config: Config =
+                serde_json::from_str(r#"{ "server": "x", "kdf_iterations": 600000 }"#).unwrap();
+            assert_eq!(config.kdf_iterations.map(KdfIterations::get), Some(600_000));
         }
 
         #[test]

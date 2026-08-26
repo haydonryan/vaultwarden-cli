@@ -21,7 +21,7 @@ struct TotpConfig {
     steam: bool,
 }
 
-pub(crate) fn generate(seed: &str, timestamp: u64) -> Result<String> {
+pub fn generate(seed: &str, timestamp: u64) -> Result<String> {
     let config = parse(seed)?;
     generate_config(&config, timestamp)
 }
@@ -78,7 +78,6 @@ fn parse_otpauth(uri: &str) -> Result<TotpConfig> {
             "secret" => secret = Some(decode_base32(value.trim())?),
             "algorithm" => {
                 algorithm = match value.to_ascii_uppercase().as_str() {
-                    "SHA1" => Algorithm::Sha1,
                     "SHA256" => Algorithm::Sha256,
                     "SHA512" => Algorithm::Sha512,
                     _ => Algorithm::Sha1,
@@ -148,6 +147,7 @@ const fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn decode_base32(value: &str) -> Result<Vec<u8>> {
     let mut output = Vec::with_capacity(value.len() * 5 / 8 + 1);
     let mut accumulator = 0_u32;
@@ -175,6 +175,7 @@ fn decode_base32(value: &str) -> Result<Vec<u8>> {
     Ok(output)
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn generate_config(config: &TotpConfig, timestamp: u64) -> Result<String> {
     let counter = timestamp
         .checked_div(config.period)

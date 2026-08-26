@@ -1,4 +1,4 @@
-#![allow(dead_code, clippy::pedantic, clippy::nursery)]
+#![allow(dead_code)]
 
 use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
 use anyhow::{Context, Result};
@@ -284,7 +284,7 @@ pub fn unavailable_keyring() -> MockKeyring {
     MockKeyring { previous }
 }
 
-pub fn test_crypto_keys() -> CryptoKeys {
+pub const fn test_crypto_keys() -> CryptoKeys {
     CryptoKeys::from_key_bytes(
         [
             0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
@@ -360,7 +360,7 @@ pub fn token_response(access_token: &str) -> TokenResponse {
         key: Some("2.encrypted-key".to_string()),
         private_key: Some("2.encrypted-private-key".to_string()),
         kdf: Some(KdfType::Pbkdf2),
-        kdf_iterations: Some(600000),
+        kdf_iterations: Some(600_000),
     }
 }
 

@@ -2,12 +2,12 @@
 //! expose a pre-configured `Command` builder, and clean up on drop.
 //!
 //! Gated by the environment variables:
-//!   VAULTWARDEN_LIVE_TEST_URL     — URL of a running Vaultwarden instance
-//!   VAULTWARDEN_LIVE_ADMIN_TOKEN  — admin token for user teardown
+//!   `VAULTWARDEN_LIVE_TEST_URL`     — URL of a running Vaultwarden instance
+//!   `VAULTWARDEN_LIVE_ADMIN_TOKEN`  — admin token for user teardown
 //!
 //! If either variable is absent every test module that calls
 //! `LiveTestEnv::maybe_create().await` will simply return early (skip).
-#![allow(dead_code, clippy::pedantic, clippy::nursery)]
+#![allow(dead_code)]
 
 use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
 use anyhow::{Context, Result};
@@ -83,17 +83,17 @@ pub struct LiveTestEnv {
     _temp_dir: TempDir,
     /// $HOME set for the test binary
     pub home_dir: PathBuf,
-    /// XDG_CONFIG_HOME set for the test binary
+    /// `XDG_CONFIG_HOME` set for the test binary
     pub config_root: PathBuf,
-    /// Actual vaultwarden-cli config directory inside config_root
+    /// Actual vaultwarden-cli config directory inside `config_root`
     pub config_dir: PathBuf,
     /// Vaultwarden server URL
     pub server_url: String,
     /// Test user email
     pub email: String,
-    /// API client_id (from rotate-api-key)
+    /// API `client_id` (from rotate-api-key)
     pub client_id: String,
-    /// API client_secret (from rotate-api-key)
+    /// API `client_secret` (from rotate-api-key)
     pub client_secret: String,
     /// User UUID for admin teardown
     user_uuid: String,
@@ -125,7 +125,7 @@ impl LiveTestEnv {
     }
 
     /// Build a `Command` for the `vaultwarden-cli` binary with the correct
-    /// HOME/XDG_CONFIG_HOME and HTTP-allow env vars pointing at our temp dir.
+    /// `HOME/XDG_CONFIG_HOME` and HTTP-allow env vars pointing at our temp dir.
     pub fn binary(&self) -> Command {
         let mut cmd = Command::cargo_bin("vaultwarden-cli").expect("vaultwarden-cli binary");
         cmd.env("HOME", &self.home_dir);
@@ -141,7 +141,7 @@ impl LiveTestEnv {
         cmd
     }
 
-    /// Build a binary command with VAULTWARDEN_PASSWORD pre-set.
+    /// Build a binary command with `VAULTWARDEN_PASSWORD` pre-set.
     pub fn binary_with_password(&self) -> Command {
         let mut cmd = self.binary();
         cmd.env("VAULTWARDEN_PASSWORD", TEST_PASSWORD);
@@ -163,7 +163,7 @@ impl LiveTestEnv {
 
     /// Re-write a fresh tokens.json so that subsequent commands can auth.
     /// Called after tests that exercise logout (which deletes tokens.json).
-    pub async fn restore_session(&self, access_token: &str, refresh_token: Option<&str>) {
+    pub fn restore_session(&self, access_token: &str, refresh_token: Option<&str>) {
         let expiry = unix_now() + 3600;
         let tokens_json = json!({
             "access_token": access_token,
@@ -184,6 +184,7 @@ impl LiveTestEnv {
 
     // ── Private helpers ────────────────────────────────────────────────────
 
+    #[allow(clippy::too_many_lines, clippy::similar_names)]
     async fn create(server_url: String, admin_token: String) -> Result<Self> {
         install_rustls_crypto_provider();
         let http = Client::new();
@@ -233,7 +234,7 @@ impl LiveTestEnv {
             .await
             .context("registration request")?;
 
-        ensure_ok(&reg_resp.status(), reg_resp.text().await.ok(), "register")?;
+        ensure_ok(reg_resp.status(), reg_resp.text().await.ok(), "register")?;
 
         // ── Password grant → bearer token ────────────────────────────────
         let bearer = password_grant(&http, &server_url, &email, &pw_hash, &device_id).await?;
@@ -567,7 +568,7 @@ pub fn encrypt_str(plaintext: &str, keys: &CryptoKeys) -> String {
 }
 
 /// Compute the Bitwarden master-password hash:
-///   PBKDF2-SHA256(master_key, password_bytes, 1) → base64
+///   `PBKDF2-SHA256(master_key, password_bytes, 1)` → base64
 fn master_password_hash(master_key: &[u8], password: &str) -> String {
     let mut hash = [0u8; 32];
     pbkdf2_hmac::<Sha256>(master_key, password.as_bytes(), 1, &mut hash);
@@ -610,7 +611,7 @@ async fn password_grant(
         .with_context(|| format!("no access_token in password grant: {resp}"))
 }
 
-fn ensure_ok(status: &reqwest::StatusCode, body: Option<String>, operation: &str) -> Result<()> {
+fn ensure_ok(status: reqwest::StatusCode, body: Option<String>, operation: &str) -> Result<()> {
     if status.is_success() {
         return Ok(());
     }
@@ -694,7 +695,7 @@ async fn create_login(
         .iter()
         .map(|(n, v, hidden)| {
             json!({
-                "type": if *hidden { 1u8 } else { 0u8 },
+                "type": u8::from(*hidden),
                 "name": encrypt_str(n, keys),
                 "value": encrypt_str(v, keys),
             })
@@ -876,14 +877,21 @@ fn write_secret_file(path: &std::path::Path, content: &str) -> Result<()> {
 // ── Misc ───────────────────────────────────────────────────────────────────
 
 fn random_hex(bytes: usize) -> String {
+    use std::fmt::Write as _;
     let mut buf = vec![0u8; bytes];
     rand::rng().fill_bytes(&mut buf);
-    buf.iter().map(|b| format!("{b:02x}")).collect()
+    let mut out = String::with_capacity(bytes * 2);
+    for b in buf {
+        write!(out, "{b:02x}").expect("write to string");
+    }
+    out
 }
 
 fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock ok")
-        .as_secs() as i64
+        .as_secs()
+        .try_into()
+        .expect("unix time fits i64")
 }

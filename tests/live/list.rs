@@ -1,5 +1,5 @@
 //! Live tests: `list` command — all filter/output combinations.
-#![allow(dead_code, clippy::pedantic, clippy::nursery)]
+#![allow(dead_code)]
 
 use crate::live_env::{
     FIXTURE_CARD_NAME, FIXTURE_LOGIN_NAME, FIXTURE_LOGIN_USERNAME, FIXTURE_LOGIN2_NAME,

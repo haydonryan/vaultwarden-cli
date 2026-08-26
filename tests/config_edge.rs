@@ -1,5 +1,3 @@
-#![allow(clippy::pedantic, clippy::nursery)]
-
 mod support;
 
 use support::{
@@ -99,11 +97,11 @@ fn config_save_keys_warns_when_client_id_is_none() {
         ..Default::default()
     });
 
-    let _capture = config::capture_warnings();
+    let capture = config::capture_warnings();
     config
         .save_keys()
         .expect("save_keys should succeed via file fallback");
-    let warnings = _capture.drain();
+    let warnings = capture.drain();
 
     assert!(
         warnings
@@ -195,12 +193,12 @@ fn config_save_keys_defaults_to_no_persist_without_keyring() {
         ..Default::default()
     });
 
-    let _capture = config::capture_warnings();
+    let capture = config::capture_warnings();
     let outcome = config
         .save_keys()
         .expect("no-persist key fallback should not fail");
     assert_eq!(outcome, KeyPersistenceOutcome::NotPersisted);
-    let warnings = _capture.drain();
+    let warnings = capture.drain();
 
     assert!(
         !ctx.keys_path().exists(),
