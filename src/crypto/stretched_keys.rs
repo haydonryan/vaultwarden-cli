@@ -66,19 +66,21 @@ impl StretchedKeys {
     }
 
     /// Read the 32‑byte encryption key (for serialization / testing).
-    pub fn enc_key(&self) -> &[u8; 32] {
+    #[must_use]
+    pub const fn enc_key(&self) -> &[u8; 32] {
         &self.enc_key
     }
 
     /// Read the 32‑byte MAC key (for serialization / testing).
-    pub fn mac_key(&self) -> &[u8; 32] {
+    #[must_use]
+    pub const fn mac_key(&self) -> &[u8; 32] {
         &self.mac_key
     }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
 #[cfg(test)]
-pub(crate) mod tests {
+pub mod tests {
     use crate::crypto::{KdfIterations, MasterKey};
 
     #[test]

@@ -2,7 +2,7 @@
 //! output modes, skip-missing, and error paths.
 //!
 //! Placeholder format: `((item-name.field))` — double-paren, NOT curly braces.
-#![allow(dead_code, clippy::pedantic, clippy::nursery)]
+#![allow(dead_code)]
 
 use crate::live_env::{
     FIXTURE_LOGIN_FIELD_API_KEY_VALUE, FIXTURE_LOGIN_FIELD_SECRET_VALUE, FIXTURE_LOGIN_NAME,
@@ -14,7 +14,7 @@ use std::io::Write;
 
 // ── helpers ───────────────────────────────────────────────────────────────
 
-/// Write a template to a NamedTempFile and return (file, path-str).
+/// Write a template to a `NamedTempFile` and return (file, path-str).
 fn write_template(content: &str) -> (tempfile::NamedTempFile, String) {
     let mut f = tempfile::NamedTempFile::new().unwrap();
     f.write_all(content.as_bytes()).unwrap();

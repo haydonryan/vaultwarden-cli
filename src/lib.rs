@@ -1,7 +1,5 @@
 //! vaultwarden-cli library
 //!
-//! This library provides the core functionality for the vaultwarden-cli tool.
-#![allow(clippy::pedantic, clippy::nursery)]
 
 pub mod api;
 pub mod commands;

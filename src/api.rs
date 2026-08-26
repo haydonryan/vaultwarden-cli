@@ -86,8 +86,7 @@ impl ApiClient {
             // CLI flag takes precedence; fall back to env var
             let allow_http = allow_insecure_http
                 || std::env::var("VAULTWARDEN_ALLOW_HTTP")
-                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                    .unwrap_or(false);
+                    .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
             if !allow_http {
                 anyhow::bail!(
                     "Insecure server URL rejected: only https:// is allowed in production. \
@@ -157,7 +156,7 @@ impl ApiClient {
         Self::new_with_flags(server, allow_insecure_http)
     }
 
-    /// Log in using the OAuth2 client-credentials token endpoint.
+    /// Log in using the `OAuth2` client-credentials token endpoint.
     ///
     /// # Errors
     ///
@@ -185,7 +184,7 @@ impl ApiClient {
         .await
     }
 
-    /// Refresh the access token using the OAuth2 refresh-token endpoint.
+    /// Refresh the access token using the `OAuth2` refresh-token endpoint.
     ///
     /// # Errors
     ///

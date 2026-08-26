@@ -1,5 +1,3 @@
-#![allow(clippy::pedantic, clippy::nursery)]
-
 mod support;
 
 use predicates::prelude::*;

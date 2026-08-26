@@ -2,7 +2,7 @@
 //!
 //! Gated by environment variables — see `live/env.rs` for details.
 //! Run via: `./scripts/test-live.sh`
-#![allow(clippy::pedantic, clippy::nursery, unused_imports)]
+#![allow(unused_imports)]
 
 // Shared live test environment (LiveTestEnv + fixture constants).
 #[path = "live/env.rs"]

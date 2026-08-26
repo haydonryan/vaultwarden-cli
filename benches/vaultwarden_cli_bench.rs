@@ -1,8 +1,7 @@
-#![allow(clippy::pedantic, clippy::nursery)]
-
 use clap::{Arg, ArgAction, Command};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use serde_json::json;
+use std::fmt::Write;
 use std::hint::black_box;
 use std::time::Duration;
 use vaultwarden_cli::models::{
@@ -216,13 +215,13 @@ fn export_env(outputs: &[CipherOutput]) -> String {
     for output in outputs {
         let prefix = output.name.to_uppercase().replace('-', "_");
         if let Some(username) = &output.username {
-            env.push_str(&format!("{prefix}_USERNAME={username}\n"));
+            writeln!(env, "{prefix}_USERNAME={username}").unwrap();
         }
         if let Some(password) = &output.password {
-            env.push_str(&format!("{prefix}_PASSWORD={password}\n"));
+            writeln!(env, "{prefix}_PASSWORD={password}").unwrap();
         }
         if let Some(uri) = &output.uri {
-            env.push_str(&format!("{prefix}_URI={uri}\n"));
+            writeln!(env, "{prefix}_URI={uri}").unwrap();
         }
     }
     env

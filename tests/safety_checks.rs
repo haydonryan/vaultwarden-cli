@@ -2,14 +2,12 @@
 //!
 //! These tests verify that vaultwarden-cli:
 //! - Restricts file permissions on config and key files (0o600/0o700)
-//! - Wipes key material from memory when CryptoKeys is dropped (ZeroizeOnDrop)
+//! - Wipes key material from memory when `CryptoKeys` is dropped (`ZeroizeOnDrop`)
 //! - Stores decryption keys in the OS keyring (with file fallback)
 //! - Validates server URLs before connecting
 //! - Warns when decrypting items without MAC integrity verification
 //! - Restricts permissions on interpolation output files
 //! - Configures request timeouts on the API client
-
-#![allow(clippy::pedantic, clippy::nursery)]
 
 mod support;
 

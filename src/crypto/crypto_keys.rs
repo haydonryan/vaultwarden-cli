@@ -57,7 +57,8 @@ impl CryptoKeys {
     }
 
     /// Construct `CryptoKeys` from raw key bytes (for config deserialisation).
-    pub fn from_key_bytes(enc_key: [u8; 32], mac_key: [u8; 32]) -> Self {
+    #[must_use]
+    pub const fn from_key_bytes(enc_key: [u8; 32], mac_key: [u8; 32]) -> Self {
         Self { enc_key, mac_key }
     }
 
@@ -114,12 +115,14 @@ impl CryptoKeys {
     // ── Public accessors for serialization / config ──────────────────────
 
     /// Read the 32‑byte encryption key.
-    pub fn enc_key_bytes(&self) -> &[u8; 32] {
+    #[must_use]
+    pub const fn enc_key_bytes(&self) -> &[u8; 32] {
         &self.enc_key
     }
 
     /// Read the 32‑byte MAC key.
-    pub fn mac_key_bytes(&self) -> &[u8; 32] {
+    #[must_use]
+    pub const fn mac_key_bytes(&self) -> &[u8; 32] {
         &self.mac_key
     }
 
@@ -169,8 +172,7 @@ impl CryptoKeys {
         } else {
             let allow = allow_insecure_mac()
                 || std::env::var("VAULTWARDEN_ALLOW_INSECURE_MAC")
-                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                    .unwrap_or(false);
+                    .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
             if !allow {
                 anyhow::bail!(
                     "Encrypted string is missing MAC (integrity tag). \
@@ -196,22 +198,22 @@ impl CryptoKeys {
         Ok(buf)
     }
 
-    /// Expose enc_key for tests.
+    /// Expose `enc_key` for tests.
     #[cfg(test)]
-    pub(crate) fn enc_key(&self) -> &[u8; 32] {
+    pub(crate) const fn enc_key(&self) -> &[u8; 32] {
         &self.enc_key
     }
 
-    /// Expose mac_key for tests.
+    /// Expose `mac_key` for tests.
     #[cfg(test)]
-    pub(crate) fn mac_key(&self) -> &[u8; 32] {
+    pub(crate) const fn mac_key(&self) -> &[u8; 32] {
         &self.mac_key
     }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
 #[cfg(test)]
-pub(crate) mod tests {
+pub mod tests {
     use super::*;
     use crate::crypto::{KdfIterations, MasterKey};
 
@@ -390,7 +392,7 @@ pub(crate) mod tests {
     }
 
     /// Test helpers that mirror the original `test_helpers` module.
-    pub(crate) mod test_helpers {
+    pub mod test_helpers {
         use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
         use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
         use hmac::{Hmac, KeyInit, Mac};
@@ -488,7 +490,9 @@ pub(crate) mod tests {
         #[test]
         fn test_roundtrip_long_text() {
             let (keys, _, _) = make_keys();
-            let plaintext: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
+            let plaintext: Vec<u8> = (0..1000)
+                .map(|i| u8::try_from(i % 256).expect("i % 256 fits in u8"))
+                .collect();
             let encrypted = encrypt_bytes_for_test(&plaintext, keys.enc_key(), keys.mac_key());
             let decrypted = keys.decrypt(&encrypted).unwrap();
             assert_eq!(decrypted, plaintext);

@@ -57,10 +57,11 @@ async fn acquire_token_refresh_lock(config: &Config) -> Result<TokenRefreshLock>
         .context("Token refresh lock task failed")?
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn acquire_token_refresh_lock_blocking(path: std::path::PathBuf) -> Result<TokenRefreshLock> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create config directory {parent:?}"))?;
+            .with_context(|| format!("Failed to create config directory {}", parent.display()))?;
     }
     let file = OpenOptions::new()
         .read(true)
@@ -338,7 +339,7 @@ pub async fn unlock(
 /// # Errors
 ///
 /// Returns an error if no session can be loaded or it is not unlocked.
-pub async fn lock() -> Result<Session<LoggedInLocked>> {
+pub fn lock() -> Result<Session<LoggedInLocked>> {
     let session = Config::load_session()?;
     let unlocked = session.require_unlocked()?;
     unlocked.lock()
@@ -350,7 +351,7 @@ pub async fn lock() -> Result<Session<LoggedInLocked>> {
 ///
 /// Returns an error if the session cannot be loaded, the stored client
 /// secret cannot be deleted, or the config cannot be cleared.
-pub async fn logout() -> Result<Session<LoggedOut>> {
+pub fn logout() -> Result<Session<LoggedOut>> {
     let session = Config::load_session()?;
     let mut config = session.config;
     // Try logging out - if not logged in, just return success
@@ -375,7 +376,7 @@ pub async fn logout() -> Result<Session<LoggedOut>> {
 /// # Errors
 ///
 /// Returns an error if the persisted config cannot be loaded.
-pub async fn status() -> Result<()> {
+pub fn status() -> Result<()> {
     let config = Config::load()?;
 
     if !config.is_logged_in() {
@@ -552,9 +553,8 @@ fn find_cipher_output(
         if !matches_filters(cipher) {
             continue;
         }
-        let keys = match get_cipher_keys(config, cipher) {
-            Ok(k) => k,
-            Err(_) => continue,
+        let Ok(keys) = get_cipher_keys(config, cipher) else {
+            continue;
         };
         if let Ok(output) = decrypt_cipher(cipher, keys)
             && predicate(&output)
@@ -712,9 +712,8 @@ fn find_cipher_output_by_name_or_id(
         if !matches_filters(cipher) {
             continue;
         }
-        let keys = match get_cipher_keys(config, cipher) {
-            Ok(k) => k,
-            Err(_) => continue,
+        let Ok(keys) = get_cipher_keys(config, cipher) else {
+            continue;
         };
         if let Ok(output) =
             decrypt_cipher_with_profile(cipher, keys, CipherDecryptionProfile::list_env_names())
@@ -839,6 +838,7 @@ fn decrypt_cipher(cipher: &Cipher, keys: &CryptoKeys) -> Result<CipherOutput> {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(clippy::struct_excessive_bools)]
 struct CipherDecryptionProfile {
     username: bool,
     password: bool,
@@ -960,6 +960,7 @@ fn decrypt_optional_cipher_subfield(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn decrypt_cipher_with_profile(
     cipher: &Cipher,
     keys: &CryptoKeys,
@@ -1125,9 +1126,8 @@ fn resolve_collection_id(
         {
             continue;
         }
-        let keys = match config.get_keys_for_cipher(Some(col.organization_id.as_str())) {
-            Some(k) => k,
-            None => continue,
+        let Some(keys) = config.get_keys_for_cipher(Some(col.organization_id.as_str())) else {
+            continue;
         };
         if let Ok(name) = keys.decrypt_to_string(&col.name)
             && name.eq_ignore_ascii_case(collection_filter)
@@ -1452,9 +1452,8 @@ pub async fn get_totp(query: &str, opts: &CommandOptions) -> Result<()> {
             .iter()
             .filter(|cipher| cipher.deleted_date.is_none())
         {
-            let keys = match get_cipher_keys(&ctx.config, cipher) {
-                Ok(keys) => keys,
-                Err(_) => continue,
+            let Ok(keys) = get_cipher_keys(&ctx.config, cipher) else {
+                continue;
             };
             if cipher_matches_totp_search(cipher, keys, query, &query_lower)
                 && cipher_has_usable_totp(cipher, keys)
@@ -1609,9 +1608,8 @@ fn build_interpolation_indexes<'a>(
     let mut by_id: HashMap<String, &'a Cipher> = HashMap::new();
 
     for cipher in ciphers {
-        let keys = match get_cipher_keys(config, cipher) {
-            Ok(k) => k,
-            Err(_) => continue,
+        let Ok(keys) = get_cipher_keys(config, cipher) else {
+            continue;
         };
         if let Ok(output) =
             decrypt_cipher_with_profile(cipher, keys, CipherDecryptionProfile::list_env_names())
@@ -1676,11 +1674,11 @@ pub async fn interpolate(
     skip_missing: bool,
     opts: &CommandOptions,
 ) -> Result<()> {
+    static PLACEHOLDER_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\(\(([^\s()]+)\)\)").expect("valid regex"));
     let api_ctx = load_api_context(opts.allow_insecure_http).await?;
     let input =
         fs::read_to_string(file).with_context(|| format!("Failed to read file '{file}'"))?;
-    static PLACEHOLDER_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\(\(([^\s()]+)\)\)").expect("valid regex"));
     let sync_response = api_ctx.api.sync(&api_ctx.access_token).await?;
     let (by_name, by_id) = build_interpolation_indexes(&sync_response.ciphers, &api_ctx.config);
     let mut missing: Vec<String> = Vec::new();
@@ -1755,11 +1753,10 @@ fn write_interpolated_output(output: &str, output_file: Option<&str>) -> Result<
                 path.display()
             )
         })?;
-        Ok(())
     } else {
         print!("{output}");
-        Ok(())
     }
+    Ok(())
 }
 
 fn write_atomic_owner_only(path: &std::path::Path, content: &[u8]) -> Result<()> {
@@ -1891,13 +1888,13 @@ fn cipher_env_var_names(output: &CipherOutput) -> Vec<String> {
     names
 }
 
-fn get_field_string(field: &Option<String>, name: &str) -> Result<String> {
+fn get_field_string(field: Option<&str>, name: &str) -> Result<String> {
     field
-        .as_deref()
         .with_context(|| format!("Item has no {name}"))
         .map(std::string::ToString::to_string)
 }
 
+#[allow(clippy::too_many_lines)]
 fn format_cipher_output(output: &CipherOutput, format: OutputFormat) -> Result<String> {
     match format {
         OutputFormat::Json => Ok(serde_json::to_string_pretty(output)?),
@@ -1915,9 +1912,9 @@ fn format_cipher_output(output: &CipherOutput, format: OutputFormat) -> Result<S
             Ok(lines)
         }
         OutputFormat::Value | OutputFormat::Password => {
-            get_field_string(&output.password, "password")
+            get_field_string(output.password.as_deref(), "password")
         }
-        OutputFormat::Username => get_field_string(&output.username, "username"),
+        OutputFormat::Username => get_field_string(output.username.as_deref(), "username"),
     }
 }
 
@@ -2002,6 +1999,7 @@ pub struct RunOptions<'a> {
 /// Returns an error if no selection filter is given, the vault data cannot
 /// be loaded, no matching item is found, or a selected item cannot be
 /// decrypted.
+#[allow(clippy::too_many_lines)]
 pub async fn run_with_secrets(options: RunOptions<'_>) -> Result<CommandOutcome> {
     let RunOptions {
         requested_items,
@@ -2033,14 +2031,13 @@ pub async fn run_with_secrets(options: RunOptions<'_>) -> Result<CommandOutcome>
         let mut outputs = Vec::with_capacity(requested_items.len());
         let mut all_items_found_by_id = true;
         for item in requested_items {
-            match fetch_cipher_output_by_id(&api_ctx, item, CipherDecryptionProfile::run_env())
-                .await
+            if let Ok(output) =
+                fetch_cipher_output_by_id(&api_ctx, item, CipherDecryptionProfile::run_env()).await
             {
-                Ok(output) => outputs.push(output),
-                Err(_) => {
-                    all_items_found_by_id = false;
-                    break;
-                }
+                outputs.push(output);
+            } else {
+                all_items_found_by_id = false;
+                break;
             }
         }
         if all_items_found_by_id {
@@ -3176,7 +3173,7 @@ mod tests {
             let temp_dir = tempfile::TempDir::new().unwrap();
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
-            let result = status().await;
+            let result = status();
             assert!(result.is_ok());
         }
 
@@ -3196,7 +3193,7 @@ mod tests {
             };
             config.save().unwrap();
 
-            let result = status().await;
+            let result = status();
             assert!(result.is_ok());
         }
 
@@ -3218,7 +3215,7 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = status().await;
+            let result = status();
             assert!(result.is_ok());
         }
 
@@ -3236,7 +3233,7 @@ mod tests {
             };
             config.save().unwrap();
 
-            let result = status().await;
+            let result = status();
             assert!(result.is_ok());
         }
 
@@ -3257,7 +3254,7 @@ mod tests {
 
             assert!(Config::keys_path().unwrap().exists());
 
-            let result = lock().await;
+            let result = lock();
             assert!(result.is_ok());
             assert!(!Config::keys_path().unwrap().exists());
             assert!(Config::config_path().unwrap().exists());
@@ -3293,7 +3290,7 @@ mod tests {
             let temp_dir = tempfile::TempDir::new().unwrap();
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
-            let result = logout().await;
+            let result = logout();
             assert!(result.is_ok());
         }
 
@@ -3814,7 +3811,7 @@ mod tests {
             let temp_dir = tempfile::TempDir::new().unwrap();
             let _config_dir_override = set_temp_config_dir(&temp_dir);
 
-            let result = unlock(Some("password".to_string()), &Default::default()).await;
+            let result = unlock(Some("password".to_string()), &CommandOptions::default()).await;
             assert!(result.is_err());
             assert!(result.unwrap_err().to_string().contains("Not logged in"));
         }
@@ -3848,7 +3845,11 @@ mod tests {
             };
             config.save().unwrap();
 
-            let result = unlock(Some("master-password".to_string()), &Default::default()).await;
+            let result = unlock(
+                Some("master-password".to_string()),
+                &CommandOptions::default(),
+            )
+            .await;
             assert!(result.is_ok());
 
             let loaded = Config::load().unwrap();
@@ -3885,7 +3886,11 @@ mod tests {
             };
             config.save().unwrap();
 
-            let result = unlock(Some("wrong-password".to_string()), &Default::default()).await;
+            let result = unlock(
+                Some("wrong-password".to_string()),
+                &CommandOptions::default(),
+            )
+            .await;
             assert!(result.is_err());
             assert!(
                 result
@@ -3946,7 +3951,11 @@ mod tests {
             );
             config.save().unwrap();
 
-            let result = unlock(Some("master-password".to_string()), &Default::default()).await;
+            let result = unlock(
+                Some("master-password".to_string()),
+                &CommandOptions::default(),
+            )
+            .await;
             assert!(result.is_ok());
 
             let loaded = Config::load().unwrap();
@@ -3986,14 +3995,14 @@ mod tests {
         #[test]
         fn test_get_field_string_some() {
             assert_eq!(
-                get_field_string(&Some("value".to_string()), "username").unwrap(),
+                get_field_string(Some("value"), "username").unwrap(),
                 "value"
             );
         }
 
         #[test]
         fn test_get_field_string_none() {
-            let err = get_field_string(&None, "password").unwrap_err();
+            let err = get_field_string(None, "password").unwrap_err();
             assert!(err.to_string().contains("Item has no password"));
         }
 

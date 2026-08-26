@@ -1,5 +1,5 @@
 //! Live tests: login, logout, lock, unlock, status.
-#![allow(dead_code, clippy::pedantic, clippy::nursery)]
+#![allow(dead_code)]
 
 use crate::live_env::{FIXTURE_LOGIN_NAME, LiveTestEnv, TEST_PASSWORD};
 use predicates::prelude::*;
