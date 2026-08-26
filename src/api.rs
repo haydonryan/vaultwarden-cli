@@ -49,6 +49,13 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
+    /// Create a new API client with default security flags.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the server URL does not start with `https://` or
+    /// `http://`, if an insecure `http://` URL is rejected, or if the HTTP
+    /// client cannot be built.
     pub fn new(base_url: &str) -> Result<Self> {
         Self::new_with_flags(base_url, false)
     }
@@ -57,6 +64,14 @@ impl ApiClient {
     ///
     /// `allow_insecure_http`: if true, permit http:// URLs (CLI flag overrides env var).
     /// If false, falls back to the `VAULTWARDEN_ALLOW_HTTP` env var.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the server URL does not start with `https://` or
+    /// `http://`, if an insecure `http://` URL is rejected without the
+    /// `--allow-insecure-http` flag or `VAULTWARDEN_ALLOW_HTTP=1`, or if the
+    /// HTTP client cannot be built (including an invalid `CARGO_PKG_VERSION`
+    /// header value).
     pub fn new_with_flags(base_url: &str, allow_insecure_http: bool) -> Result<Self> {
         crate::install_rustls_crypto_provider();
 
@@ -118,18 +133,37 @@ impl ApiClient {
         Ok(Self { client, base_url })
     }
 
+    /// Create an API client from the given config with default security flags.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no server is configured, or if [`ApiClient::new`]
+    /// fails (e.g. an invalid or rejected server URL, or an HTTP client build
+    /// failure).
     pub fn from_config(config: &Config) -> Result<Self> {
         let server = config.get_server().context("No server configured")?;
         Self::new(server)
     }
 
     /// Create an API client from config with explicit security flags.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no server is configured, or if
+    /// [`ApiClient::new_with_flags`] fails (e.g. an invalid or rejected server
+    /// URL, or an HTTP client build failure).
     pub fn from_config_with_flags(config: &Config, allow_insecure_http: bool) -> Result<Self> {
         let server = config.get_server().context("No server configured")?;
         Self::new_with_flags(server, allow_insecure_http)
     }
 
-    // OAuth2 token endpoint using client credentials
+    /// Log in using the OAuth2 client-credentials token endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the token request cannot be sent, if the server
+    /// returns a non-success status, or if the response body cannot be parsed
+    /// as a [`TokenResponse`].
     pub async fn login(&self, client_id: &str, client_secret: &str) -> Result<TokenResponse> {
         let params = [
             ("grant_type", "client_credentials"),
@@ -151,7 +185,13 @@ impl ApiClient {
         .await
     }
 
-    // Refresh access token
+    /// Refresh the access token using the OAuth2 refresh-token endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the token refresh request cannot be sent, if the
+    /// server returns a non-success status, or if the response body cannot be
+    /// parsed as a [`TokenResponse`].
     pub async fn refresh_token(&self, refresh_token: &str) -> Result<TokenResponse> {
         let params = [
             ("grant_type", "refresh_token"),
@@ -168,7 +208,13 @@ impl ApiClient {
         .await
     }
 
-    // Sync vault data
+    /// Sync vault data for the authenticated user.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the sync request cannot be sent, if the server
+    /// returns a non-success status, or if the response body cannot be parsed
+    /// as a [`SyncResponse`].
     pub async fn sync(&self, access_token: &str) -> Result<SyncResponse> {
         self.get_json(
             "/api/sync",
@@ -180,6 +226,13 @@ impl ApiClient {
         .await
     }
 
+    /// List all ciphers for the authenticated user.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the cipher list request cannot be sent, if the
+    /// server returns a non-success status, or if the response body cannot be
+    /// parsed as a [`CipherListResponse`].
     pub async fn ciphers(&self, access_token: &str) -> Result<CipherListResponse> {
         self.get_json(
             "/api/ciphers",
@@ -191,6 +244,13 @@ impl ApiClient {
         .await
     }
 
+    /// Fetch a single cipher by its ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request cannot be sent, if the server returns a
+    /// non-success status, or if the response body cannot be parsed as a
+    /// [`crate::models::Cipher`].
     pub async fn cipher_by_id(
         &self,
         access_token: &str,
@@ -207,6 +267,13 @@ impl ApiClient {
         .await
     }
 
+    /// List ciphers filtered by organization, collection, and/or cipher type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request cannot be sent, if the server returns a
+    /// non-success status, or if the response body cannot be parsed as a
+    /// [`CipherListResponse`].
     pub async fn ciphers_filtered(
         &self,
         access_token: &str,
@@ -236,7 +303,14 @@ impl ApiClient {
         .await
     }
 
-    // Check server status/health
+    /// Check whether the server is reachable and healthy.
+    ///
+    /// Returns `true` if the server responds with a success status to its
+    /// `/alive` endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the health-check request cannot be sent.
     pub async fn check_server(&self) -> Result<bool> {
         let url = format!("{}/alive", self.base_url);
 

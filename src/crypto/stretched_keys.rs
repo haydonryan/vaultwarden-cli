@@ -55,6 +55,11 @@ impl StretchedKeys {
     /// Decrypt the user's encrypted symmetric key to obtain [`CryptoKeys`].
     ///
     /// This is the only way to produce `CryptoKeys` from the stretch path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the symmetric decryption fails, or if the decrypted
+    /// key is not 64 bytes long.
     pub fn decrypt_symmetric_key(&self, encrypted_key: &str) -> Result<CryptoKeys> {
         let decrypted = CryptoKeys::decrypt_with_keys(&self.enc_key, &self.mac_key, encrypted_key)?;
         CryptoKeys::from_symmetric_key(&decrypted)

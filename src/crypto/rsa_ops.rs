@@ -10,6 +10,12 @@ use sha2::Sha256;
 ///
 /// - Type 4 = RSA‑OAEP with SHA‑1
 /// - Type 6 = RSA‑OAEP with SHA‑256
+///
+/// # Errors
+///
+/// Returns an error if the encrypted string is malformed, the encryption type
+/// is invalid or unsupported, the base64 decoding fails, or RSA‑OAEP
+/// decryption fails.
 pub fn decrypt_rsa(encrypted: &str, private_key: &RsaPrivateKey) -> Result<Vec<u8>> {
     let (enc_type, data) = encrypted
         .split_once('.')

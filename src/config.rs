@@ -146,8 +146,10 @@ where
 ///    locked. Even the brief window between steps 1 and 2 is safe because the
 ///    file is empty.
 ///
-/// On non-Unix platforms this falls back to `fs::write` (permission model
-/// differs; the TOCTOU concern is Unix-specific).
+/// # Errors
+///
+/// Returns an error if the file cannot be created, written, or if its
+/// permissions cannot be set.
 pub fn write_secure(path: &std::path::Path, content: impl AsRef<[u8]>) -> Result<()> {
     #[cfg(unix)]
     {
@@ -258,6 +260,11 @@ impl Session<LoggedOut> {
     /// Check at runtime that the inner Config is logged in and return a
     /// `Session<LoggedInLocked>`.  This is the bridge between the dynamic
     /// disk state and compile-time type safety.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config is not logged in (no access token or
+    /// server).
     pub fn require_logged_in(self) -> Result<Session<LoggedInLocked>> {
         if self.config.access_token.is_some() && self.config.server.is_some() {
             Ok(Session {
@@ -271,6 +278,10 @@ impl Session<LoggedOut> {
 
     /// Check at runtime that the inner Config is unlocked and return a
     /// `Session<LoggedInUnlocked>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the vault is locked or the user is not logged in.
     pub fn require_unlocked(self) -> Result<Session<LoggedInUnlocked>> {
         if self.config.crypto_keys.is_some() {
             Ok(Session {
@@ -296,6 +307,10 @@ impl<S: SessionState> std::ops::Deref for Session<S> {
 
 impl Config {
     /// Convenience: load from disk and wrap in `Session<LoggedOut>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config cannot be loaded from disk.
     pub fn load_session() -> Result<Session<LoggedOut>> {
         Ok(Session {
             config: Self::load()?,
@@ -327,6 +342,10 @@ impl Session<LoggedInLocked> {
     }
 
     /// Logout: clear session state and return to logged-out.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if clearing the persisted session state fails.
     pub fn logout(mut self) -> Result<Session<LoggedOut>> {
         self.config.clear()?;
         Ok(Session {
@@ -338,6 +357,10 @@ impl Session<LoggedInLocked> {
 
 impl Session<LoggedInUnlocked> {
     /// Lock: remove decrypted keys and return to locked state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the saved keys cannot be deleted.
     pub fn lock(self) -> Result<Session<LoggedInLocked>> {
         self.config.delete_saved_keys()?;
         // Create a new Config with keys cleared
@@ -351,6 +374,10 @@ impl Session<LoggedInUnlocked> {
     }
 
     /// Logout: clear session state and return to logged-out.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if clearing the persisted session state fails.
     pub fn logout(mut self) -> Result<Session<LoggedOut>> {
         self.config.clear()?;
         Ok(Session {
@@ -408,6 +435,11 @@ pub enum KeyPersistenceOutcome {
 }
 
 impl Config {
+    /// Return the directory used to store configuration files.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the platform config directory cannot be determined.
     pub fn config_dir() -> Result<PathBuf> {
         if let Some(path) = CONFIG_DIR_OVERRIDE.with(|override_dir| override_dir.borrow().clone()) {
             return Ok(path);
@@ -445,26 +477,57 @@ impl Config {
         });
     }
 
+    /// Return the path to `config.json` in the config directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config directory cannot be determined.
     pub fn config_path() -> Result<PathBuf> {
         Ok(Self::config_dir()?.join("config.json"))
     }
 
+    /// Return the path to `keys.json` in the config directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config directory cannot be determined.
     pub fn keys_path() -> Result<PathBuf> {
         Ok(Self::config_dir()?.join("keys.json"))
     }
 
+    /// Return the path to `tokens.json` in the config directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config directory cannot be determined.
     pub fn tokens_path() -> Result<PathBuf> {
         Ok(Self::config_dir()?.join("tokens.json"))
     }
 
+    /// Return the path to the token-refresh lock file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config directory cannot be determined.
     pub fn token_refresh_lock_path() -> Result<PathBuf> {
         Ok(Self::config_dir()?.join("token-refresh.lock"))
     }
 
+    /// Load the config from the default config directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config directory cannot be determined or the
+    /// config file cannot be read or parsed.
     pub fn load() -> Result<Self> {
         Self::load_from_dir(Self::config_dir()?)
     }
 
+    /// Load the config from the given config directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config file cannot be read or parsed.
     pub fn load_from_dir(config_dir: impl Into<PathBuf>) -> Result<Self> {
         let config_dir = config_dir.into();
         let path = config_dir.join("config.json");
@@ -513,6 +576,11 @@ impl Config {
         Ok(self.effective_config_dir()?.join("tokens.json"))
     }
 
+    /// Return the path to the token-refresh lock file for this config.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the effective config directory cannot be determined.
     pub fn token_refresh_lock_file_path(&self) -> Result<PathBuf> {
         Ok(self.effective_config_dir()?.join("token-refresh.lock"))
     }
@@ -529,6 +597,12 @@ impl Config {
         config_dir.as_ref().join("tokens.json")
     }
 
+    /// Persist the config and tokens to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config file cannot be written, or if saving
+    /// tokens fails.
     pub fn save(&self) -> Result<()> {
         let path = self.config_file_path()?;
         if let Some(parent) = path.parent() {
@@ -568,6 +642,13 @@ impl Config {
         Ok(CryptoKeys::from_key_bytes(enc_key, mac_key))
     }
 
+    /// Persist decrypted keys to the system keyring (or the insecure file
+    /// fallback when explicitly enabled).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the keys cannot be serialized or written to the
+    /// selected storage.
     pub fn save_keys(&self) -> Result<KeyPersistenceOutcome> {
         // Store keys in the OS keyring instead of a plaintext file.
         // If keyring is unavailable, default to no-persist rather than writing
@@ -657,6 +738,15 @@ impl Config {
         Ok(KeyPersistenceOutcome::LegacyKeyFile)
     }
 
+    /// Load saved keys from the system keyring, falling back to the legacy
+    /// `keys.json` file.
+    /// Load saved keys from the system keyring, falling back to the legacy
+    /// `keys.json` file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the persisted keys cannot be read, parsed, or
+    /// decoded.
     pub fn load_saved_keys(&mut self) -> Result<()> {
         // Try OS keyring first
         if let Some(client_id) = &self.client_id
@@ -708,6 +798,15 @@ impl Config {
         Ok(())
     }
 
+    /// Delete saved keys from the system keyring and the legacy `keys.json`
+    /// file.
+    /// Delete saved keys from the system keyring and the legacy `keys.json`
+    /// file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the keys cannot be deleted from the keyring or the
+    /// file cannot be removed.
     pub fn delete_saved_keys(&self) -> Result<()> {
         // Delete from OS keyring
         if let Some(client_id) = &self.client_id
@@ -727,6 +826,11 @@ impl Config {
         Ok(())
     }
 
+    /// Persist tokens to the system keyring, falling back to `tokens.json`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tokens cannot be serialized or written.
     pub fn save_tokens(&self) -> Result<()> {
         let access_token = match &self.access_token {
             None => return Ok(()), // nothing to persist
@@ -787,6 +891,13 @@ impl Config {
         Ok(())
     }
 
+    /// Load saved tokens from the system keyring, falling back to the legacy
+    /// Load saved tokens from the system keyring, falling back to the legacy
+    /// `tokens.json` file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the persisted tokens cannot be read or parsed.
     pub fn load_saved_tokens(&mut self) -> Result<()> {
         // Try OS keyring first
         if let Some(client_id) = &self.client_id
@@ -813,6 +924,13 @@ impl Config {
         Ok(())
     }
 
+    /// Delete saved tokens from the system keyring and the legacy `tokens.json`
+    /// file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tokens cannot be deleted from the keyring or the
+    /// file cannot be removed.
     pub fn delete_saved_tokens(&self) -> Result<()> {
         // Delete from OS keyring
         if let Some(client_id) = &self.client_id
@@ -832,6 +950,12 @@ impl Config {
         Ok(())
     }
 
+    /// Clear all session state and persist the reset config.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the saved keys or tokens cannot be deleted, or the
+    /// config cannot be saved.
     pub fn clear(&mut self) -> Result<()> {
         self.server = None;
         self.client_id = None;
@@ -978,18 +1102,36 @@ fn delete_keyring_credential(entry: Entry, label: &str) -> Result<()> {
     }
 }
 
-// Store client secret securely using keyring
+/// Store a client secret in the system keyring.
+/// Store a client secret in the system keyring.
+///
+/// # Errors
+///
+/// Returns an error if the keyring entry cannot be created or the secret
+/// cannot be stored.
 pub fn store_client_secret(client_id: &str, secret: &str) -> Result<()> {
     keyring_entry(client_id)?.set_password(secret)?;
     Ok(())
 }
 
+/// Retrieve a client secret from the system keyring.
+///
+/// # Errors
+///
+/// Returns an error if the keyring entry cannot be created or the secret is
+/// not found.
 pub fn get_client_secret(client_id: &str) -> Result<String> {
     keyring_entry(client_id)?
         .get_password()
         .context("Client secret not found")
 }
 
+/// Delete a client secret from the system keyring.
+///
+/// # Errors
+///
+/// Returns an error if the keyring entry cannot be created or the secret
+/// cannot be deleted.
 pub fn delete_client_secret(client_id: &str) -> Result<()> {
     if let Some(entry) =
         optional_keyring_entry_for_delete(keyring_entry(client_id), "client secret")?
@@ -1313,12 +1455,12 @@ mod tests {
             assert_eq!(config.server, Some("https://vault.example.com".to_string()));
             assert_eq!(config.client_id, Some("user.client-123".to_string()));
             assert_eq!(config.email, Some("user@example.com".to_string()));
-            assert_eq!(config.kdf_iterations.map(KdfIterations::get), Some(600000));
+            assert_eq!(config.kdf_iterations.map(KdfIterations::get), Some(600_000));
             // Legacy token values present in JSON are deserialized so callers
             // can detect and migrate them into keyring / tokens.json.
             assert_eq!(config.access_token, Some("test-token".to_string()));
             assert_eq!(config.refresh_token, Some("test-refresh".to_string()));
-            assert_eq!(config.token_expiry, Some(1234567890));
+            assert_eq!(config.token_expiry, Some(1_234_567_890));
             // Pure in-memory fields are never present in JSON.
             assert!(config.crypto_keys.is_none());
         }
@@ -1331,7 +1473,7 @@ mod tests {
                 server: Some("https://vault.example.com".to_string()),
                 access_token: Some("secret-access".to_string()),
                 refresh_token: Some("secret-refresh".to_string()),
-                token_expiry: Some(9999999999),
+                token_expiry: Some(9_999_999_999),
                 ..Default::default()
             };
 
@@ -1422,7 +1564,7 @@ mod tests {
                 client_id: Some("test-client".to_string()),
                 email: Some("test@example.com".to_string()),
                 access_token: Some("test-token".to_string()),
-                kdf_iterations: KdfIterations::new(100000),
+                kdf_iterations: KdfIterations::new(100_000),
                 ..Default::default()
             };
 
@@ -1556,7 +1698,7 @@ mod tests {
                 client_id: Some("test-client".to_string()),
                 access_token: Some("test-token".to_string()),
                 refresh_token: Some("refresh-token".to_string()),
-                token_expiry: Some(1234567890),
+                token_expiry: Some(1_234_567_890),
                 encrypted_key: Some("encrypted-key".to_string()),
                 encrypted_private_key: Some("private-key".to_string()),
                 crypto_keys: Some(CryptoKeys::from_key_bytes([0u8; 32], [0u8; 32])),

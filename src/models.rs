@@ -14,6 +14,10 @@ macro_rules! newtype_id {
 
         impl $name {
             /// Create a new ID, validating it is non-empty.
+            ///
+            /// # Errors
+            ///
+            /// Returns `Err` if the value is empty.
             pub fn new(value: impl Into<String>) -> Result<Self, String> {
                 let s = value.into();
                 if s.is_empty() {
@@ -1151,7 +1155,7 @@ mod tests {
             assert_eq!(response.token_type, "Bearer");
             assert_eq!(response.refresh_token, Some("refresh-token".to_string()));
             assert_eq!(response.key, Some("encrypted-key".to_string()));
-            assert_eq!(response.kdf_iterations, Some(600000));
+            assert_eq!(response.kdf_iterations, Some(600_000));
         }
 
         #[test]
@@ -1166,7 +1170,7 @@ mod tests {
 
             let response: TokenResponse = serde_json::from_str(json).unwrap();
             assert_eq!(response.key, Some("encrypted-key".to_string()));
-            assert_eq!(response.kdf_iterations, Some(100000));
+            assert_eq!(response.kdf_iterations, Some(100_000));
         }
 
         #[test]

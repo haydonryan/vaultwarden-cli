@@ -62,6 +62,12 @@ impl CryptoKeys {
     }
 
     /// Decrypt an organisation key using an RSA private key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if RSA decryption fails (malformed encrypted string,
+    /// unsupported encryption type, invalid base64, or OAEP decryption failure)
+    /// or if the decrypted key is not 64 bytes long.
     pub fn decrypt_org_key(encrypted_org_key: &str, private_key: &RsaPrivateKey) -> Result<Self> {
         let decrypted = rsa_ops::decrypt_rsa(encrypted_org_key, private_key)?;
         Self::from_symmetric_key(&decrypted)
@@ -70,6 +76,11 @@ impl CryptoKeys {
     // ── Decryption operations ───────────────────────────────────────────
 
     /// Decrypt the user's RSA private key using this symmetric key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the symmetric decryption fails, or if the decrypted
+    /// bytes cannot be parsed as a PKCS#8 DER RSA private key.
     pub fn decrypt_private_key(&self, encrypted_private_key: &str) -> Result<RsaPrivateKey> {
         let decrypted_der = self.decrypt(encrypted_private_key)?;
         RsaPrivateKey::from_pkcs8_der(&decrypted_der)
@@ -79,11 +90,22 @@ impl CryptoKeys {
     /// Decrypt a Bitwarden encrypted string.
     ///
     /// Format: `type.iv|ciphertext|mac` or `type.iv|ciphertext` (older items).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the encrypted string is malformed, uses an
+    /// unsupported type, contains invalid base64, fails MAC verification, or
+    /// fails AES decryption.
     pub fn decrypt(&self, encrypted: &str) -> Result<Vec<u8>> {
         Self::decrypt_with_keys(&self.enc_key, &self.mac_key, encrypted)
     }
 
     /// Decrypt to a UTF‑8 string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if decryption fails, or if the decrypted bytes are not
+    /// valid UTF-8.
     pub fn decrypt_to_string(&self, encrypted: &str) -> Result<String> {
         let decrypted = self.decrypt(encrypted)?;
         String::from_utf8(decrypted).context("Decrypted data is not valid UTF-8")

@@ -110,12 +110,21 @@ impl MasterKey {
     ///
     /// Bitwarden uses HKDF‑Expand directly with the master key as PRK,
     /// skipping the HKDF‑Extract step.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if HKDF initialisation or key expansion fails.
     pub fn stretch(&self) -> Result<StretchedKeys> {
         StretchedKeys::from_master_key(&self.0)
     }
 
     /// Convenience: stretch and then decrypt the encrypted symmetric key
     /// in one call.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if stretching fails, or if the encrypted symmetric key
+    /// cannot be decrypted.
     pub fn decrypt_symmetric_key(&self, encrypted_key: &str) -> Result<crate::crypto::CryptoKeys> {
         let stretched = self.stretch()?;
         stretched.decrypt_symmetric_key(encrypted_key)

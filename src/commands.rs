@@ -154,6 +154,12 @@ fn ensure_plaintext_json_allowed(opts: &CommandOptions) -> Result<()> {
     )
 }
 
+/// Authenticate with the Bitwarden server and persist the resulting session.
+///
+/// # Errors
+///
+/// Returns an error if the server is unreachable, credentials are missing,
+/// authentication or post-login sync fails, or the session cannot be saved.
 pub async fn login(
     server: Option<String>,
     client_id: Option<String>,
@@ -203,7 +209,9 @@ pub async fn login(
     // Fetch profile to get email for key derivation
     let sync_response = api.sync(&token_response.access_token).await?;
     config.email = Some(sync_response.profile.email.clone());
-    config.encrypted_private_key = sync_response.profile.private_key.clone();
+    config
+        .encrypted_private_key
+        .clone_from(&sync_response.profile.private_key);
 
     // Store organization keys
     config.org_keys.clear();
@@ -232,6 +240,12 @@ pub async fn login(
     Ok(session.into_logged_in_locked())
 }
 
+/// Unlock the vault by deriving the master key from the password.
+///
+/// # Errors
+///
+/// Returns an error if the session is not logged in, the token is invalid,
+/// the key cannot be derived or decrypted, or the keys cannot be persisted.
 pub async fn unlock(
     password: Option<String>,
     opts: &CommandOptions,
@@ -319,12 +333,23 @@ pub async fn unlock(
     })
 }
 
+/// Lock the currently unlocked vault session.
+///
+/// # Errors
+///
+/// Returns an error if no session can be loaded or it is not unlocked.
 pub async fn lock() -> Result<Session<LoggedInLocked>> {
     let session = Config::load_session()?;
     let unlocked = session.require_unlocked()?;
     unlocked.lock()
 }
 
+/// Log out of the current session, clearing stored credentials and config.
+///
+/// # Errors
+///
+/// Returns an error if the session cannot be loaded, the stored client
+/// secret cannot be deleted, or the config cannot be cleared.
 pub async fn logout() -> Result<Session<LoggedOut>> {
     let session = Config::load_session()?;
     let mut config = session.config;
@@ -345,6 +370,11 @@ pub async fn logout() -> Result<Session<LoggedOut>> {
     })
 }
 
+/// Print the current login status.
+///
+/// # Errors
+///
+/// Returns an error if the persisted config cannot be loaded.
 pub async fn status() -> Result<()> {
     let config = Config::load()?;
 
@@ -1136,6 +1166,12 @@ fn output_matches_search(output: &CipherOutput, search_lower: &str) -> bool {
             .is_some_and(|f| f.to_lowercase().contains(search_lower))
 }
 
+/// List cipher items matching the given filters.
+///
+/// # Errors
+///
+/// Returns an error if the vault data cannot be loaded or an item cannot be
+/// decrypted.
 pub async fn list(
     type_filter: Option<String>,
     search: Option<String>,
@@ -1156,6 +1192,12 @@ pub async fn list(
     .await
 }
 
+/// List cipher items, outputting an empty JSON array when none match.
+///
+/// # Errors
+///
+/// Returns an error if the vault data cannot be loaded or an item cannot be
+/// decrypted.
 pub async fn list_items(
     type_filter: Option<String>,
     search: Option<String>,
@@ -1308,6 +1350,12 @@ fn format_list_output(outputs: &[CipherOutput], json_output: bool) -> Result<Vec
     Ok(lines)
 }
 
+/// Fetch and print a single cipher item by ID, name, or URI.
+///
+/// # Errors
+///
+/// Returns an error if the vault data cannot be loaded, the item cannot be
+/// found or decrypted, or plaintext JSON output is not permitted.
 pub async fn get(
     item: &str,
     format: OutputFormat,
@@ -1375,6 +1423,12 @@ pub async fn get(
     print_cipher_output(&output, format)
 }
 
+/// Fetch and print the TOTP code for the matching item.
+///
+/// # Errors
+///
+/// Returns an error if the search query is empty or the item cannot be
+/// found or decrypted.
 pub async fn get_totp(query: &str, opts: &CommandOptions) -> Result<()> {
     let query = query.trim();
     if query.is_empty() {
@@ -1445,6 +1499,13 @@ pub async fn get_totp(query: &str, opts: &CommandOptions) -> Result<()> {
     Ok(())
 }
 
+/// Fetch and print a cipher item matching the given URI.
+///
+/// # Errors
+///
+/// Returns an error if the vault data cannot be loaded, no matching item is
+/// found or it cannot be decrypted, or plaintext JSON output is not
+/// permitted.
 pub async fn get_by_uri(
     uri: &str,
     format: OutputFormat,
@@ -1603,6 +1664,12 @@ fn resolve_interpolation_placeholder(
     }
 }
 
+/// Substitute placeholders in the given file with decrypted cipher values.
+///
+/// # Errors
+///
+/// Returns an error if the vault data cannot be loaded, the input file
+/// cannot be read, or a placeholder cannot be resolved.
 pub async fn interpolate(
     file: &str,
     output_file: Option<&str>,
@@ -1928,6 +1995,13 @@ pub struct RunOptions<'a> {
     pub opts: &'a CommandOptions,
 }
 
+/// Run a command with secrets substituted from matched cipher items.
+///
+/// # Errors
+///
+/// Returns an error if no selection filter is given, the vault data cannot
+/// be loaded, no matching item is found, or a selected item cannot be
+/// decrypted.
 pub async fn run_with_secrets(options: RunOptions<'_>) -> Result<CommandOutcome> {
     let RunOptions {
         requested_items,
@@ -3237,7 +3311,7 @@ mod tests {
                 email: Some("user@example.com".to_string()),
                 access_token: Some("token".to_string()),
                 refresh_token: Some("refresh".to_string()),
-                token_expiry: Some(1234567890),
+                token_expiry: Some(1_234_567_890),
                 encrypted_key: Some("enc-key".to_string()),
                 encrypted_private_key: Some("priv-key".to_string()),
                 ..Default::default()
@@ -3323,7 +3397,7 @@ mod tests {
                 "key": "2.encrypted-key",
                 "privateKey": "2.encrypted-private-key",
                 "kdf": 0,
-                "kdfIterations": 600000
+                "kdfIterations": 600_000
             });
 
             Mock::given(method("POST"))
@@ -3400,7 +3474,7 @@ mod tests {
                 config.encrypted_private_key,
                 Some("2.encrypted-private-key".to_string())
             );
-            assert_eq!(config.kdf_iterations.map(KdfIterations::get), Some(600000));
+            assert_eq!(config.kdf_iterations.map(KdfIterations::get), Some(600_000));
             assert_eq!(config.org_keys.get("org-1"), Some(&"2.org-key".to_string()));
             let token_expiry = config.token_expiry.unwrap();
             assert!(token_expiry >= before_login + 3600);
@@ -3598,7 +3672,7 @@ mod tests {
                 "expires_in": 3600,
                 "token_type": "Bearer",
                 "key": "2.encrypted-key",
-                "kdfIterations": 600000
+                "kdfIterations": 600_000
             });
 
             Mock::given(method("POST"))
@@ -3760,7 +3834,7 @@ mod tests {
                 &symmetric_key,
                 "master-password",
                 "user@example.com",
-                100000,
+                100_000,
             );
 
             let config = Config {
@@ -3769,7 +3843,7 @@ mod tests {
                 token_expiry: Some(i64::MAX),
                 email: Some("user@example.com".to_string()),
                 encrypted_key: Some(encrypted_key),
-                kdf_iterations: KdfIterations::new(100000),
+                kdf_iterations: KdfIterations::new(100_000),
                 ..Default::default()
             };
             config.save().unwrap();
@@ -3797,7 +3871,7 @@ mod tests {
                 &symmetric_key,
                 "master-password",
                 "user@example.com",
-                100000,
+                100_000,
             );
 
             let config = Config {
@@ -3806,7 +3880,7 @@ mod tests {
                 token_expiry: Some(i64::MAX),
                 email: Some("user@example.com".to_string()),
                 encrypted_key: Some(encrypted_key),
-                kdf_iterations: KdfIterations::new(100000),
+                kdf_iterations: KdfIterations::new(100_000),
                 ..Default::default()
             };
             config.save().unwrap();
@@ -3836,7 +3910,7 @@ mod tests {
                 &symmetric_key,
                 "master-password",
                 "user@example.com",
-                100000,
+                100_000,
             );
 
             // Generate RSA key pair
@@ -3863,7 +3937,7 @@ mod tests {
                 email: Some("user@example.com".to_string()),
                 encrypted_key: Some(encrypted_key),
                 encrypted_private_key: Some(encrypted_private_key),
-                kdf_iterations: KdfIterations::new(100000),
+                kdf_iterations: KdfIterations::new(100_000),
                 ..Default::default()
             };
             config.org_keys.insert(
