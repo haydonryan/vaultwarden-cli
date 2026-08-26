@@ -349,20 +349,30 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
                 } else {
                     name
                 };
-            commands::run_with_secrets(
-                &requested_items,
-                false,
-                org.as_deref(),
-                folder.as_deref(),
-                collection.as_deref(),
-                info,
-                &command,
-                &opts,
-            )
+            commands::run_with_secrets(commands::RunOptions {
+                requested_items: &requested_items,
+                search_by_uri: false,
+                org_filter: org.as_deref(),
+                folder_filter: folder.as_deref(),
+                collection_filter: collection.as_deref(),
+                info_only: info,
+                command: &command,
+                opts: &opts,
+            })
             .await
         }
         Commands::RunUri { uri, info, command } => {
-            commands::run_with_secrets(&[uri], true, None, None, None, info, &command, &opts).await
+            commands::run_with_secrets(commands::RunOptions {
+                requested_items: &[uri],
+                search_by_uri: true,
+                org_filter: None,
+                folder_filter: None,
+                collection_filter: None,
+                info_only: info,
+                command: &command,
+                opts: &opts,
+            })
+            .await
         }
         Commands::Status => commands::status()
             .await
