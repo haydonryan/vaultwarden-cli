@@ -717,37 +717,39 @@ async fn fetch_cipher_output_by_id(
     decrypt_cipher_with_profile(&cipher, keys, profile)
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn fetch_filtered_cipher_outputs(
-    api: &ApiClient,
-    access_token: &str,
-    config: &Config,
-    org_id_filter: Option<&str>,
-    collection_id_filter: Option<&str>,
+/// Optional filters applied when selecting ciphers to run.
+#[derive(Default)]
+struct FilterOptions<'a> {
+    org_id: Option<&'a str>,
+    collection_id: Option<&'a str>,
     type_filter: Option<CipherType>,
-    folder_id_filter: Option<&str>,
+    folder_id: Option<&'a str>,
+}
+
+async fn fetch_filtered_cipher_outputs(
+    ctx: &SyncContext,
+    filters: FilterOptions<'_>,
     profile: CipherDecryptionProfile,
 ) -> Result<Vec<CipherOutput>> {
+    let FilterOptions {
+        org_id,
+        collection_id,
+        type_filter,
+        folder_id,
+    } = filters;
     let cipher_type = type_filter;
-    let cipher_list = api
-        .ciphers_filtered(
-            access_token,
-            org_id_filter,
-            collection_id_filter,
-            cipher_type,
-        )
+    let cipher_list = ctx
+        .api
+        .ciphers_filtered(&ctx.access_token, org_id, collection_id, cipher_type)
         .await?;
     let mut outputs = Vec::new();
     let mut failures = Vec::new();
-    for cipher in cipher_list.data.iter().filter(|cipher| {
-        cipher_matches_filters(
-            cipher,
-            org_id_filter,
-            collection_id_filter,
-            folder_id_filter,
-        )
-    }) {
-        let output = get_cipher_keys(config, cipher)
+    for cipher in cipher_list
+        .data
+        .iter()
+        .filter(|cipher| cipher_matches_filters(cipher, org_id, collection_id, folder_id))
+    {
+        let output = get_cipher_keys(&ctx.config, cipher)
             .and_then(|keys| decrypt_cipher_with_profile(cipher, keys, profile))
             .with_context(|| {
                 format!(
@@ -1914,17 +1916,29 @@ fn shell_quote_env_value(value: &str) -> Result<String> {
     Ok(quoted)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn run_with_secrets(
-    requested_items: &[String],
-    search_by_uri: bool,
-    org_filter: Option<&str>,
-    folder_filter: Option<&str>,
-    collection_filter: Option<&str>,
-    info_only: bool,
-    command: &[String],
-    opts: &CommandOptions,
-) -> Result<CommandOutcome> {
+/// Options controlling how `run_with_secrets` selects and runs items.
+pub struct RunOptions<'a> {
+    pub requested_items: &'a [String],
+    pub search_by_uri: bool,
+    pub org_filter: Option<&'a str>,
+    pub folder_filter: Option<&'a str>,
+    pub collection_filter: Option<&'a str>,
+    pub info_only: bool,
+    pub command: &'a [String],
+    pub opts: &'a CommandOptions,
+}
+
+pub async fn run_with_secrets(options: RunOptions<'_>) -> Result<CommandOutcome> {
+    let RunOptions {
+        requested_items,
+        search_by_uri,
+        org_filter,
+        folder_filter,
+        collection_filter,
+        info_only,
+        command,
+        opts,
+    } = options;
     if !search_by_uri
         && requested_items.is_empty()
         && org_filter.is_none()
@@ -2036,13 +2050,13 @@ pub async fn run_with_secrets(
             .collect::<Result<Vec<_>>>()?
     } else if folder_id_filter.is_none() {
         let outputs = fetch_filtered_cipher_outputs(
-            &ctx.api,
-            &ctx.access_token,
-            &ctx.config,
-            org_id_filter.as_deref(),
-            collection_id_filter.as_deref(),
-            None,
-            None,
+            &ctx,
+            FilterOptions {
+                org_id: org_id_filter.as_deref(),
+                collection_id: collection_id_filter.as_deref(),
+                type_filter: None,
+                folder_id: None,
+            },
             CipherDecryptionProfile::run_env(),
         )
         .await?;
@@ -4207,19 +4221,19 @@ mod tests {
             mount_sync_response(&mock_server, make_sync_response_with_one_login()).await;
             save_unlocked_test_config(&mock_server);
 
-            let outcome = run_with_secrets(
-                &[String::from("MyLogin")],
-                false,
-                None,
-                None,
-                None,
-                false,
-                &[String::from("false")],
-                &CommandOptions {
+            let outcome = run_with_secrets(RunOptions {
+                requested_items: &[String::from("MyLogin")],
+                search_by_uri: false,
+                org_filter: None,
+                folder_filter: None,
+                collection_filter: None,
+                info_only: false,
+                command: &[String::from("false")],
+                opts: &CommandOptions {
                     allow_insecure_http: true,
                     ..Default::default()
                 },
-            )
+            })
             .await
             .expect("run_with_secrets should return child status");
 
@@ -4239,19 +4253,19 @@ mod tests {
             mount_sync_response(&mock_server, make_sync_response_with_one_login()).await;
             save_unlocked_test_config(&mock_server);
 
-            let err = run_with_secrets(
-                &[],
-                true,
-                None,
-                None,
-                None,
-                false,
-                &[String::from("true")],
-                &CommandOptions {
+            let err = run_with_secrets(RunOptions {
+                requested_items: &[],
+                search_by_uri: true,
+                org_filter: None,
+                folder_filter: None,
+                collection_filter: None,
+                info_only: false,
+                command: &[String::from("true")],
+                opts: &CommandOptions {
                     allow_insecure_http: true,
                     ..Default::default()
                 },
-            )
+            })
             .await
             .expect_err("empty URI search should return an error");
 
@@ -4278,19 +4292,19 @@ mod tests {
             .await;
             save_unlocked_test_config(&mock_server);
 
-            let err = run_with_secrets(
-                &[String::from("MyLogin")],
-                false,
-                None,
-                None,
-                None,
-                false,
-                &[String::from("true")],
-                &CommandOptions {
+            let err = run_with_secrets(RunOptions {
+                requested_items: &[String::from("MyLogin")],
+                search_by_uri: false,
+                org_filter: None,
+                folder_filter: None,
+                collection_filter: None,
+                info_only: false,
+                command: &[String::from("true")],
+                opts: &CommandOptions {
                     allow_insecure_http: true,
                     ..Default::default()
                 },
-            )
+            })
             .await
             .expect_err("duplicate item names should be ambiguous");
 
@@ -4344,19 +4358,19 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let result = run_with_secrets(
-                &[String::from("example.com/login")],
-                true,
-                None,
-                None,
-                None,
-                false,
-                &[String::from("true")],
-                &CommandOptions {
+            let result = run_with_secrets(RunOptions {
+                requested_items: &[String::from("example.com/login")],
+                search_by_uri: true,
+                org_filter: None,
+                folder_filter: None,
+                collection_filter: None,
+                info_only: false,
+                command: &[String::from("true")],
+                opts: &CommandOptions {
                     allow_insecure_http: true,
                     ..Default::default()
                 },
-            )
+            })
             .await;
             assert!(matches!(result, Ok(CommandOutcome::Success)));
         }
@@ -4414,19 +4428,19 @@ mod tests {
             config.save().unwrap();
             config.save_keys().unwrap();
 
-            let err = run_with_secrets(
-                &[String::from("example.com")],
-                true,
-                None,
-                None,
-                None,
-                false,
-                &[String::from("true")],
-                &CommandOptions {
+            let err = run_with_secrets(RunOptions {
+                requested_items: &[String::from("example.com")],
+                search_by_uri: true,
+                org_filter: None,
+                folder_filter: None,
+                collection_filter: None,
+                info_only: false,
+                command: &[String::from("true")],
+                opts: &CommandOptions {
                     allow_insecure_http: true,
                     ..Default::default()
                 },
-            )
+            })
             .await
             .expect_err("ambiguous URI search should return an error");
 
@@ -4462,19 +4476,19 @@ mod tests {
                 .await;
             save_unlocked_test_config(&mock_server);
 
-            let result = run_with_secrets(
-                &[String::from("cipher-2")],
-                false,
-                None,
-                None,
-                None,
-                false,
-                &[String::from("true")],
-                &CommandOptions {
+            let result = run_with_secrets(RunOptions {
+                requested_items: &[String::from("cipher-2")],
+                search_by_uri: false,
+                org_filter: None,
+                folder_filter: None,
+                collection_filter: None,
+                info_only: false,
+                command: &[String::from("true")],
+                opts: &CommandOptions {
                     allow_insecure_http: true,
                     ..Default::default()
                 },
-            )
+            })
             .await;
 
             assert!(matches!(result, Ok(CommandOutcome::Success)));
@@ -4504,19 +4518,19 @@ mod tests {
                 .await;
             save_unlocked_test_config(&mock_server);
 
-            let err = run_with_secrets(
-                &[],
-                false,
-                None,
-                None,
-                Some("DZ1"),
-                false,
-                &[String::from("true")],
-                &CommandOptions {
+            let err = run_with_secrets(RunOptions {
+                requested_items: &[],
+                search_by_uri: false,
+                org_filter: None,
+                folder_filter: None,
+                collection_filter: Some("DZ1"),
+                info_only: false,
+                command: &[String::from("true")],
+                opts: &CommandOptions {
                     allow_insecure_http: true,
                     ..Default::default()
                 },
-            )
+            })
             .await
             .expect_err("selected filtered item without keys should fail the run");
 
@@ -4524,6 +4538,73 @@ mod tests {
             assert!(message.contains("filtered run could not decrypt 1 selected item(s)"));
             assert!(message.contains("cipher-2"));
             assert!(message.contains("Organization key not available for org org-1"));
+        }
+
+        #[tokio::test]
+        async fn test_run_with_secrets_decrypts_filtered_collection_items() {
+            let _guard = ENV_LOCK.lock().await;
+            let temp_dir = tempfile::TempDir::new().unwrap();
+            let _config_dir_override = set_temp_config_dir(&temp_dir);
+
+            let mock_server = MockServer::start().await;
+            let keys = test_crypto_keys();
+            let cipher = serde_json::json!({
+                "id": "cipher-1",
+                "type": 1,
+                "name": encrypt_for_interpolate_test("MyLogin", &keys),
+                "login": {
+                    "username": encrypt_for_interpolate_test("myuser", &keys),
+                    "password": encrypt_for_interpolate_test("mypass", &keys),
+                    "uris": null,
+                    "totp": null
+                },
+                "collectionIds": ["DZ1"],
+                "organizationId": null
+            });
+            let sync_response = serde_json::json!({
+                "ciphers": [],
+                "folders": [],
+                "collections": [{
+                    "id": "DZ1",
+                    "name": encrypt_for_interpolate_test("Col", &keys),
+                    "organizationId": "org-1"
+                }],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            });
+            mount_sync_response(&mock_server, sync_response).await;
+            let ciphers_response = serde_json::json!({
+                "object": "list",
+                "data": [cipher]
+            });
+            Mock::given(method("GET"))
+                .and(path("/api/ciphers"))
+                .and(query_param("collectionId", "DZ1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&ciphers_response))
+                .expect(1)
+                .mount(&mock_server)
+                .await;
+            save_unlocked_test_config(&mock_server);
+
+            let result = run_with_secrets(RunOptions {
+                requested_items: &[],
+                search_by_uri: false,
+                org_filter: None,
+                folder_filter: None,
+                collection_filter: Some("DZ1"),
+                info_only: false,
+                command: &[String::from("true")],
+                opts: &CommandOptions {
+                    allow_insecure_http: true,
+                    ..Default::default()
+                },
+            })
+            .await;
+
+            assert!(matches!(result, Ok(CommandOutcome::Success)));
         }
 
         #[tokio::test]
