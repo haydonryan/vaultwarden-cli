@@ -1,212 +1,242 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use argy::{FromArgValue, FromArgs};
 use vaultwarden_cli::commands::{self, OutputFormat};
 
 type Result<T> = std::result::Result<T, anyhow::Error>;
 
-#[derive(Parser)]
-#[command(name = "vaultwarden-cli")]
-#[command(
-    about = "CLI client for Vaultwarden - retrieve secrets for batch files and environment variables"
-)]
-#[command(version)]
+/// CLI client for Vaultwarden - retrieve secrets for batch files and environment variables
+#[derive(FromArgs)]
 struct Cli {
-    /// Allow insecure HTTP connections (secrets sent unencrypted).
-    /// Also settable via `VAULTWARDEN_ALLOW_HTTP=1` env var.
-    #[arg(long, global = true)]
+    /// allow insecure HTTP connections (secrets sent unencrypted).
+    /// also settable via `VAULTWARDEN_ALLOW_HTTP=1` env var.
+    #[argy(switch, global)]
     allow_insecure_http: bool,
 
-    /// Allow decryption of ciphertext without MAC integrity verification.
-    /// Also settable via `VAULTWARDEN_ALLOW_INSECURE_MAC=1` env var.
-    #[arg(long, global = true)]
+    /// allow decryption of ciphertext without MAC integrity verification.
+    /// also settable via `VAULTWARDEN_ALLOW_INSECURE_MAC=1` env var.
+    #[argy(switch, global)]
     allow_insecure_mac: bool,
 
-    /// Allow plaintext JSON secret output when stdout is redirected or captured.
-    /// Also settable via `VAULTWARDEN_ALLOW_PLAINTEXT_JSON=true` env var.
-    #[arg(long, global = true, env = "VAULTWARDEN_ALLOW_PLAINTEXT_JSON")]
+    /// allow plaintext JSON secret output when stdout is redirected or captured.
+    /// also settable via `VAULTWARDEN_ALLOW_PLAINTEXT_JSON=true` env var.
+    #[argy(switch, global, env = "VAULTWARDEN_ALLOW_PLAINTEXT_JSON")]
     allow_plaintext_json: bool,
 
-    #[command(subcommand)]
+    #[argy(subcommand)]
     command: Commands,
 }
 
-#[derive(Subcommand)]
+#[derive(FromArgs)]
+#[argy(subcommand)]
 enum Commands {
-    /// Login to Vaultwarden server
-    Login {
-        /// Server URL (e.g., <https://vaultwarden.example.com>)
-        #[arg(short, long)]
-        server: Option<String>,
-
-        /// Client ID for API authentication
-        #[arg(long, env = "VAULTWARDEN_CLIENT_ID")]
-        client_id: Option<String>,
-
-        /// Client secret for API authentication
-        #[arg(long, env = "VAULTWARDEN_CLIENT_SECRET")]
-        client_secret: Option<String>,
-    },
-
-    /// Unlock the vault with master password
-    Unlock {
-        /// Master password (falls back to `VAULTWARDEN_PASSWORD`, then prompts)
-        #[arg(short, long, env = "VAULTWARDEN_PASSWORD")]
-        password: Option<String>,
-    },
-
-    /// Lock the vault (clear decryption keys)
-    Lock,
-
-    /// Logout from Vaultwarden server
-    Logout,
-
-    /// List items in the vault
-    List {
-        /// Object to list
-        object: Option<ListObject>,
-
-        /// Filter by item type (login, note, card, identity, ssh)
-        #[arg(short, long)]
-        r#type: Option<String>,
-
-        /// Output list results as JSON
-        #[arg(long)]
-        json: bool,
-
-        /// Search term
-        #[arg(short, long)]
-        search: Option<String>,
-
-        /// Filter by organization name or ID
-        #[arg(long)]
-        org: Option<String>,
-
-        /// Filter by collection name or ID
-        #[arg(short, long)]
-        collection: Option<String>,
-    },
-
-    /// Get a specific item or secret
-    Get {
-        /// Item ID or name to retrieve
-        item: String,
-
-        /// Query for two-position get operations
-        query: Option<String>,
-
-        /// Output format
-        #[arg(short, long, default_value_t = OutputFormat::Json)]
-        format: OutputFormat,
-
-        /// Output only the username (shorthand for --format username)
-        #[arg(short, long)]
-        username: bool,
-
-        /// Output only the password (shorthand for --format value)
-        #[arg(short, long)]
-        password: bool,
-
-        /// Filter by organization name or ID
-        #[arg(long)]
-        org: Option<String>,
-
-        /// Filter by collection name or ID
-        #[arg(long)]
-        collection: Option<String>,
-    },
-
-    /// Get a specific item by URI
-    #[command(name = "get-uri")]
-    GetUri {
-        /// URI to search for (e.g., github.com)
-        uri: String,
-
-        /// Output format
-        #[arg(short, long, default_value_t = OutputFormat::Json)]
-        format: OutputFormat,
-
-        /// Output only the username (shorthand for --format username)
-        #[arg(short, long)]
-        username: bool,
-
-        /// Output only the password (shorthand for --format value)
-        #[arg(short, long)]
-        password: bool,
-
-        /// Filter by organization name or ID
-        #[arg(long)]
-        org: Option<String>,
-
-        /// Filter by collection name or ID
-        #[arg(long)]
-        collection: Option<String>,
-    },
-
-    /// Run a command with secrets injected as environment variables
-    Run {
-        /// Item name or ID to inject (repeat flag or use commas for multiple)
-        #[arg(long, alias = "credential-name", value_delimiter = ',')]
-        name: Vec<String>,
-
-        /// Item name or ID to inject when no selector flag is provided
-        #[arg(value_delimiter = ',')]
-        item: Vec<String>,
-
-        /// Filter by organization name or ID
-        #[arg(long)]
-        org: Option<String>,
-
-        /// Filter by folder name or ID
-        #[arg(long)]
-        folder: Option<String>,
-
-        /// Filter by collection name or ID
-        #[arg(long)]
-        collection: Option<String>,
-
-        /// Print list of injected environment variables without values
-        #[arg(short, long)]
-        info: bool,
-
-        /// Command to run (use -- to separate from vaultwarden-cli args)
-        #[arg(last = true)]
-        command: Vec<String>,
-    },
-
-    /// Run a command with secrets from URI match injected as environment variables
-    #[command(name = "run-uri")]
-    RunUri {
-        /// URI to search for
-        uri: String,
-
-        /// Print list of injected environment variables without values
-        #[arg(short, long)]
-        info: bool,
-
-        /// Command to run (use -- to separate from vaultwarden-cli args)
-        #[arg(last = true)]
-        command: Vec<String>,
-    },
-
-    /// Show current session status
-    Status,
-
-    /// Interpolate secrets into a YAML file
-    Interpolate {
-        /// YAML file to interpolate
-        #[arg(short, long)]
-        file: String,
-
-        /// Write the interpolated output to a file instead of stdout
-        #[arg(short, long)]
-        output: Option<String>,
-
-        /// Skip missing secrets and leave placeholders unchanged
-        #[arg(short = 's', long)]
-        skip_missing: bool,
-    },
+    Login(LoginCommand),
+    Unlock(UnlockCommand),
+    Lock(LockCommand),
+    Logout(LogoutCommand),
+    List(ListCommand),
+    Get(GetCommand),
+    GetUri(GetUriCommand),
+    Run(RunCommand),
+    RunUri(RunUriCommand),
+    Status(StatusCommand),
+    Interpolate(InterpolateCommand),
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+#[derive(FromArgs)]
+#[argy(subcommand, name = "login")]
+/// login to Vaultwarden server
+struct LoginCommand {
+    /// server URL (e.g., <https://vaultwarden.example.com>)
+    #[argy(option, short = 's')]
+    server: Option<String>,
+
+    /// client ID for API authentication
+    #[argy(option, env = "VAULTWARDEN_CLIENT_ID")]
+    client_id: Option<String>,
+
+    /// client secret for API authentication
+    #[argy(option, env = "VAULTWARDEN_CLIENT_SECRET")]
+    client_secret: Option<String>,
+}
+
+#[derive(FromArgs)]
+#[argy(subcommand, name = "unlock")]
+/// unlock the vault with master password
+struct UnlockCommand {
+    /// master password (falls back to `VAULTWARDEN_PASSWORD`, then prompts)
+    #[argy(option, short = 'p', env = "VAULTWARDEN_PASSWORD")]
+    password: Option<String>,
+}
+
+#[derive(FromArgs)]
+#[argy(subcommand, name = "lock")]
+/// lock the vault (clear decryption keys)
+struct LockCommand {}
+
+#[derive(FromArgs)]
+#[argy(subcommand, name = "logout")]
+/// logout from Vaultwarden server
+struct LogoutCommand {}
+
+#[derive(FromArgs)]
+#[argy(subcommand, name = "list")]
+/// list items in the vault
+struct ListCommand {
+    /// object to list
+    #[argy(positional)]
+    object: Option<ListObject>,
+
+    /// filter by item type (login, note, card, identity, ssh)
+    #[argy(option, short = 't', long = "type")]
+    r#type: Option<String>,
+
+    /// output list results as JSON
+    #[argy(switch)]
+    json: bool,
+
+    /// search term
+    #[argy(option, short = 's')]
+    search: Option<String>,
+
+    /// filter by organization name or ID
+    #[argy(option)]
+    org: Option<String>,
+
+    /// filter by collection name or ID
+    #[argy(option, short = 'c')]
+    collection: Option<String>,
+}
+
+#[derive(FromArgs)]
+#[argy(subcommand, name = "get")]
+/// get a specific item or secret
+struct GetCommand {
+    /// item ID or name to retrieve
+    #[argy(positional)]
+    item: String,
+
+    /// query for two-position get operations
+    #[argy(positional)]
+    query: Option<String>,
+
+    /// output format
+    #[argy(option, short = 'f', default = "OutputFormat::Json")]
+    format: OutputFormat,
+
+    /// output only the username (shorthand for --format username)
+    #[argy(switch, short = 'u')]
+    username: bool,
+
+    /// output only the password (shorthand for --format value)
+    #[argy(switch, short = 'p')]
+    password: bool,
+
+    /// filter by organization name or ID
+    #[argy(option)]
+    org: Option<String>,
+
+    /// filter by collection name or ID
+    #[argy(option)]
+    collection: Option<String>,
+}
+
+#[derive(FromArgs)]
+#[argy(subcommand, name = "get-uri")]
+/// get a specific item by URI
+struct GetUriCommand {
+    /// URI to search for (e.g., github.com)
+    #[argy(positional)]
+    uri: String,
+
+    /// output format
+    #[argy(option, short = 'f', default = "OutputFormat::Json")]
+    format: OutputFormat,
+
+    /// output only the username (shorthand for --format username)
+    #[argy(switch, short = 'u')]
+    username: bool,
+
+    /// output only the password (shorthand for --format value)
+    #[argy(switch, short = 'p')]
+    password: bool,
+
+    /// filter by organization name or ID
+    #[argy(option)]
+    org: Option<String>,
+
+    /// filter by collection name or ID
+    #[argy(option)]
+    collection: Option<String>,
+}
+
+#[derive(FromArgs)]
+#[argy(subcommand, name = "run")]
+/// run a command with secrets injected as environment variables
+struct RunCommand {
+    /// item name or ID to inject (repeat flag or use commas for multiple)
+    #[argy(option, alias = "credential-name", value_delimiter = ',')]
+    name: Vec<String>,
+
+    /// item name or ID to inject when no selector flag is provided
+    #[argy(positional, last)]
+    item: Vec<String>,
+
+    /// filter by organization name or ID
+    #[argy(option)]
+    org: Option<String>,
+
+    /// filter by folder name or ID
+    #[argy(option)]
+    folder: Option<String>,
+
+    /// filter by collection name or ID
+    #[argy(option)]
+    collection: Option<String>,
+
+    /// print list of injected environment variables without values
+    #[argy(switch, short = 'i')]
+    info: bool,
+}
+
+#[derive(FromArgs)]
+#[argy(subcommand, name = "run-uri")]
+/// run a command with secrets from URI match injected as environment variables
+struct RunUriCommand {
+    /// URI to search for
+    #[argy(positional)]
+    uri: String,
+
+    /// print list of injected environment variables without values
+    #[argy(switch, short = 'i')]
+    info: bool,
+
+    /// command to run (use -- to separate from vaultwarden-cli args)
+    #[argy(positional, last)]
+    command: Vec<String>,
+}
+
+#[derive(FromArgs)]
+#[argy(subcommand, name = "status")]
+/// show current session status
+struct StatusCommand {}
+
+#[derive(FromArgs)]
+#[argy(subcommand, name = "interpolate")]
+/// interpolate secrets into a YAML file
+struct InterpolateCommand {
+    /// YAML file to interpolate
+    #[argy(option, short = 'f')]
+    file: String,
+
+    /// write the interpolated output to a file instead of stdout
+    #[argy(option, short = 'o')]
+    output: Option<String>,
+
+    /// skip missing secrets and leave placeholders unchanged
+    #[argy(switch, short = 's')]
+    skip_missing: bool,
+}
+
+#[derive(Debug, Clone, Copy, FromArgValue, PartialEq, Eq)]
 enum ListObject {
     Items,
 }
@@ -223,8 +253,10 @@ const fn effective_format(format: OutputFormat, username: bool, password: bool) 
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
-    let result = run_cli(cli).await;
+    let raw_args: Vec<String> = std::env::args().collect();
+    let raw_strs: Vec<&str> = raw_args.iter().map(String::as_str).collect();
+    let cli: Cli = argy::from_env();
+    let result = run_cli(cli, &raw_strs).await;
 
     if let Err(e) = &result {
         eprintln!("Error: {e:#}");
@@ -241,36 +273,69 @@ fn result_exit_code(result: &Result<commands::CommandOutcome>) -> i32 {
         .map_or(1, commands::CommandOutcome::exit_code)
 }
 
+/// return the args that follow `subcommand` in `raw` (which includes the program
+/// name at index 0). Global `--` switches declared on the top-level `Cli` are
+/// skipped so the subcommand token is located.
+fn subcommand_args<'a>(raw: &'a [&'a str], subcommand: &str) -> Vec<&'a str> {
+    let mut i = 1;
+    while i < raw.len() && raw[i].starts_with('-') && raw[i] != "--" {
+        i += 1;
+    }
+    let start = if i < raw.len() && raw[i] == subcommand {
+        i + 1
+    } else {
+        i
+    };
+    raw[start.min(raw.len())..].to_vec()
+}
+
+/// argy captures the `item` selectors and the trailing `command` into a single
+/// `last` positional. Split them back out using the raw subcommand args:
+/// everything after the `--` separator is the command; the rest are item
+/// selectors, which are comma-split to mirror clap's `value_delimiter`.
+fn split_run_trailing(item: &[String], run_args: &[&str]) -> (Vec<String>, Vec<String>) {
+    let sep = run_args.iter().position(|a| *a == "--");
+    let command_len = sep.map_or(0, |idx| run_args.len() - idx - 1);
+    let split_at = item.len().saturating_sub(command_len);
+    let command = item[split_at..].to_vec();
+    let item = item[..split_at]
+        .iter()
+        .flat_map(|s| s.split(','))
+        .map(str::to_string)
+        .collect();
+    (item, command)
+}
+
 #[allow(clippy::too_many_lines)]
-async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
+async fn run_cli(cli: Cli, raw_args: &[&str]) -> Result<commands::CommandOutcome> {
     // Propagate global security flags to library code
     vaultwarden_cli::crypto::set_allow_insecure_mac(cli.allow_insecure_mac);
 
     let opts = commands::CommandOptions::for_cli(cli.allow_insecure_http, cli.allow_plaintext_json);
 
     match cli.command {
-        Commands::Login {
+        Commands::Login(LoginCommand {
             server,
             client_id,
             client_secret,
-        } => commands::login(server, client_id, client_secret, &opts)
+        }) => commands::login(server, client_id, client_secret, &opts)
             .await
             .map(|_| commands::CommandOutcome::Success),
-        Commands::Unlock { password } => commands::unlock(password, &opts)
+        Commands::Unlock(UnlockCommand { password }) => commands::unlock(password, &opts)
             .await
             .map(|_| commands::CommandOutcome::Success),
-        Commands::Lock => commands::lock()
+        Commands::Lock(LockCommand {}) => commands::lock()
             .map(|_| commands::CommandOutcome::Success),
-        Commands::Logout => commands::logout()
+        Commands::Logout(LogoutCommand {}) => commands::logout()
             .map(|_| commands::CommandOutcome::Success),
-        Commands::List {
+        Commands::List(ListCommand {
             object,
             r#type,
             search,
             org,
             collection,
             json,
-        } => {
+        }) => {
             if object.is_some() {
                 commands::list_items(r#type, search, org, collection, &opts).await
             } else {
@@ -278,7 +343,7 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
             }
             .map(|()| commands::CommandOutcome::Success)
         }
-        Commands::Get {
+        Commands::Get(GetCommand {
             item,
             query,
             format,
@@ -286,7 +351,7 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
             password,
             org,
             collection,
-        } => {
+        }) => {
             if let Some(query) = query {
                 if !item.eq_ignore_ascii_case("totp") {
                     anyhow::bail!(
@@ -314,14 +379,14 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
             }
             .map(|()| commands::CommandOutcome::Success)
         }
-        Commands::GetUri {
+        Commands::GetUri(GetUriCommand {
             uri,
             format,
             username,
             password,
             org,
             collection,
-        } => commands::get_by_uri(
+        }) => commands::get_by_uri(
             &uri,
             effective_format(format, username, password),
             org,
@@ -330,15 +395,16 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
         )
         .await
         .map(|()| commands::CommandOutcome::Success),
-        Commands::Run {
+        Commands::Run(RunCommand {
             name,
             item,
             org,
             folder,
             collection,
             info,
-            command,
-        } => {
+        }) => {
+            let run_args = subcommand_args(raw_args, "run");
+            let (item, command) = split_run_trailing(&item, &run_args);
             let requested_items =
                 if name.is_empty() && org.is_none() && folder.is_none() && collection.is_none() {
                     item
@@ -357,7 +423,7 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
             })
             .await
         }
-        Commands::RunUri { uri, info, command } => {
+        Commands::RunUri(RunUriCommand { uri, info, command }) => {
             commands::run_with_secrets(commands::RunOptions {
                 requested_items: &[uri],
                 search_by_uri: true,
@@ -370,13 +436,13 @@ async fn run_cli(cli: Cli) -> Result<commands::CommandOutcome> {
             })
             .await
         }
-        Commands::Status => commands::status()
+        Commands::Status(StatusCommand {}) => commands::status()
             .map(|()| commands::CommandOutcome::Success),
-        Commands::Interpolate {
+        Commands::Interpolate(InterpolateCommand {
             file,
             output,
             skip_missing,
-        } => commands::interpolate(&file, output.as_deref(), skip_missing, &opts)
+        }) => commands::interpolate(&file, output.as_deref(), skip_missing, &opts)
             .await
             .map(|()| commands::CommandOutcome::Success),
     }
@@ -513,9 +579,19 @@ mod tests {
         );
     }
 
+    /// parse `args` (without a program name) and return the parsed `Cli` plus
+    /// the full argv (program name included) needed by `run_cli`.
+    fn parse_cli<'a>(args: &'a [&'a str]) -> (Cli, Vec<&'a str>) {
+        let mut full = vec!["vaultwarden-cli"];
+        full.extend_from_slice(args);
+        let cli = Cli::from_args(&["vaultwarden-cli"], args).expect("parse cli");
+        (cli, full)
+    }
+
     #[test]
     fn test_cli_global_allow_plaintext_json_parsing() {
-        let cli = Cli::parse_from(["vaultwarden-cli", "--allow-plaintext-json", "status"]);
+        let cli = Cli::from_args(&["vaultwarden-cli"], &["--allow-plaintext-json", "status"])
+            .expect("parse cli");
 
         assert!(cli.allow_plaintext_json);
     }
@@ -543,17 +619,17 @@ mod tests {
     #[tokio::test]
     async fn test_run_cli_dispatches_status_success() {
         let _env = TestEnv::new();
-        let cli = Cli::parse_from(["vaultwarden-cli", "status"]);
+        let (cli, raw) = parse_cli(&["status"]);
 
-        run_cli(cli).await.unwrap();
+        run_cli(cli, &raw).await.unwrap();
     }
 
     #[tokio::test]
     async fn test_run_cli_propagates_command_errors() {
         let _env = TestEnv::new();
-        let cli = Cli::parse_from(["vaultwarden-cli", "run"]);
+        let (cli, raw) = parse_cli(&["run"]);
 
-        let err = run_cli(cli).await.unwrap_err();
+        let err = run_cli(cli, &raw).await.unwrap_err();
 
         assert!(
             err.to_string()
@@ -566,9 +642,9 @@ mod tests {
         let env = TestEnv::new();
         std::fs::create_dir_all(env.config_dir()).unwrap();
         std::fs::write(env.config_dir().join("config.json"), "{not-json").unwrap();
-        let cli = Cli::parse_from(["vaultwarden-cli", "status"]);
+        let (cli, raw) = parse_cli(&["status"]);
 
-        let err = run_cli(cli).await.unwrap_err();
+        let err = run_cli(cli, &raw).await.unwrap_err();
 
         assert!(err.to_string().contains("Failed to parse config"));
     }
@@ -578,9 +654,9 @@ mod tests {
         let env = TestEnv::new();
         let mock_server = mock_empty_sync().await;
         env.write_config(&logged_in_config(mock_server.uri()));
-        let cli = Cli::parse_from(["vaultwarden-cli", "--allow-insecure-http", "list"]);
+        let (cli, raw) = parse_cli(&["--allow-insecure-http", "list"]);
 
-        run_cli(cli).await.unwrap();
+        run_cli(cli, &raw).await.unwrap();
     }
 
     #[tokio::test]
@@ -588,9 +664,9 @@ mod tests {
         let env = TestEnv::new();
         let mock_server = mock_empty_sync().await;
         env.write_config(&logged_in_config(mock_server.uri()));
-        let cli = Cli::parse_from(["vaultwarden-cli", "list"]);
+        let (cli, raw) = parse_cli(&["list"]);
 
-        let err = run_cli(cli).await.unwrap_err();
+        let err = run_cli(cli, &raw).await.unwrap_err();
 
         assert!(err.to_string().contains("Insecure server URL rejected"));
     }
@@ -600,8 +676,7 @@ mod tests {
         let env = TestEnv::new();
         let mock_server = mock_empty_sync().await;
         env.write_config(&logged_in_config(mock_server.uri()));
-        let cli = Cli::parse_from([
-            "vaultwarden-cli",
+        let (cli, raw) = parse_cli(&[
             "--allow-insecure-http",
             "get",
             "missing-item",
@@ -611,7 +686,7 @@ mod tests {
             "missing-collection",
         ]);
 
-        let err = run_cli(cli).await.unwrap_err();
+        let err = run_cli(cli, &raw).await.unwrap_err();
 
         assert!(
             err.to_string()
@@ -624,8 +699,7 @@ mod tests {
         let env = TestEnv::new();
         let mock_server = mock_empty_sync().await;
         env.write_config(&logged_in_config(mock_server.uri()));
-        let cli = Cli::parse_from([
-            "vaultwarden-cli",
+        let (cli, raw) = parse_cli(&[
             "--allow-insecure-http",
             "get-uri",
             "https://example.com",
@@ -633,7 +707,7 @@ mod tests {
             "env",
         ]);
 
-        let err = run_cli(cli).await.unwrap_err();
+        let err = run_cli(cli, &raw).await.unwrap_err();
 
         let err = err.to_string();
         assert!(!err.is_empty());
@@ -645,8 +719,7 @@ mod tests {
         let env = TestEnv::new();
         let mock_server = mock_empty_sync().await;
         env.write_config(&logged_in_config(mock_server.uri()));
-        let cli = Cli::parse_from([
-            "vaultwarden-cli",
+        let (cli, raw) = parse_cli(&[
             "--allow-insecure-http",
             "run",
             "--name",
@@ -654,7 +727,7 @@ mod tests {
             "--info",
         ]);
 
-        let err = run_cli(cli).await.unwrap_err();
+        let err = run_cli(cli, &raw).await.unwrap_err();
 
         assert!(err.to_string().contains("Item 'missing-item' not found"));
     }
@@ -664,8 +737,7 @@ mod tests {
         let env = TestEnv::new();
         let mock_server = mock_empty_sync().await;
         env.write_config(&logged_in_config(mock_server.uri()));
-        let cli = Cli::parse_from([
-            "vaultwarden-cli",
+        let (cli, raw) = parse_cli(&[
             "--allow-insecure-http",
             "run",
             "implicit-item",
@@ -674,7 +746,7 @@ mod tests {
             "--info",
         ]);
 
-        let err = run_cli(cli).await.unwrap_err();
+        let err = run_cli(cli, &raw).await.unwrap_err();
 
         assert!(err.to_string().contains("Item 'explicit-item' not found"));
         assert!(!err.to_string().contains("implicit-item"));
@@ -685,15 +757,14 @@ mod tests {
         let env = TestEnv::new();
         let mock_server = mock_empty_sync().await;
         env.write_config(&logged_in_config(mock_server.uri()));
-        let cli = Cli::parse_from([
-            "vaultwarden-cli",
+        let (cli, raw) = parse_cli(&[
             "--allow-insecure-http",
             "run-uri",
             "https://example.com",
             "--info",
         ]);
 
-        let err = run_cli(cli).await.unwrap_err();
+        let err = run_cli(cli, &raw).await.unwrap_err();
 
         let err = err.to_string();
         assert!(!err.is_empty());
@@ -706,24 +777,19 @@ mod tests {
         let mock_server = mock_empty_sync().await;
         env.write_config(&logged_in_config(mock_server.uri()));
         let file = env.fixture_file("input.yml", "plain: value\n");
-        let cli = Cli::parse_from([
-            "vaultwarden-cli",
-            "--allow-insecure-http",
-            "interpolate",
-            "--file",
-            &file,
-        ]);
+        let args = ["--allow-insecure-http", "interpolate", "--file", &file];
+        let (cli, raw) = parse_cli(&args);
 
-        run_cli(cli).await.unwrap();
+        run_cli(cli, &raw).await.unwrap();
     }
 
     #[tokio::test]
     async fn test_run_cli_sets_insecure_mac_library_state() {
         let _env = TestEnv::new();
         vaultwarden_cli::crypto::set_allow_insecure_mac(false);
-        let cli = Cli::parse_from(["vaultwarden-cli", "--allow-insecure-mac", "status"]);
+        let (cli, raw) = parse_cli(&["--allow-insecure-mac", "status"]);
 
-        run_cli(cli).await.unwrap();
+        run_cli(cli, &raw).await.unwrap();
 
         assert!(vaultwarden_cli::crypto::allow_insecure_mac());
         vaultwarden_cli::crypto::set_allow_insecure_mac(false);
@@ -731,12 +797,11 @@ mod tests {
 
     #[test]
     fn test_cli_plaintext_json_flag_reaches_command_options() {
-        let cli = Cli::parse_from([
-            "vaultwarden-cli",
-            "--allow-plaintext-json",
-            "list",
-            "--json",
-        ]);
+        let cli = Cli::from_args(
+            &["vaultwarden-cli"],
+            &["--allow-plaintext-json", "list", "--json"],
+        )
+        .expect("parse cli");
         let opts =
             commands::CommandOptions::for_cli(cli.allow_insecure_http, cli.allow_plaintext_json);
 
@@ -745,17 +810,16 @@ mod tests {
 
     #[test]
     fn test_cli_login_parsing() {
-        let cli = Cli::parse_from([
-            "vaultwarden-cli",
-            "login",
-            "--server",
-            "https://example.com",
-        ]);
-        let Commands::Login {
+        let cli = Cli::from_args(
+            &["vaultwarden-cli"],
+            &["login", "--server", "https://example.com"],
+        )
+        .expect("parse cli");
+        let Commands::Login(LoginCommand {
             server,
             client_id,
             client_secret,
-        } = cli.command
+        }) = cli.command
         else {
             panic!("expected Login command");
         };
@@ -766,8 +830,9 @@ mod tests {
 
     #[test]
     fn test_cli_unlock_parsing() {
-        let cli = Cli::parse_from(["vaultwarden-cli", "unlock", "--password", "secret"]);
-        let Commands::Unlock { password } = cli.command else {
+        let cli = Cli::from_args(&["vaultwarden-cli"], &["unlock", "--password", "secret"])
+            .expect("parse cli");
+        let Commands::Unlock(UnlockCommand { password }) = cli.command else {
             panic!("expected Unlock command");
         };
         assert_eq!(password, Some("secret".to_string()));
@@ -775,15 +840,12 @@ mod tests {
 
     #[test]
     fn test_cli_get_username_flag_overrides_format() {
-        let cli = Cli::parse_from([
-            "vaultwarden-cli",
-            "get",
-            "item-name",
-            "--format",
-            "json",
-            "--username",
-        ]);
-        let Commands::Get {
+        let cli = Cli::from_args(
+            &["vaultwarden-cli"],
+            &["get", "item-name", "--format", "json", "--username"],
+        )
+        .expect("parse cli");
+        let Commands::Get(GetCommand {
             item,
             query,
             format,
@@ -791,7 +853,7 @@ mod tests {
             password,
             org,
             collection,
-        } = cli.command
+        }) = cli.command
         else {
             panic!("expected Get command");
         };
@@ -806,8 +868,9 @@ mod tests {
 
     #[test]
     fn test_cli_get_password_flag_overrides_format() {
-        let cli = Cli::parse_from(["vaultwarden-cli", "get", "item-name", "--password"]);
-        let Commands::Get {
+        let cli = Cli::from_args(&["vaultwarden-cli"], &["get", "item-name", "--password"])
+            .expect("parse cli");
+        let Commands::Get(GetCommand {
             item,
             query,
             format,
@@ -815,7 +878,7 @@ mod tests {
             password,
             org,
             collection,
-        } = cli.command
+        }) = cli.command
         else {
             panic!("expected Get command");
         };
@@ -830,15 +893,15 @@ mod tests {
 
     #[test]
     fn test_cli_list_parsing_with_json() {
-        let cli = Cli::parse_from(["vaultwarden-cli", "list", "--json"]);
-        let Commands::List {
+        let cli = Cli::from_args(&["vaultwarden-cli"], &["list", "--json"]).expect("parse cli");
+        let Commands::List(ListCommand {
             object,
             r#type,
             json,
             search,
             org,
             collection,
-        } = cli.command
+        }) = cli.command
         else {
             panic!("expected List command");
         };
@@ -852,8 +915,9 @@ mod tests {
 
     #[test]
     fn test_cli_get_totp_two_position_parsing() {
-        let cli = Cli::parse_from(["vaultwarden-cli", "get", "totp", "item-search"]);
-        let Commands::Get { item, query, .. } = cli.command else {
+        let cli = Cli::from_args(&["vaultwarden-cli"], &["get", "totp", "item-search"])
+            .expect("parse cli");
+        let Commands::Get(GetCommand { item, query, .. }) = cli.command else {
             panic!("expected Get command");
         };
 
@@ -863,8 +927,8 @@ mod tests {
 
     #[test]
     fn test_cli_list_items_parsing() {
-        let cli = Cli::parse_from(["vaultwarden-cli", "list", "items"]);
-        let Commands::List { object, json, .. } = cli.command else {
+        let cli = Cli::from_args(&["vaultwarden-cli"], &["list", "items"]).expect("parse cli");
+        let Commands::List(ListCommand { object, json, .. }) = cli.command else {
             panic!("expected List command");
         };
 
@@ -874,30 +938,28 @@ mod tests {
 
     #[test]
     fn test_cli_list_rejects_unsupported_object() {
-        let Err(err) = Cli::try_parse_from(["vaultwarden-cli", "list", "folders"]) else {
+        let Err(err) = Cli::from_args(&["vaultwarden-cli"], &["list", "folders"]) else {
             panic!("unsupported list object should be rejected");
         };
 
-        assert!(err.to_string().contains("invalid value 'folders'"));
+        assert!(err.output.contains("expected \"items\""));
     }
 
     #[test]
     fn test_cli_get_uri_parsing() {
-        let cli = Cli::parse_from([
-            "vaultwarden-cli",
-            "get-uri",
-            "example.com",
-            "--format",
-            "env",
-        ]);
-        let Commands::GetUri {
+        let cli = Cli::from_args(
+            &["vaultwarden-cli"],
+            &["get-uri", "example.com", "--format", "env"],
+        )
+        .expect("parse cli");
+        let Commands::GetUri(GetUriCommand {
             uri,
             format,
             username,
             password,
             org,
             collection,
-        } = cli.command
+        }) = cli.command
         else {
             panic!("expected GetUri command");
         };
@@ -911,27 +973,24 @@ mod tests {
 
     #[test]
     fn test_cli_run_parsing() {
-        let cli = Cli::parse_from([
-            "vaultwarden-cli",
-            "run",
-            "--name",
-            "My App",
-            "--",
-            "echo",
-            "hello",
-        ]);
-        let Commands::Run {
+        let args = ["run", "--name", "My App", "--", "echo", "hello"];
+        let cli = Cli::from_args(&["vaultwarden-cli"], &args).expect("parse cli");
+        let Commands::Run(RunCommand {
             name,
             item,
             org,
             folder,
             collection,
             info,
-            command,
-        } = cli.command
+        }) = cli.command
         else {
             panic!("expected Run command");
         };
+        let mut full = vec!["vaultwarden-cli"];
+        full.extend_from_slice(&args);
+        let run_args = subcommand_args(&full, "run");
+        let (item, command) = split_run_trailing(&item, &run_args);
+
         assert_eq!(name, vec!["My App".to_string()]);
         assert!(item.is_empty());
         assert_eq!(org, None);
@@ -943,19 +1002,24 @@ mod tests {
 
     #[test]
     fn test_cli_run_parsing_with_implicit_name() {
-        let cli = Cli::parse_from(["vaultwarden-cli", "run", "My App", "--", "echo", "hello"]);
-        let Commands::Run {
+        let args = ["run", "My App", "--", "echo", "hello"];
+        let cli = Cli::from_args(&["vaultwarden-cli"], &args).expect("parse cli");
+        let Commands::Run(RunCommand {
             name,
             item,
             org,
             folder,
             collection,
             info,
-            command,
-        } = cli.command
+        }) = cli.command
         else {
             panic!("expected Run command");
         };
+        let mut full = vec!["vaultwarden-cli"];
+        full.extend_from_slice(&args);
+        let run_args = subcommand_args(&full, "run");
+        let (item, command) = split_run_trailing(&item, &run_args);
+
         assert!(name.is_empty());
         assert_eq!(item, vec!["My App".to_string()]);
         assert_eq!(org, None);
@@ -967,27 +1031,24 @@ mod tests {
 
     #[test]
     fn test_cli_run_parsing_with_multiple_implicit_names() {
-        let cli = Cli::parse_from([
-            "vaultwarden-cli",
-            "run",
-            "My App",
-            "Other App",
-            "--",
-            "echo",
-            "hello",
-        ]);
-        let Commands::Run {
+        let args = ["run", "My App", "Other App", "--", "echo", "hello"];
+        let cli = Cli::from_args(&["vaultwarden-cli"], &args).expect("parse cli");
+        let Commands::Run(RunCommand {
             name,
             item,
             org,
             folder,
             collection,
             info,
-            command,
-        } = cli.command
+        }) = cli.command
         else {
             panic!("expected Run command");
         };
+        let mut full = vec!["vaultwarden-cli"];
+        full.extend_from_slice(&args);
+        let run_args = subcommand_args(&full, "run");
+        let (item, command) = split_run_trailing(&item, &run_args);
+
         assert!(name.is_empty());
         assert_eq!(item, vec!["My App".to_string(), "Other App".to_string()]);
         assert_eq!(org, None);
@@ -999,26 +1060,24 @@ mod tests {
 
     #[test]
     fn test_cli_run_parsing_with_comma_separated_implicit_names() {
-        let cli = Cli::parse_from([
-            "vaultwarden-cli",
-            "run",
-            "My App,Other App",
-            "--",
-            "echo",
-            "hello",
-        ]);
-        let Commands::Run {
+        let args = ["run", "My App,Other App", "--", "echo", "hello"];
+        let cli = Cli::from_args(&["vaultwarden-cli"], &args).expect("parse cli");
+        let Commands::Run(RunCommand {
             name,
             item,
             org,
             folder,
             collection,
             info,
-            command,
-        } = cli.command
+        }) = cli.command
         else {
             panic!("expected Run command");
         };
+        let mut full = vec!["vaultwarden-cli"];
+        full.extend_from_slice(&args);
+        let run_args = subcommand_args(&full, "run");
+        let (item, command) = split_run_trailing(&item, &run_args);
+
         assert!(name.is_empty());
         assert_eq!(item, vec!["My App".to_string(), "Other App".to_string()]);
         assert_eq!(org, None);
@@ -1030,20 +1089,23 @@ mod tests {
 
     #[test]
     fn test_cli_interpolate_parsing() {
-        let cli = Cli::parse_from([
-            "vaultwarden-cli",
-            "interpolate",
-            "--file",
-            "config.yml",
-            "--output",
-            "rendered.yml",
-            "--skip-missing",
-        ]);
-        let Commands::Interpolate {
+        let cli = Cli::from_args(
+            &["vaultwarden-cli"],
+            &[
+                "interpolate",
+                "--file",
+                "config.yml",
+                "--output",
+                "rendered.yml",
+                "--skip-missing",
+            ],
+        )
+        .expect("parse cli");
+        let Commands::Interpolate(InterpolateCommand {
             file,
             output,
             skip_missing,
-        } = cli.command
+        }) = cli.command
         else {
             panic!("expected Interpolate command");
         };

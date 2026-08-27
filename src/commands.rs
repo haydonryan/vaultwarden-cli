@@ -113,7 +113,7 @@ impl CommandOutcome {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, argy::FromArgValue)]
 pub enum OutputFormat {
     Json,
     Env,

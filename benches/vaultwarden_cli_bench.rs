@@ -1,4 +1,6 @@
-use clap::{Arg, ArgAction, Command};
+#![allow(dead_code)]
+
+use argy::FromArgs;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use serde_json::json;
 use std::fmt::Write;
@@ -11,59 +13,98 @@ use vaultwarden_cli::models::{
 
 const WORKLOADS: [(&str, usize); 3] = [("small", 16), ("medium", 256), ("large", 1024)];
 
-fn cli_command() -> Command {
-    Command::new("vaultwarden-cli")
-        .arg(
-            Arg::new("allow-insecure-http")
-                .long("allow-insecure-http")
-                .global(true)
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("allow-plaintext-json")
-                .long("allow-plaintext-json")
-                .global(true)
-                .action(ArgAction::SetTrue),
-        )
-        .subcommand(
-            Command::new("list")
-                .arg(Arg::new("type").short('t').long("type"))
-                .arg(Arg::new("json").long("json").action(ArgAction::SetTrue))
-                .arg(Arg::new("search").short('s').long("search"))
-                .arg(Arg::new("org").long("org"))
-                .arg(Arg::new("collection").short('c').long("collection")),
-        )
-        .subcommand(
-            Command::new("get")
-                .arg(Arg::new("item").required(true))
-                .arg(Arg::new("format").short('f').long("format"))
-                .arg(
-                    Arg::new("password")
-                        .short('p')
-                        .long("password")
-                        .action(ArgAction::SetTrue),
-                )
-                .arg(
-                    Arg::new("username")
-                        .short('u')
-                        .long("username")
-                        .action(ArgAction::SetTrue),
-                ),
-        )
-        .subcommand(
-            Command::new("run")
-                .arg(
-                    Arg::new("name")
-                        .short('n')
-                        .long("name")
-                        .action(ArgAction::Append),
-                )
-                .arg(Arg::new("org").long("org"))
-                .arg(Arg::new("collection").short('c').long("collection"))
-                .arg(Arg::new("cmd").num_args(1..).trailing_var_arg(true)),
-        )
-        .subcommand(Command::new("status"))
-        .subcommand(Command::new("unlock").arg(Arg::new("password").short('p').long("password")))
+#[derive(FromArgs)]
+/// vaultwarden-cli
+struct Cli {
+    /// allow insecure HTTP connections
+    #[argy(switch, global)]
+    allow_insecure_http: bool,
+    /// allow plaintext JSON output
+    #[argy(switch, global)]
+    allow_plaintext_json: bool,
+    #[argy(subcommand)]
+    command: Commands,
+}
+
+#[derive(FromArgs)]
+#[argy(subcommand)]
+enum Commands {
+    List(ListCommand),
+    Get(GetCommand),
+    Run(RunCommand),
+    Status(StatusCommand),
+    Unlock(UnlockCommand),
+}
+
+#[derive(FromArgs)]
+#[argy(subcommand, name = "list")]
+/// list items
+struct ListCommand {
+    /// filter by type
+    #[argy(option, short = 't')]
+    r#type: Option<String>,
+    /// output JSON
+    #[argy(switch)]
+    json: bool,
+    /// search term
+    #[argy(option, short = 's')]
+    search: Option<String>,
+    /// organization
+    #[argy(option)]
+    org: Option<String>,
+    /// collection
+    #[argy(option, short = 'c')]
+    collection: Option<String>,
+}
+
+#[derive(FromArgs)]
+#[argy(subcommand, name = "get")]
+/// get an item
+struct GetCommand {
+    /// item id or name
+    #[argy(positional)]
+    item: String,
+    /// output format
+    #[argy(option, short = 'f')]
+    format: Option<String>,
+    /// output password only
+    #[argy(switch, short = 'p')]
+    password: bool,
+    /// output username only
+    #[argy(switch, short = 'u')]
+    username: bool,
+}
+
+#[derive(FromArgs)]
+#[argy(subcommand, name = "run")]
+/// run a command with secrets
+struct RunCommand {
+    /// item name(s)
+    #[argy(option, short = 'n')]
+    name: Vec<String>,
+    /// organization
+    #[argy(option)]
+    org: Option<String>,
+    /// collection
+    #[argy(option, short = 'c')]
+    collection: Option<String>,
+    /// command to run
+    #[argy(positional, last)]
+    command: Vec<String>,
+}
+
+#[derive(FromArgs)]
+#[argy(subcommand, name = "status")]
+/// show status
+struct StatusCommand {}
+
+#[derive(FromArgs)]
+#[argy(subcommand, name = "unlock")]
+/// unlock the vault
+struct UnlockCommand {
+    /// master password
+    #[argy(option, short = 'p')]
+    password: Option<String>,
 }
 
 fn command_args() -> Vec<Vec<&'static str>> {
@@ -231,10 +272,10 @@ fn bench_command_parsing(c: &mut Criterion) {
     let args = command_args();
     c.bench_function("command parsing matrix", |b| {
         b.iter_batched(
-            cli_command,
-            |command| {
+            || (),
+            |()| {
                 for argv in &args {
-                    black_box(command.clone().try_get_matches_from(argv).unwrap());
+                    black_box(Cli::from_args(&["vaultwarden-cli"], &argv[1..]).unwrap());
                 }
             },
             BatchSize::SmallInput,
