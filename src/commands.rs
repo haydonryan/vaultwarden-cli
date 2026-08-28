@@ -877,7 +877,7 @@ impl CipherDecryptionProfile {
         Self {
             username: true,
             password: true,
-            uri: false,
+            uri: true,
             notes: false,
             field_names: false,
             field_values: false,
@@ -2952,26 +2952,40 @@ mod tests {
         }
 
         #[test]
-        fn test_run_env_profile_skips_unused_uri_decryption() {
+        fn test_run_env_profile_decrypts_first_uri() {
+            // Regression: run/run-uri inject the login item's first URI as
+            // {NAME}_URI, so run_env must decrypt (and keep only) the first URI.
             let keys = test_crypto_keys();
             let mut cipher = create_named_test_cipher("test-123", CipherType::Login, &keys);
             cipher.cipher_data = Some(CipherData::Login(LoginData {
                 username: Some(encrypt_for_decrypt_cipher_test("alice", &keys)),
                 password: Some(encrypt_for_decrypt_cipher_test("secret", &keys)),
                 totp: None,
-                uris: Some(vec![UriData {
-                    uri: Some("not-encrypted".to_string()),
-                    r#match: None,
-                }]),
+                uris: Some(vec![
+                    UriData {
+                        uri: Some(encrypt_for_decrypt_cipher_test(
+                            "https://first.example.com",
+                            &keys,
+                        )),
+                        r#match: None,
+                    },
+                    UriData {
+                        uri: Some(encrypt_for_decrypt_cipher_test(
+                            "https://second.example.com",
+                            &keys,
+                        )),
+                        r#match: None,
+                    },
+                ]),
             }));
 
             let output =
                 decrypt_cipher_with_profile(&cipher, &keys, CipherDecryptionProfile::run_env())
-                    .expect("run env profile should ignore URI decryption failures");
+                    .expect("run env profile should decrypt the URI");
 
             assert_eq!(output.username.as_deref(), Some("alice"));
             assert_eq!(output.password.as_deref(), Some("secret"));
-            assert_eq!(output.uri, None);
+            assert_eq!(output.uri.as_deref(), Some("https://first.example.com"));
         }
 
         #[test]
@@ -6680,6 +6694,57 @@ mod tests {
             );
         }
 
+        #[test]
+        fn test_run_uri_env_and_info_names_for_login_item() {
+            // Regression: `run` injects {NAME}_URI and `run -i` lists it for a
+            // login item that carries a URI, using the first URI only.
+            let single = CipherOutput {
+                uri: Some("https://example.com".to_string()),
+                ..sample_output()
+            };
+            let multi = CipherOutput {
+                uri: Some("https://first.example.com".to_string()),
+                ..sample_output()
+            };
+
+            // Injected env var value is the (first) URI.
+            let vars = cipher_to_env_vars(&single);
+            assert_eq!(
+                vars.iter().find(|(name, _)| name == "MY_APP_URI"),
+                Some(&("MY_APP_URI".to_string(), "https://example.com".to_string()))
+            );
+            let vars_multi = cipher_to_env_vars(&multi);
+            assert_eq!(
+                vars_multi.iter().find(|(name, _)| name == "MY_APP_URI"),
+                Some(&(
+                    "MY_APP_URI".to_string(),
+                    "https://first.example.com".to_string()
+                ))
+            );
+
+            // Info-name output lists {NAME}_URI too.
+            let names = cipher_env_var_names(&single);
+            assert!(names.contains(&"MY_APP_URI".to_string()));
+            let names_multi = cipher_env_var_names(&multi);
+            assert!(names_multi.contains(&"MY_APP_URI".to_string()));
+        }
+
+        #[test]
+        fn test_run_uri_env_omitted_when_login_item_has_no_uri() {
+            // Regression: items without a URI omit {NAME}_URI from both injection
+            // and info-name output.
+            let no_uri = CipherOutput {
+                uri: None,
+                ..sample_output()
+            };
+
+            let vars = cipher_to_env_vars(&no_uri);
+            assert!(!vars.iter().any(|(name, _)| name == "MY_APP_URI"));
+            assert!(vars.iter().any(|(name, _)| name == "MY_APP_USERNAME"));
+
+            let names = cipher_env_var_names(&no_uri);
+            assert!(!names.contains(&"MY_APP_URI".to_string()));
+        }
         #[test]
         fn test_cipher_to_env_vars_includes_ssh_fields() {
             let output = CipherOutput {
