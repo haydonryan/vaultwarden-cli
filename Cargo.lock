@@ -74,6 +74,8 @@ dependencies = [
 [[package]]
 name = "argy"
 version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c79552f95b66b8ef6805faafbcf01a22a63c5d269adfbe5b2f1bc85fb3cb9ad9"
 dependencies = [
  "argy_derive",
  "argy_shared",
@@ -82,6 +84,8 @@ dependencies = [
 [[package]]
 name = "argy_derive"
 version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4156df7f125af0750d26a18fffe5899ae53a45147a1a0bfc62e13465721c29bb"
 dependencies = [
  "argy_shared",
  "proc-macro2",
@@ -92,6 +96,8 @@ dependencies = [
 [[package]]
 name = "argy_shared"
 version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "835114e918867eabea712ab24f92cf7f8a7b7145e836c12bc4778b5d758cd033"
 dependencies = [
  "serde",
 ]
