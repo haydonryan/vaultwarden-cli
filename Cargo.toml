@@ -8,7 +8,7 @@ authors = ["Haydon Ryan", "AI coders and agents"]
 license = "MIT"
 
 [dependencies]
-argy = { version = "0.1.19", path = "/home/claw/clawd/projects/argy/argy" }
+argy = { version = "0.1.20", path = "/home/claw/clawd/projects/argy/argy" }
 tokio = { version = "1.53", features = ["macros", "rt-multi-thread", "sync"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no-provider", "json", "form"] }
 rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12"] }

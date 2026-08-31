@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "argy"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "argy_derive",
  "argy_shared",
@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "argy_derive"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "argy_shared",
  "proc-macro2",
@@ -91,7 +91,7 @@ dependencies = [
 
 [[package]]
 name = "argy_shared"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "serde",
 ]
