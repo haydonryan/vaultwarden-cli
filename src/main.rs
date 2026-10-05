@@ -710,7 +710,7 @@ mod tests {
         let err = run_cli(cli, &raw).await.unwrap_err();
 
         let err = err.to_string();
-        assert!(!err.is_empty());
+        assert_ne!(err, "");
         assert!(err.to_lowercase().contains("uri"));
     }
 
@@ -767,7 +767,7 @@ mod tests {
         let err = run_cli(cli, &raw).await.unwrap_err();
 
         let err = err.to_string();
-        assert!(!err.is_empty());
+        assert_ne!(err, "");
         assert!(err.to_lowercase().contains("uri"));
     }
 
@@ -992,7 +992,7 @@ mod tests {
         let (item, command) = split_run_trailing(&item, &run_args);
 
         assert_eq!(name, vec!["My App".to_string()]);
-        assert!(item.is_empty());
+        assert_eq!(item, [] as [String; 0]);
         assert_eq!(org, None);
         assert_eq!(folder, None);
         assert_eq!(collection, None);
@@ -1020,7 +1020,7 @@ mod tests {
         let run_args = subcommand_args(&full, "run");
         let (item, command) = split_run_trailing(&item, &run_args);
 
-        assert!(name.is_empty());
+        assert_eq!(name, [] as [String; 0]);
         assert_eq!(item, vec!["My App".to_string()]);
         assert_eq!(org, None);
         assert_eq!(folder, None);
@@ -1049,7 +1049,7 @@ mod tests {
         let run_args = subcommand_args(&full, "run");
         let (item, command) = split_run_trailing(&item, &run_args);
 
-        assert!(name.is_empty());
+        assert_eq!(name, [] as [String; 0]);
         assert_eq!(item, vec!["My App".to_string(), "Other App".to_string()]);
         assert_eq!(org, None);
         assert_eq!(folder, None);
@@ -1078,7 +1078,7 @@ mod tests {
         let run_args = subcommand_args(&full, "run");
         let (item, command) = split_run_trailing(&item, &run_args);
 
-        assert!(name.is_empty());
+        assert_eq!(name, [] as [String; 0]);
         assert_eq!(item, vec!["My App".to_string(), "Other App".to_string()]);
         assert_eq!(org, None);
         assert_eq!(folder, None);

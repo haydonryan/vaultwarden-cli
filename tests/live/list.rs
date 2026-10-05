@@ -263,7 +263,7 @@ async fn list_type_and_search_combined() {
     let items = json.as_array().unwrap();
     // Should find exactly FIXTURE_LOGIN_NAME but not FIXTURE_LOGIN2_NAME
     // (different name that doesn't match the search).
-    assert!(!items.is_empty());
+    assert_ne!(*items, [] as [serde_json::Value; 0]);
     for item in items {
         assert_eq!(item["type"].as_str().unwrap_or(""), "login");
         let name = item["name"].as_str().unwrap_or("");
