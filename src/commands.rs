@@ -2059,8 +2059,7 @@ pub async fn run_with_secrets(options: RunOptions<'_>) -> Result<CommandOutcome>
             let matched = ctx.sync_response.folders.iter().find(|f| {
                 user_keys
                     .decrypt_to_string(&f.name)
-                    .ok()
-                    .is_some_and(|n| n.eq_ignore_ascii_case(folder))
+                    .is_ok_and(|n| n.eq_ignore_ascii_case(folder))
             });
             Some(
                 matched
@@ -6615,7 +6614,7 @@ mod tests {
                     .into_iter()
                     .map(|(name, _)| name)
                     .collect();
-                assert!(!names.is_empty());
+                assert_ne!(names, [] as [String; 0]);
                 expected.extend(names);
                 if idx + 1 < 2 {
                     expected.push(String::new());
@@ -6741,7 +6740,7 @@ mod tests {
             };
 
             let vars = cipher_to_env_vars(&output);
-            assert!(vars.is_empty());
+            assert_eq!(vars, [] as [(String, String); 0]);
         }
 
         #[test]
