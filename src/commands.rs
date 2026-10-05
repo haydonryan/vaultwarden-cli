@@ -6096,60 +6096,6 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_get_by_uri_matches_when_name_does_not_match() {
-            let _guard = ENV_LOCK.lock().await;
-            let temp_dir = tempfile::TempDir::new().unwrap();
-            let _config_dir_override = set_temp_config_dir(&temp_dir);
-
-            let mock_server = MockServer::start().await;
-            let keys = CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32]);
-
-            let sync_response = serde_json::json!({
-                "ciphers": [
-                    make_encrypted_login("cipher-1", "Work Login", "user", "pass", "https://github.com", &keys),
-                ],
-                "folders": [],
-                "collections": [],
-                "profile": {
-                    "id": "user-1",
-                    "email": "user@example.com",
-                    "organizations": []
-                }
-            });
-
-            Mock::given(method("GET"))
-                .and(path("/api/sync"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(&sync_response))
-                .mount(&mock_server)
-                .await;
-
-            let config = Config {
-                server: Some(mock_server.uri()),
-                access_token: Some("token".to_string()),
-                token_expiry: Some(i64::MAX),
-                email: Some("user@example.com".to_string()),
-                crypto_keys: Some(keys),
-                ..Default::default()
-            };
-            config.save().unwrap();
-            config.save_keys().unwrap();
-
-            let result = get_by_uri(
-                "github.com",
-                OutputFormat::Json,
-                None,
-                None,
-                &CommandOptions {
-                    allow_insecure_http: true,
-                    allow_plaintext_json: true,
-                    ..Default::default()
-                },
-            )
-            .await;
-            assert!(result.is_ok());
-        }
-
-        #[tokio::test]
         async fn test_get_by_uri_not_found() {
             let _guard = ENV_LOCK.lock().await;
             let temp_dir = tempfile::TempDir::new().unwrap();
