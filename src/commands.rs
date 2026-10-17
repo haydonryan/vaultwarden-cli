@@ -565,14 +565,71 @@ fn find_cipher_output(
     None
 }
 
+/// Extract the hostname from a URI-like string, stripping scheme, userinfo,
+/// port, path, query, and fragment. For a bare hostname (no `://`), the whole
+/// trimmed string is treated as the host. Returns `None` for empty input.
+fn uri_host(raw: &str) -> Option<&str> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    // Detect scheme: "scheme://host/...". Only treat `user@host` as userinfo
+    // when a scheme is present, since a bare `user@host` is far more likely a
+    // username/email search than a URI authority.
+    let (has_scheme, no_scheme) = match raw.split_once("://") {
+        Some((_, rest)) => (true, rest),
+        None => (false, raw),
+    };
+    let no_userinfo = if has_scheme {
+        no_scheme
+            .rsplit_once('@')
+            .map_or(no_scheme, |(_, rest)| rest)
+    } else {
+        no_scheme
+    };
+    // Strip path, query, and fragment, leaving the authority (host[:port]).
+    let authority = no_userinfo
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(no_userinfo);
+    // Strip the port, handling bracketed IPv6 literals.
+    let host = if authority.starts_with('[') {
+        authority
+            .get(1..)
+            .and_then(|rest| rest.split(']').next())
+            .unwrap_or(authority)
+    } else {
+        authority.split(':').next().unwrap_or(authority)
+    };
+    let host = host.trim();
+    if host.is_empty() { None } else { Some(host) }
+}
+
+/// Hostname/anchor-aware URI match: true when `cipher_uri`'s hostname equals
+/// `query_host` or is a subdomain of it (a `.`-anchored suffix). This is a
+/// strict replacement for unanchored substring matching: lookalike hosts such
+/// as `example.com.evil.org` or `notexample.com` never match a search for
+/// `example.com`.
+fn hostname_matches(query_host: &str, cipher_uri: &str) -> bool {
+    let Some(cipher_host) = uri_host(cipher_uri) else {
+        return false;
+    };
+    let query = query_host.to_lowercase();
+    let cipher = cipher_host.to_lowercase();
+    cipher == query || cipher.ends_with(&format!(".{query}"))
+}
+
 fn cipher_uri_matches(uri: &str, keys: &CryptoKeys, cipher: &Cipher) -> bool {
-    let uri_lower = uri.to_lowercase();
+    let query_host = uri_host(uri);
 
     let uri_matches = |cipher_uri: &str| -> bool {
+        let Some(query_host) = query_host else {
+            return false;
+        };
         try_decrypt(keys, Some(cipher_uri))
             .ok()
             .flatten()
-            .is_some_and(|decrypted| decrypted.to_lowercase().contains(&uri_lower))
+            .is_some_and(|decrypted| hostname_matches(query_host, &decrypted))
     };
 
     if let Some(login_uris) = cipher.cipher_data.as_ref().and_then(|cd| match cd {
@@ -7274,11 +7331,84 @@ mod tests {
             let cipher = cipher_with_login_uris(&keys, &["https://EXAMPLE.COM/Login"]);
             assert!(cipher_uri_matches("example.com", &keys, &cipher));
         }
+
+        #[test]
+        fn does_not_match_suffix_lookalike_host() {
+            let keys = keys();
+            let cipher = cipher_with_login_uris(&keys, &["https://example.com.evil.org/login"]);
+            assert!(!cipher_uri_matches("example.com", &keys, &cipher));
+        }
+
+        #[test]
+        fn does_not_match_embedded_lookalike_host() {
+            let keys = keys();
+            let cipher = cipher_with_login_uris(&keys, &["https://notexample.com/login"]);
+            assert!(!cipher_uri_matches("example.com", &keys, &cipher));
+        }
+
+        #[test]
+        fn matches_subdomain_of_query_host() {
+            let keys = keys();
+            let cipher = cipher_with_login_uris(&keys, &["https://api.example.com/login"]);
+            assert!(cipher_uri_matches("example.com", &keys, &cipher));
+        }
+
+        #[test]
+        fn matches_query_with_path_when_host_equals() {
+            let keys = keys();
+            let cipher = cipher_with_login_uris(&keys, &["https://example.com/login"]);
+            assert!(cipher_uri_matches("example.com/login", &keys, &cipher));
+        }
+
+        #[test]
+        fn query_with_username_at_host_is_not_treated_as_lookalike_match() {
+            let keys = keys();
+            let cipher = cipher_with_login_uris(&keys, &["https://Second.Example.com/login"]);
+            // A bare `user@host` (no scheme) is a username-style search, not a
+            // URI, so it must not be parsed down to `example.com` and match a
+            // subdomain host.
+            assert!(!cipher_uri_matches("CASEUSER@EXAMPLE.COM", &keys, &cipher));
+        }
     }
 
     mod find_cipher_output_by_uri_tests {
         use super::*;
-        use crate::models::Cipher;
+        use crate::models::{Cipher, CipherData, CipherId, LoginData, UriData};
+
+        fn keys() -> CryptoKeys {
+            CryptoKeys::from_key_bytes([0x42u8; 32], [0x43u8; 32])
+        }
+
+        fn encrypted_uri(keys: &CryptoKeys, uri: &str) -> String {
+            crate::crypto::crypto_keys::tests::test_helpers::encrypt_bytes_for_test(
+                uri.as_bytes(),
+                keys.enc_key_bytes(),
+                keys.mac_key_bytes(),
+            )
+        }
+
+        fn login_cipher_with_uri(id: &str, uri: &str, keys: &CryptoKeys) -> Cipher {
+            Cipher {
+                id: CipherId::new(id.to_string()).unwrap(),
+                organization_id: None,
+                deleted_date: None,
+                name: Some(encrypted_uri(keys, "Real Host")),
+                notes: None,
+                folder_id: None,
+                collection_ids: Vec::new(),
+                fields: None,
+                data: None,
+                cipher_data: Some(CipherData::Login(LoginData {
+                    username: None,
+                    password: None,
+                    totp: None,
+                    uris: Some(vec![UriData {
+                        uri: Some(encrypted_uri(keys, uri)),
+                        r#match: None,
+                    }]),
+                })),
+            }
+        }
 
         #[test]
         fn errors_when_no_ciphers_match_uri() {
@@ -7296,6 +7426,54 @@ mod tests {
                 err.to_string()
                     .contains("No item found with URI containing")
             );
+        }
+
+        #[test]
+        fn does_not_select_lookalike_uri_cipher() {
+            let keys = keys();
+            let config = Config {
+                crypto_keys: Some(keys.clone()),
+                ..Default::default()
+            };
+            // The only matching candidate is a substring lookalike of the query.
+            let lookalike = login_cipher_with_uri(
+                "cipher-lookalike",
+                "https://example.com.evil.org/login",
+                &keys,
+            );
+
+            let err = find_cipher_output_by_uri(
+                &[lookalike],
+                &config,
+                "example.com",
+                |_| true,
+                CipherDecryptionProfile::full(),
+            )
+            .unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("No item found with URI containing"),
+                "lookalike host should not be selected: {err}"
+            );
+        }
+
+        #[test]
+        fn selects_exact_host_cipher() {
+            let keys = keys();
+            let config = Config {
+                crypto_keys: Some(keys.clone()),
+                ..Default::default()
+            };
+            let cipher = login_cipher_with_uri("cipher-real", "https://example.com/login", &keys);
+
+            let result = find_cipher_output_by_uri(
+                &[cipher],
+                &config,
+                "example.com",
+                |_| true,
+                CipherDecryptionProfile::full(),
+            );
+            assert!(result.is_ok());
         }
     }
 
