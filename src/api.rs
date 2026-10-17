@@ -5,6 +5,11 @@ use anyhow::{Context, Result};
 use reqwest::{Client, Response, Url};
 
 const API_ERROR_BODY_LIMIT_BYTES: usize = 4096;
+/// Upper bound (in bytes) on a deserialized success response body. Guards
+/// against memory exhaustion from a malicious or compromised server streaming
+/// an unbounded JSON body into memory. Error bodies are already capped at
+/// [`API_ERROR_BODY_LIMIT_BYTES`]; success bodies previously were not.
+const API_SUCCESS_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 
 fn sanitize_error_body_snippet(body: &str) -> String {
     body.chars().flat_map(char::escape_default).collect()
@@ -41,6 +46,27 @@ async fn bounded_error_body_snippet(mut response: Response) -> String {
     } else {
         sanitized
     }
+}
+
+/// Read a full response body into memory, failing if it exceeds `limit` bytes.
+/// Used for success responses before deserialization so an oversized body is
+/// rejected instead of being buffered unboundedly.
+async fn read_bounded_body(mut response: Response, limit: usize, kind: &str) -> Result<Vec<u8>> {
+    let mut body = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                let remaining = limit.saturating_sub(body.len());
+                if remaining == 0 || chunk.len() > remaining {
+                    anyhow::bail!("{kind} response body exceeded the {limit}-byte limit");
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(err) => anyhow::bail!("failed to read {kind} response body: {err}"),
+        }
+    }
+    Ok(body)
 }
 
 pub struct ApiClient {
@@ -402,9 +428,73 @@ impl ApiClient {
             anyhow::bail!("{error_prefix} failed ({status}): {body}");
         }
 
-        response
-            .json::<T>()
+        let bytes = read_bounded_body(response, API_SUCCESS_BODY_LIMIT_BYTES, "success")
             .await
-            .with_context(|| parse_context.to_string())
+            .with_context(|| format!("Failed to read {operation} response"))?;
+        serde_json::from_slice::<T>(&bytes).with_context(|| parse_context.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn client_for(server: &MockServer) -> ApiClient {
+        // wiremock serves plain http; allow_insecure_http permits it for the client.
+        ApiClient::new_with_flags(&server.uri(), true).unwrap()
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_success_response_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/sync"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("x".repeat(API_SUCCESS_BODY_LIMIT_BYTES + 1)),
+            )
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let err = client
+            .get_json::<SyncResponse>("/api/sync", "token", "sync", "sync", "sync response")
+            .await
+            .unwrap_err();
+
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(&format!("{API_SUCCESS_BODY_LIMIT_BYTES}-byte limit")),
+            "expected a limit error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn accepts_success_response_within_limit() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/sync"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ciphers": [],
+                "folders": [],
+                "collections": [],
+                "profile": {
+                    "id": "user-1",
+                    "email": "user@example.com",
+                    "organizations": []
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let sync = client
+            .get_json::<SyncResponse>("/api/sync", "token", "sync", "sync", "sync response")
+            .await
+            .expect("valid response within limit should deserialize");
+
+        assert!(sync.ciphers.is_empty());
     }
 }
