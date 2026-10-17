@@ -1914,6 +1914,63 @@ fn cipher_to_env_vars(output: &CipherOutput) -> Vec<(String, String)> {
     vars
 }
 
+// Like cipher_to_env_vars, but each entry also carries a provenance label for
+// the source field (e.g. "password", "field 'password'") so run can detect
+// env-var name collisions across selected items or against reserved subfields
+// instead of silently overwriting a secret. Keep in sync with cipher_to_env_vars.
+fn cipher_env_vars_with_sources(output: &CipherOutput) -> Vec<(String, String, String)> {
+    let prefix = sanitize_env_name(&output.name);
+    let mut vars = Vec::with_capacity(7);
+    if let Some(v) = &output.uri {
+        vars.push((format!("{prefix}_URI"), v.clone(), "uri".to_string()));
+    }
+    if let Some(v) = &output.username {
+        vars.push((
+            format!("{prefix}_USERNAME"),
+            v.clone(),
+            "username".to_string(),
+        ));
+    }
+    if let Some(v) = &output.password {
+        vars.push((
+            format!("{prefix}_PASSWORD"),
+            v.clone(),
+            "password".to_string(),
+        ));
+    }
+    if let Some(v) = &output.ssh_public_key {
+        vars.push((
+            format!("{prefix}_SSH_PUBLIC_KEY"),
+            v.clone(),
+            "ssh_public_key".to_string(),
+        ));
+    }
+    if let Some(v) = &output.ssh_private_key {
+        vars.push((
+            format!("{prefix}_SSH_PRIVATE_KEY"),
+            v.clone(),
+            "ssh_private_key".to_string(),
+        ));
+    }
+    if let Some(v) = &output.ssh_fingerprint {
+        vars.push((
+            format!("{prefix}_SSH_FINGERPRINT"),
+            v.clone(),
+            "ssh_fingerprint".to_string(),
+        ));
+    }
+    if let Some(fields) = &output.fields {
+        for field in fields {
+            vars.push((
+                format!("{}_{}", prefix, sanitize_env_name(&field.name)),
+                field.value.clone(),
+                format!("field '{}'", field.name),
+            ));
+        }
+    }
+    vars
+}
+
 // Mirror the name set produced by cipher_to_env_vars, but build only names
 // (no value clones). Keep in sync with cipher_to_env_vars.
 fn cipher_env_var_names(output: &CipherOutput) -> Vec<String> {
@@ -2239,10 +2296,32 @@ fn run_with_decrypted_outputs(
     info_only: bool,
     command: &[String],
 ) -> Result<CommandOutcome> {
-    // Build environment variables from the ciphers
+    // Build environment variables from the ciphers, tracking each variable's
+    // provenance so name collisions can be rejected instead of silently
+    // overwriting one item's secret with another's.
     let mut env_vars = Vec::new();
+    let mut sources: HashMap<String, Vec<String>> = HashMap::new();
     for output in outputs {
-        env_vars.extend(cipher_to_env_vars(&output));
+        for (name, value, field) in cipher_env_vars_with_sources(&output) {
+            let src = format!("item '{}' ({field})", output.name);
+            sources.entry(name.clone()).or_default().push(src);
+            env_vars.push((name, value));
+        }
+    }
+
+    // Reject collisions across selected items or against reserved subfields
+    // (<PREFIX>_PASSWORD, <PREFIX>_USERNAME, etc.).
+    let collisions: Vec<(&String, &Vec<String>)> =
+        sources.iter().filter(|(_, srcs)| srcs.len() > 1).collect();
+    if !collisions.is_empty() {
+        let details = collisions
+            .iter()
+            .map(|(name, srcs)| format!("'{name}' produced by {}", srcs.join(" and ")))
+            .collect::<Vec<_>>()
+            .join("\n  ");
+        anyhow::bail!(
+            "Environment variable name collision(s) detected; refusing to run rather than silently overwrite a secret:\n  {details}\nUse distinct item names or rename a colliding field."
+        );
     }
 
     // If --info flag, just print variable names
@@ -7560,6 +7639,79 @@ mod tests {
             };
 
             let result = run_with_decrypted_outputs(vec![output], true, &[]);
+            assert!(result.is_ok());
+        }
+
+        fn login_output(
+            name: &str,
+            password: Option<&str>,
+            fields: Option<Vec<FieldOutput>>,
+        ) -> CipherOutput {
+            CipherOutput {
+                id: format!("cipher-{name}"),
+                cipher_type: "login".to_string(),
+                name: name.to_string(),
+                username: None,
+                password: password.map(str::to_string),
+                uri: None,
+                notes: None,
+                fields,
+                ssh_public_key: None,
+                ssh_private_key: None,
+                ssh_fingerprint: None,
+            }
+        }
+
+        #[test]
+        fn rejects_collision_across_items_sanitizing_to_same_prefix() {
+            // "My App" and "my_app" both sanitize to MY_APP, so both produce
+            // MY_APP_PASSWORD. run must refuse rather than let the child see
+            // the wrong item's secret.
+            let a = login_output("My App", Some("secret-a"), None);
+            let b = login_output("my_app", Some("secret-b"), None);
+
+            let err = run_with_decrypted_outputs(vec![a, b], true, &[])
+                .unwrap_err()
+                .to_string();
+
+            assert!(
+                err.contains("Environment variable name collision"),
+                "unexpected error: {err}"
+            );
+            assert!(err.contains("MY_APP_PASSWORD"), "unexpected error: {err}");
+        }
+
+        #[test]
+        fn rejects_custom_field_colliding_with_reserved_subfield() {
+            // A custom field named "password" produces MY_APP_PASSWORD, which
+            // collides with the reserved password subfield of the same item.
+            let output = login_output(
+                "My App",
+                Some("real-pass"),
+                Some(vec![FieldOutput {
+                    name: "password".to_string(),
+                    value: "field-pass".to_string(),
+                    hidden: true,
+                }]),
+            );
+
+            let err = run_with_decrypted_outputs(vec![output], true, &[])
+                .unwrap_err()
+                .to_string();
+
+            assert!(
+                err.contains("Environment variable name collision"),
+                "unexpected error: {err}"
+            );
+            assert!(err.contains("MY_APP_PASSWORD"), "unexpected error: {err}");
+        }
+
+        #[test]
+        fn distinct_items_do_not_collide() {
+            let a = login_output("My App", Some("secret-a"), None);
+            let b = login_output("Other App", Some("secret-b"), None);
+
+            let result = run_with_decrypted_outputs(vec![a, b], true, &[]);
             assert!(result.is_ok());
         }
     }
