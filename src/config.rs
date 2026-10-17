@@ -169,6 +169,7 @@ pub fn write_secure(path: &std::path::Path, content: impl AsRef<[u8]>) -> Result
             .write(true)
             .create(true)
             .truncate(true)
+            .custom_flags(libc::O_NOFOLLOW) // refuse to open through a symlink
             .mode(0o600) // initial creation mode (umask applied by kernel)
             .open(path)
             .map_err(|e| anyhow::anyhow!("Failed to open {}: {e}", path.display()))?;
@@ -1780,6 +1781,33 @@ mod tests {
 
             assert!(loaded.user_keys.is_none());
             assert!(loaded.org_keys.is_empty());
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn test_write_secure_refuses_symlink() {
+            use std::os::unix::fs::symlink;
+
+            let temp_dir = TempDir::new().unwrap();
+            let target_path = temp_dir.path().join("target.json");
+            let link_path = temp_dir.path().join("config.json");
+
+            // Target holds original content; a symlink sits where write_secure writes.
+            fs::write(&target_path, "original").unwrap();
+            symlink(&target_path, &link_path).unwrap();
+
+            let result = write_secure(&link_path, b"malicious-overwrite");
+
+            // write_secure must refuse to follow the symlink instead of truncating the target.
+            assert!(result.is_err());
+            assert_eq!(fs::read_to_string(&target_path).unwrap(), "original");
+            // The link itself is untouched (no regular file created in its place).
+            assert!(
+                fs::symlink_metadata(&link_path)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
         }
     }
 }
