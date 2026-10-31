@@ -147,6 +147,7 @@ impl ApiClient {
                 env!("CARGO_PKG_VERSION")
             ))
             .default_headers(default_headers)
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(std::time::Duration::from_secs(60))
             .connect_timeout(std::time::Duration::from_secs(15))
             .build()
@@ -496,5 +497,39 @@ mod tests {
             .expect("valid response within limit should deserialize");
 
         assert!(sync.ciphers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn hostile_redirect_does_not_resend_credential_body() {
+        // A hostile identity server that redirects the credential-bearing login
+        // POST to a second host. Redirects are disabled on the client, so the
+        // 307 is surfaced as an error and the client_secret body is never
+        // re-sent to the target host.
+        let target = MockServer::start().await;
+        let hostile = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/identity/connect/token"))
+            .respond_with(ResponseTemplate::new(307).append_header("Location", target.uri()))
+            .mount(&hostile)
+            .await;
+
+        let client = client_for(&hostile);
+        let err = client
+            .login("client-id", "super-secret-client-secret")
+            .await
+            .unwrap_err();
+
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("Login failed (307)"),
+            "expected the 307 redirect to surface as a login error, got: {msg}"
+        );
+
+        let target_requests = target.received_requests().await.unwrap();
+        assert!(
+            target_requests.is_empty(),
+            "credential body must not be re-sent to the redirect target, got {} requests",
+            target_requests.len()
+        );
     }
 }
