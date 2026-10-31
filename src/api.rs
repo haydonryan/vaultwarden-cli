@@ -4,12 +4,41 @@ use crate::models::{CipherListResponse, SyncResponse, TokenResponse};
 use anyhow::{Context, Result};
 use reqwest::{Client, Response, Url};
 
+/// Percent-encode set for interpolating a raw id into a single URL path
+/// segment. Encodes every byte that is not a valid RFC 3986 path-segment
+/// character (`pchar`), so reserved delimiters like `/`, `?`, and `#` in an id
+/// cannot redirect the request to a different endpoint, while leaving normal
+/// id characters (alphanumerics, `-`, `_`, `.`, `~`, sub-delims, `:`, `@`)
+/// untouched.
+static CIPHER_ID_PATH_ENCODE_SET: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}')
+    .add(b'/')
+    .add(b'\\')
+    .add(b'^')
+    .add(b'[')
+    .add(b']')
+    .add(b'|')
+    .add(b'%');
+
 const API_ERROR_BODY_LIMIT_BYTES: usize = 4096;
 /// Upper bound (in bytes) on a deserialized success response body. Guards
 /// against memory exhaustion from a malicious or compromised server streaming
 /// an unbounded JSON body into memory. Error bodies are already capped at
 /// [`API_ERROR_BODY_LIMIT_BYTES`]; success bodies previously were not.
 const API_SUCCESS_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
+/// Upper bound (in bytes) on a deserialized auth/token response body
+/// (login and `refresh_token` via `post_form`). These carry the most sensitive
+/// inputs and legitimately never approach the general success bound, so a
+/// tighter cap is applied to the token endpoint as well.
+const API_TOKEN_RESPONSE_BODY_LIMIT_BYTES: usize = 1024 * 1024;
 
 fn sanitize_error_body_snippet(body: &str) -> String {
     body.chars().flat_map(char::escape_default).collect()
@@ -147,6 +176,7 @@ impl ApiClient {
                 env!("CARGO_PKG_VERSION")
             ))
             .default_headers(default_headers)
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(std::time::Duration::from_secs(60))
             .connect_timeout(std::time::Duration::from_secs(15))
             .build()
@@ -281,7 +311,13 @@ impl ApiClient {
         access_token: &str,
         cipher_id: &str,
     ) -> Result<crate::models::Cipher> {
-        let path = format!("/api/ciphers/{cipher_id}");
+        // Percent-encode cipher_id as a single path segment so characters such
+        // as `/`, `?`, or `#` in an id cannot alter the request target (the
+        // path is interpolated into the URL before parsing, unlike query values
+        // which are percent-encoded via query_pairs_mut).
+        let encoded_id =
+            percent_encoding::utf8_percent_encode(cipher_id, CIPHER_ID_PATH_ENCODE_SET);
+        let path = format!("/api/ciphers/{encoded_id}");
         self.get_json(
             &path,
             access_token,
@@ -372,10 +408,10 @@ impl ApiClient {
             anyhow::bail!("{error_prefix} failed ({status}): {body}");
         }
 
-        response
-            .json::<T>()
+        let bytes = read_bounded_body(response, API_TOKEN_RESPONSE_BODY_LIMIT_BYTES, "token")
             .await
-            .with_context(|| parse_context.to_string())
+            .with_context(|| format!("Failed to read {operation} response"))?;
+        serde_json::from_slice::<T>(&bytes).with_context(|| parse_context.to_string())
     }
 
     async fn get_json<T: serde::de::DeserializeOwned>(
@@ -472,6 +508,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejects_oversized_token_response_body_during_login() {
+        // Mirrors a malicious/compromised identity endpoint streaming a
+        // multi-GB /identity/connect/token body: the client must reject once
+        // the token bound is exceeded instead of buffering the whole body.
+        // We send `limit + 1` bytes — the smallest payload that trips the
+        // bound — so the assertion proves bounded rejection without allocating
+        // a multi-GB test payload.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/identity/connect/token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("x".repeat(API_TOKEN_RESPONSE_BODY_LIMIT_BYTES + 1)),
+            )
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let err = client
+            .login("client-id", "client-secret")
+            .await
+            .unwrap_err();
+
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(&format!("{API_TOKEN_RESPONSE_BODY_LIMIT_BYTES}-byte limit")),
+            "expected a token-body limit error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
     async fn accepts_success_response_within_limit() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -496,5 +563,68 @@ mod tests {
             .expect("valid response within limit should deserialize");
 
         assert!(sync.ciphers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn hostile_redirect_does_not_resend_credential_body() {
+        // A hostile identity server that redirects the credential-bearing login
+        // POST to a second host. Redirects are disabled on the client, so the
+        // 307 is surfaced as an error and the client_secret body is never
+        // re-sent to the target host.
+        let target = MockServer::start().await;
+        let hostile = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/identity/connect/token"))
+            .respond_with(ResponseTemplate::new(307).append_header("Location", target.uri()))
+            .mount(&hostile)
+            .await;
+
+        let client = client_for(&hostile);
+        let err = client
+            .login("client-id", "super-secret-client-secret")
+            .await
+            .unwrap_err();
+
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("Login failed (307"),
+            "expected the 307 redirect to surface as a login error, got: {msg}"
+        );
+
+        let target_requests = target.received_requests().await.unwrap();
+        assert!(
+            target_requests.is_empty(),
+            "credential body must not be re-sent to the redirect target, got {} requests",
+            target_requests.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn cipher_by_id_percent_encodes_special_characters_in_path() {
+        let id = "abc/def?x=1#y";
+        // `/`, `?`, and `#` are encoded; `=` is a valid path sub-delim and is left as-is.
+        let encoded = "abc%2Fdef%3Fx=1%23y";
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": id,
+                "Type": 1
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let cipher = client
+            .cipher_by_id("token", id)
+            .await
+            .expect("encoded-id request should hit the correct endpoint");
+
+        assert_eq!(cipher.id.as_str(), id);
+
+        // The id must be sent as a single percent-encoded path segment, not
+        // split into `/api/ciphers/abc/def` with a query/fragment appended.
+        let received = server.received_requests().await.unwrap();
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].url.path(), format!("/api/ciphers/{encoded}"));
     }
 }

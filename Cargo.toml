@@ -9,7 +9,7 @@ license = "MIT"
 
 [dependencies]
 argy = "0.1.20"
-tokio = { version = "1.53", features = ["macros", "rt-multi-thread", "sync"] }
+tokio = { version = "1.54", features = ["macros", "rt-multi-thread", "sync"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "json", "form"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -31,6 +31,7 @@ rpassword = "7.5"
 rsa = { version = "0.10.0-rc.19", features = ["getrandom", "sha1", "sha2"] }
 zeroize = { version = "1.9", features = ["derive"] }
 fs4 = "1.1"
+percent-encoding = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -48,7 +49,7 @@ windows-native-keyring-store = "1"
 tempfile = "3.27"
 wiremock = "0.6"
 tokio-test = "0.4"
-rstest = "0.27"
+rstest = "0.28"
 rand = "0.10"
 rand_core = "0.10"
 assert_cmd = "2.2"
