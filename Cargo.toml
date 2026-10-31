@@ -31,6 +31,7 @@ rpassword = "7.5"
 rsa = { version = "0.10.0-rc.19", features = ["getrandom", "sha1", "sha2"] }
 zeroize = { version = "1.9", features = ["derive"] }
 fs4 = "1.1"
+percent-encoding = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
