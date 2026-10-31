@@ -126,59 +126,112 @@ where
 
 // ── Secure file write ────────────────────────────────────────────────────────
 
-/// Write `content` to `path` with owner-only (0o600) permissions,
-/// eliminating the TOCTOU race that exists in the naive `fs::write` + `chmod` pattern.
+/// Write `content` to `path` atomically with owner-only (0o600) permissions.
 ///
-/// ## Why the naive pattern is unsafe
+/// This eliminates both the TOCTOU race of the naive `fs::write` + `chmod`
+/// pattern and the partial-write corruption of an in-place `O_TRUNC` write.
 ///
-/// `std::fs::write` opens the file with `O_CREAT | O_WRONLY | O_TRUNC` and the
-/// process umask (typically `0o022`), which produces an initial mode of `0o644`.
-/// A subsequent `fs::set_permissions(path, 0o600)` operates on the *path*, not
-/// the file descriptor, so any process that polls the directory between the two
-/// syscalls can read the file while it still has world-readable permissions.
+/// ## Why atomic (temp-file + rename + fsync)
 ///
-/// ## How this is fixed
+/// The prior implementation opened the target with `O_CREAT | O_WRONLY | O_TRUNC`
+/// and `write_all`'d in place: a process kill, power loss, or disk-full mid-write
+/// could leave `config.json` / `tokens.json` / `keys.json` truncated or
+/// half-written, breaking every subsequent command ("Failed to parse config"),
+/// forcing a surprise re-login, or losing persisted unlock state.
 ///
-/// On Unix this function uses a three-step approach:
+/// This version writes to a uniquely-named temp file in the same directory,
+/// fsyncs it, then atomically `rename`s it over the target. A reader only ever
+/// observes either the complete old file or the complete new file. A subsequent
+/// `fsync` on the parent directory makes the rename itself durable across a
+/// power loss.
 ///
-/// 1. **`open(path, O_CREAT|O_WRONLY|O_TRUNC, 0o600)`** — creates the file
-///    with mode `0o600 & ~umask`. Since the umask only removes bits and the
-///    group/other bits in `0o600` are already zero, the result is at most `0o600`
-///    (never more permissive).
-/// 2. **`fchmod(fd, 0o600)`** via `File::set_permissions` — operates on the
-///    open file descriptor, not the path. This is not subject to TOCTOU and
-///    guarantees exactly `0o600` regardless of the umask, before any data is
-///    written.
-/// 3. **`write_all(content)`** — data is written only after permissions are
-///    locked. Even the brief window between steps 1 and 2 is safe because the
-///    file is empty.
+/// ## Security properties preserved
+///
+/// - **`fchmod(fd, 0o600)`** via `File::set_permissions` — operates on the
+///   open file descriptor, not the path, so it is not subject to TOCTOU and
+///   guarantees exactly `0o600` regardless of the umask, before any data is
+///   written.
+/// - **`O_NOFOLLOW`** — the temp file is opened with `O_NOFOLLOW`, and `rename`
+///   replaces the destination *entry* (a symlink at the target is replaced,
+///   never followed), so this never writes through a symlink.
 ///
 /// # Errors
 ///
-/// Returns an error if the file cannot be created, written, or if its
-/// permissions cannot be set.
+/// Returns an error if a unique temp file cannot be created, written, fsynced,
+/// renamed, or if its permissions cannot be set.
 pub fn write_secure(path: &std::path::Path, content: impl AsRef<[u8]>) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        // map_err (not with_context) embeds the OS error text into a single
-        // message so that err.to_string() surfaces "No such file or directory"
-        // rather than only the context wrapper.  with_context would hide the
-        // underlying io::Error behind a chain layer that Display does not show.
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .custom_flags(libc::O_NOFOLLOW) // refuse to open through a symlink
-            .mode(0o600) // initial creation mode (umask applied by kernel)
-            .open(path)
-            .map_err(|e| anyhow::anyhow!("Failed to open {}: {e}", path.display()))?;
-        // fchmod via fd — not path — ensures exactly 0o600 before any data lands
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .map_err(|e| anyhow::anyhow!("Failed to set permissions on {}: {e}", path.display()))?;
-        file.write_all(content.as_ref())
-            .map_err(|e| anyhow::anyhow!("Failed to write {}: {e}", path.display()))?;
-        return Ok(());
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let file_name = path
+            .file_name()
+            .context("Secret-file path must name a file")?
+            .to_string_lossy();
+        let process_id = std::process::id();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+
+        for attempt in 0..100u32 {
+            let temp_path = parent.join(format!(".{file_name}.{process_id}.{nonce}.{attempt}.tmp"));
+            // map_err (not with_context) embeds the OS error text into a single
+            // message so that err.to_string() surfaces "No such file or directory"
+            // rather than only the context wrapper. with_context would hide the
+            // underlying io::Error behind a chain layer that Display does not show.
+            let result = (|| -> Result<()> {
+                let mut file = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true) // fail if the temp path already exists
+                    .custom_flags(libc::O_NOFOLLOW) // refuse to open through a symlink
+                    .mode(0o600) // initial creation mode (umask applied by kernel)
+                    .open(&temp_path)
+                    .map_err(|e| anyhow::anyhow!("Failed to open {}: {e}", temp_path.display()))?;
+                // fchmod via fd — not path — ensures exactly 0o600 before any data lands
+                file.set_permissions(fs::Permissions::from_mode(0o600))
+                    .map_err(|e| {
+                        anyhow::anyhow!("Failed to set permissions on {}: {e}", temp_path.display())
+                    })?;
+                file.write_all(content.as_ref())
+                    .map_err(|e| anyhow::anyhow!("Failed to write {}: {e}", temp_path.display()))?;
+                file.flush()
+                    .map_err(|e| anyhow::anyhow!("Failed to flush {}: {e}", temp_path.display()))?;
+                file.sync_all()
+                    .map_err(|e| anyhow::anyhow!("Failed to fsync {}: {e}", temp_path.display()))?;
+                drop(file);
+                fs::rename(&temp_path, path).map_err(|e| {
+                    anyhow::anyhow!("Failed to rename onto {}: {e}", path.display())
+                })?;
+                // fsync the parent dir so the rename itself is durable across a power loss.
+                if let Ok(parent_fd) = fs::File::open(parent) {
+                    drop(parent_fd.sync_all());
+                }
+                Ok(())
+            })();
+
+            match result {
+                Ok(()) => return Ok(()),
+                Err(err) if temp_path.exists() => {
+                    drop(fs::remove_file(&temp_path));
+                    if err
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::AlreadyExists)
+                    {
+                        continue;
+                    }
+                    return Err(err);
+                }
+                Err(err) => return Err(err),
+            }
+        }
+
+        anyhow::bail!(
+            "Failed to create unique temporary file in {}",
+            parent.display()
+        )
     }
     #[allow(unreachable_code)]
     fs::write(path, content).map_err(|e| anyhow::anyhow!("Failed to write {}: {e}", path.display()))
@@ -1785,7 +1838,7 @@ mod tests {
 
         #[cfg(unix)]
         #[test]
-        fn test_write_secure_refuses_symlink() {
+        fn test_write_secure_never_writes_through_symlink() {
             use std::os::unix::fs::symlink;
 
             let temp_dir = TempDir::new().unwrap();
@@ -1796,17 +1849,64 @@ mod tests {
             fs::write(&target_path, "original").unwrap();
             symlink(&target_path, &link_path).unwrap();
 
-            let result = write_secure(&link_path, b"malicious-overwrite");
+            write_secure(&link_path, b"malicious-overwrite").unwrap();
 
-            // write_secure must refuse to follow the symlink instead of truncating the target.
-            assert!(result.is_err());
+            // write_secure must never write THROUGH the symlink: the linked-to
+            // target is untouched. The atomic temp-file+rename replaces the
+            // symlink entry itself with a regular file holding the new content.
             assert_eq!(fs::read_to_string(&target_path).unwrap(), "original");
-            // The link itself is untouched (no regular file created in its place).
+            assert_eq!(
+                fs::read_to_string(&link_path).unwrap(),
+                "malicious-overwrite"
+            );
+            // The link has been replaced by a regular file (not followed).
             assert!(
                 fs::symlink_metadata(&link_path)
                     .unwrap()
                     .file_type()
-                    .is_symlink()
+                    .is_file()
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn test_write_secure_uses_atomic_temp_file_rename() {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+            let temp_dir = TempDir::new().unwrap();
+            let path = temp_dir.path().join("config.json");
+
+            // First write establishes an inode; the second must replace it via
+            // temp-file+rename (a brand-new inode), not truncate in place (which
+            // would keep the same inode).
+            write_secure(&path, b"first").unwrap();
+            let original_ino = fs::metadata(&path).unwrap().ino();
+
+            write_secure(&path, b"second").unwrap();
+
+            // Content is complete and correct.
+            assert_eq!(fs::read_to_string(&path).unwrap(), "second");
+            // Atomic rename replaced the file with a new inode.
+            let new_ino = fs::metadata(&path).unwrap().ino();
+            assert_ne!(
+                new_ino, original_ino,
+                "write_secure must rename a new temp file over the target, not truncate in place"
+            );
+            // No temp-file litter remains in the directory.
+            let leftover: Vec<_> = fs::read_dir(temp_dir.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.contains(".tmp"))
+                .collect();
+            assert!(
+                leftover.is_empty(),
+                "temp files should be renamed away, found {leftover:?}"
+            );
+            // Permissions are exactly owner-only 0o600.
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
             );
         }
     }
