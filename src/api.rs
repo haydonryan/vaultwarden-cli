@@ -34,6 +34,11 @@ const API_ERROR_BODY_LIMIT_BYTES: usize = 4096;
 /// an unbounded JSON body into memory. Error bodies are already capped at
 /// [`API_ERROR_BODY_LIMIT_BYTES`]; success bodies previously were not.
 const API_SUCCESS_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
+/// Upper bound (in bytes) on a deserialized auth/token response body
+/// (login and `refresh_token` via `post_form`). These carry the most sensitive
+/// inputs and legitimately never approach the general success bound, so a
+/// tighter cap is applied to the token endpoint as well.
+const API_TOKEN_RESPONSE_BODY_LIMIT_BYTES: usize = 1024 * 1024;
 
 fn sanitize_error_body_snippet(body: &str) -> String {
     body.chars().flat_map(char::escape_default).collect()
@@ -403,10 +408,10 @@ impl ApiClient {
             anyhow::bail!("{error_prefix} failed ({status}): {body}");
         }
 
-        response
-            .json::<T>()
+        let bytes = read_bounded_body(response, API_TOKEN_RESPONSE_BODY_LIMIT_BYTES, "token")
             .await
-            .with_context(|| parse_context.to_string())
+            .with_context(|| format!("Failed to read {operation} response"))?;
+        serde_json::from_slice::<T>(&bytes).with_context(|| parse_context.to_string())
     }
 
     async fn get_json<T: serde::de::DeserializeOwned>(
@@ -499,6 +504,37 @@ mod tests {
         assert!(
             msg.contains(&format!("{API_SUCCESS_BODY_LIMIT_BYTES}-byte limit")),
             "expected a limit error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_token_response_body_during_login() {
+        // Mirrors a malicious/compromised identity endpoint streaming a
+        // multi-GB /identity/connect/token body: the client must reject once
+        // the token bound is exceeded instead of buffering the whole body.
+        // We send `limit + 1` bytes — the smallest payload that trips the
+        // bound — so the assertion proves bounded rejection without allocating
+        // a multi-GB test payload.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/identity/connect/token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("x".repeat(API_TOKEN_RESPONSE_BODY_LIMIT_BYTES + 1)),
+            )
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let err = client
+            .login("client-id", "client-secret")
+            .await
+            .unwrap_err();
+
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(&format!("{API_TOKEN_RESPONSE_BODY_LIMIT_BYTES}-byte limit")),
+            "expected a token-body limit error, got: {msg}"
         );
     }
 
