@@ -4,6 +4,30 @@ use crate::models::{CipherListResponse, SyncResponse, TokenResponse};
 use anyhow::{Context, Result};
 use reqwest::{Client, Response, Url};
 
+/// Percent-encode set for interpolating a raw id into a single URL path
+/// segment. Encodes every byte that is not a valid RFC 3986 path-segment
+/// character (`pchar`), so reserved delimiters like `/`, `?`, and `#` in an id
+/// cannot redirect the request to a different endpoint, while leaving normal
+/// id characters (alphanumerics, `-`, `_`, `.`, `~`, sub-delims, `:`, `@`)
+/// untouched.
+static CIPHER_ID_PATH_ENCODE_SET: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}')
+    .add(b'/')
+    .add(b'\\')
+    .add(b'^')
+    .add(b'[')
+    .add(b']')
+    .add(b'|')
+    .add(b'%');
+
 const API_ERROR_BODY_LIMIT_BYTES: usize = 4096;
 /// Upper bound (in bytes) on a deserialized success response body. Guards
 /// against memory exhaustion from a malicious or compromised server streaming
@@ -281,7 +305,13 @@ impl ApiClient {
         access_token: &str,
         cipher_id: &str,
     ) -> Result<crate::models::Cipher> {
-        let path = format!("/api/ciphers/{cipher_id}");
+        // Percent-encode cipher_id as a single path segment so characters such
+        // as `/`, `?`, or `#` in an id cannot alter the request target (the
+        // path is interpolated into the URL before parsing, unlike query values
+        // which are percent-encoded via query_pairs_mut).
+        let encoded_id =
+            percent_encoding::utf8_percent_encode(cipher_id, CIPHER_ID_PATH_ENCODE_SET);
+        let path = format!("/api/ciphers/{encoded_id}");
         self.get_json(
             &path,
             access_token,
@@ -496,5 +526,34 @@ mod tests {
             .expect("valid response within limit should deserialize");
 
         assert!(sync.ciphers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cipher_by_id_percent_encodes_special_characters_in_path() {
+        let id = "abc/def?x=1#y";
+        // `/`, `?`, and `#` are encoded; `=` is a valid path sub-delim and is left as-is.
+        let encoded = "abc%2Fdef%3Fx=1%23y";
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": id,
+                "Type": 1
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server);
+        let cipher = client
+            .cipher_by_id("token", id)
+            .await
+            .expect("encoded-id request should hit the correct endpoint");
+
+        assert_eq!(cipher.id.as_str(), id);
+
+        // The id must be sent as a single percent-encoded path segment, not
+        // split into `/api/ciphers/abc/def` with a query/fragment appended.
+        let received = server.received_requests().await.unwrap();
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].url.path(), format!("/api/ciphers/{encoded}"));
     }
 }
