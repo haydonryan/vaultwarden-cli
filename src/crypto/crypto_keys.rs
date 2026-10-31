@@ -149,6 +149,12 @@ impl CryptoKeys {
         let ct_b64 = parts.next();
         let mac_b64 = parts.next();
 
+        // Reject extra pipe-separated segments rather than silently ignoring
+        // trailing parts — malformed input Bitwarden would reject.
+        if parts.next().is_some() {
+            anyhow::bail!("Invalid encrypted data format: too many segments");
+        }
+
         let (Some(iv_b64), Some(ct_b64)) = (iv_b64, ct_b64) else {
             anyhow::bail!("Invalid encrypted data format");
         };
@@ -508,6 +514,23 @@ pub mod tests {
             let tampered = format!("{}|AAAA{}|{}", parts[0], &parts[1][4..], parts[2]);
             let result = keys.decrypt(&tampered);
             assert!(result.is_err());
+        }
+
+        #[test]
+        fn test_extra_pipe_segment_rejected() {
+            let (keys, _, _) = make_keys();
+            let plaintext = b"Secret data";
+            let valid = encrypt_bytes_for_test(plaintext, keys.enc_key(), keys.mac_key());
+            // Appending a 4th pipe-separated segment must be rejected, not ignored.
+            let malformed = format!("{valid}|junk");
+            let result = keys.decrypt(&malformed);
+            assert!(result.is_err());
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("too many segments")
+            );
         }
 
         #[test]

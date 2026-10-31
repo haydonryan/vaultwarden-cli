@@ -745,6 +745,12 @@ impl Config {
         //   • keyring entry creation failed
         //   • keyring set_password failed
         // write_secure uses fchmod-via-fd to avoid the TOCTOU race.
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create config directory {}", parent.display())
+            })?;
+            set_secure_dir_permissions(parent)?;
+        }
         write_secure(&path, content.as_bytes())?;
         Ok(KeyPersistenceOutcome::LegacyKeyFile)
     }
@@ -899,6 +905,12 @@ impl Config {
 
         // File fallback — write_secure uses fchmod-via-fd to avoid the TOCTOU race.
         let path = self.tokens_file_path()?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create config directory {}", parent.display())
+            })?;
+            set_secure_dir_permissions(parent)?;
+        }
         write_secure(&path, content.as_bytes())?;
         Ok(())
     }

@@ -63,7 +63,7 @@ fn config_load_ignores_invalid_saved_key_base64() {
 }
 
 #[test]
-fn config_save_keys_fails_when_config_dir_is_missing() {
+fn config_save_keys_recreates_missing_config_dir() {
     let _guard = env_lock();
     let _allow_key_file = allow_insecure_key_file_fallback();
     let ctx = TestContext::new();
@@ -73,11 +73,14 @@ fn config_save_keys_fails_when_config_dir_is_missing() {
         ..Default::default()
     });
 
-    let err = config
+    config
         .save_keys()
-        .expect_err("save_keys should fail without a config dir");
+        .expect("save_keys should recreate the missing config dir and succeed");
 
-    assert!(err.to_string().contains("No such file"));
+    assert!(
+        ctx.keys_path().exists(),
+        "keys.json should be written after the config dir is recreated"
+    );
 }
 
 #[test]
@@ -498,7 +501,7 @@ fn config_save_tokens_noops_when_access_token_is_absent() {
 }
 
 #[test]
-fn config_save_tokens_fails_when_config_dir_is_missing() {
+fn config_save_tokens_recreates_missing_config_dir() {
     let ctx = TestContext::new();
 
     let config = ctx.scoped_config(Config {
@@ -506,11 +509,14 @@ fn config_save_tokens_fails_when_config_dir_is_missing() {
         ..Default::default()
     });
 
-    let err = config
+    config
         .save_tokens()
-        .expect_err("save_tokens should fail without a config dir");
+        .expect("save_tokens should recreate the missing config dir and succeed");
 
-    assert!(err.to_string().contains("No such file"));
+    assert!(
+        ctx.tokens_path().exists(),
+        "tokens.json should be written after the config dir is recreated"
+    );
 }
 
 #[test]
