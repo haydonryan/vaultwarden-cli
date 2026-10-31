@@ -547,6 +547,96 @@ fn config_load_saved_tokens_reports_malformed_file() {
 }
 
 #[test]
+fn config_load_surfaces_corrupt_keyring_keys_instead_of_silently_locking() {
+    let _guard = env_lock();
+    let _mock_keyring = mock_keyring();
+    let ctx = TestContext::new();
+
+    let config = ctx.scoped_config(Config {
+        server: Some("https://vault.example.com".to_string()),
+        client_id: Some("client-corrupt-keys".to_string()),
+        crypto_keys: Some(CryptoKeys::from_key_bytes([1u8; 32], [2u8; 32])),
+        ..Default::default()
+    });
+    // config.json must exist for load_from_dir to attempt keyring load.
+    ctx.write_config(&config).expect("write config");
+    // Successful write into the (mock) system keyring.
+    assert_eq!(
+        config
+            .save_keys()
+            .expect("save_keys should persist to the keyring"),
+        KeyPersistenceOutcome::SystemKeyring
+    );
+
+    // Corrupt the keyring entry after the successful write.
+    keyring_core::Entry::new("vaultwarden-cli", "client-corrupt-keys:keys")
+        .expect("mock keyring entry")
+        .set_password("{not-json")
+        .expect("corrupt the keyring entry");
+
+    let capture = config::capture_warnings();
+    let loaded = ctx.load_config().expect("config load should continue");
+    let warnings = capture.drain();
+
+    // The persistence problem must be surfaced, not silently masked as locked.
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("corrupt") && w.contains("saved keys")),
+        "expected a warning about corrupt saved keys, got: {warnings:?}"
+    );
+    assert!(
+        loaded.crypto_keys.is_none(),
+        "corrupt keyring keys must not load into the vault"
+    );
+    assert!(!loaded.is_unlocked(), "vault must remain locked");
+}
+
+#[test]
+fn config_load_surfaces_corrupt_keyring_tokens_instead_of_silently_reauthenticating() {
+    let _guard = env_lock();
+    let _mock_keyring = mock_keyring();
+    let ctx = TestContext::new();
+
+    let config = ctx.scoped_config(Config {
+        server: Some("https://vault.example.com".to_string()),
+        client_id: Some("client-corrupt-tokens".to_string()),
+        access_token: Some("token".to_string()),
+        refresh_token: Some("refresh".to_string()),
+        ..Default::default()
+    });
+    // config.json must exist for load_from_dir to attempt keyring load.
+    ctx.write_config(&config).expect("write config");
+    // Successful write into the (mock) system keyring.
+    config
+        .save_tokens()
+        .expect("save_tokens should persist to the keyring");
+
+    // Corrupt the keyring entry after the successful write.
+    keyring_core::Entry::new("vaultwarden-cli", "client-corrupt-tokens:tokens")
+        .expect("mock keyring entry")
+        .set_password("{not-json")
+        .expect("corrupt the keyring entry");
+
+    let capture = config::capture_warnings();
+    let loaded = ctx.load_config().expect("config load should continue");
+    let warnings = capture.drain();
+
+    // The persistence problem must be surfaced rather than silently
+    // re-authenticating with missing tokens.
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("corrupt") && w.contains("saved tokens")),
+        "expected a warning about corrupt saved tokens, got: {warnings:?}"
+    );
+    assert!(
+        loaded.access_token.is_none() && loaded.refresh_token.is_none(),
+        "corrupt keyring tokens must not load"
+    );
+}
+
+#[test]
 fn config_clear_removes_tokens() {
     let ctx = TestContext::new();
 

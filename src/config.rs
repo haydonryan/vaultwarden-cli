@@ -547,13 +547,25 @@ impl Config {
                 serde_json::from_str(&content).context("Failed to parse config")?;
             config.config_dir_override = Some(config_dir);
 
-            // Try to load saved keys
-            if let Err(_err) = config.load_saved_keys() {
-                // Saved keys are optional; ignore missing or invalid persisted state here.
+            // Try to load saved keys. A genuinely absent entry falls back to
+            // the legacy file and is benign; a present-but-corrupt or
+            // unreadable keyring entry is a real persistence problem and must
+            // be surfaced rather than silently masking an unlocked vault as
+            // locked.
+            if let Err(err) = config.load_saved_keys() {
+                emit_warning(&format!(
+                    "Warning: Failed to load saved keys from system keyring: {err:#}",
+                ));
             }
 
-            // Try to load saved tokens (non-fatal: user must re-login if missing)
-            if let Err(_err) = config.load_saved_tokens() {}
+            // Try to load saved tokens (non-fatal: user must re-login if
+            // missing), but surface a corrupt/unreadable keyring entry instead
+            // of silently triggering a surprise re-auth.
+            if let Err(err) = config.load_saved_tokens() {
+                emit_warning(&format!(
+                    "Warning: Failed to load saved tokens from system keyring: {err:#}",
+                ));
+            }
 
             Ok(config)
         } else {
@@ -759,23 +771,47 @@ impl Config {
     /// Returns an error if the persisted keys cannot be read, parsed, or
     /// decoded.
     pub fn load_saved_keys(&mut self) -> Result<()> {
-        // Try OS keyring first
+        // Try OS keyring first.
+        //
+        // Distinguish a genuinely absent entry (no keyring store, or NoEntry)
+        // — benign, fall back to the legacy file — from an entry that is
+        // present but corrupt or unreadable. The latter is a real persistence
+        // problem and must be surfaced, not silently masked as a locked vault,
+        // and must NOT fall back to a possibly-stale legacy file.
         if let Some(client_id) = &self.client_id
             && let Ok(entry) = keyring_entry_for_keys(client_id)
-            && let Ok(content) = entry.get_password()
         {
-            let saved: SavedKeys = serde_json::from_str(&content)?;
-            if let Some(keys_data) = saved.user_keys {
-                self.crypto_keys = Some(Self::key_data_to_keys(&keys_data)?);
+            match entry.get_password() {
+                Ok(content) => {
+                    // Entry present; it is authoritative. A corrupt entry
+                    // is a persistence problem — fail loudly rather than
+                    // silently treating the vault as locked.
+                    let saved: SavedKeys = serde_json::from_str(&content)
+                        .with_context(|| "Saved keys in system keyring are corrupt")?;
+                    if let Some(keys_data) = saved.user_keys {
+                        self.crypto_keys = Some(Self::key_data_to_keys(&keys_data)?);
+                    }
+                    for (id, keys_data) in saved.org_keys {
+                        self.org_crypto_keys.insert(
+                            OrgId::new(id).map_err(|e| {
+                                anyhow::anyhow!("Invalid org ID in saved keys: {e}")
+                            })?,
+                            Self::key_data_to_keys(&keys_data)?,
+                        );
+                    }
+                    return Ok(());
+                }
+                Err(KeyringError::NoEntry) => {
+                    // Genuinely absent — fall back to the legacy file below.
+                }
+                Err(err) => {
+                    // Entry present but unreadable (e.g. transient
+                    // secret-service failure). Surface it; do not fall back
+                    // to a possibly-stale legacy file.
+                    return Err(err)
+                        .with_context(|| "Failed to load saved keys from system keyring");
+                }
             }
-            for (id, keys_data) in saved.org_keys {
-                self.org_crypto_keys.insert(
-                    OrgId::new(id)
-                        .map_err(|e| anyhow::anyhow!("Invalid org ID in saved keys: {e}"))?,
-                    Self::key_data_to_keys(&keys_data)?,
-                );
-            }
-            return Ok(());
         }
 
         // Fallback: read from file (legacy)
@@ -911,16 +947,32 @@ impl Config {
     ///
     /// Returns an error if the persisted tokens cannot be read or parsed.
     pub fn load_saved_tokens(&mut self) -> Result<()> {
-        // Try OS keyring first
+        // Try OS keyring first.
+        //
+        // A genuinely absent entry (no keyring store, or NoEntry) falls back to
+        // the file; a present-but-corrupt or unreadable entry is a real
+        // persistence problem and must be surfaced rather than silently
+        // triggering a surprise re-auth.
         if let Some(client_id) = &self.client_id
             && let Ok(entry) = keyring_entry_for_tokens(client_id)
-            && let Ok(content) = entry.get_password()
         {
-            let saved: SavedTokens = serde_json::from_str(&content)?;
-            self.access_token = Some(saved.access_token);
-            self.refresh_token = saved.refresh_token;
-            self.token_expiry = saved.token_expiry;
-            return Ok(());
+            match entry.get_password() {
+                Ok(content) => {
+                    let saved: SavedTokens = serde_json::from_str(&content)
+                        .with_context(|| "Saved tokens in system keyring are corrupt")?;
+                    self.access_token = Some(saved.access_token);
+                    self.refresh_token = saved.refresh_token;
+                    self.token_expiry = saved.token_expiry;
+                    return Ok(());
+                }
+                Err(KeyringError::NoEntry) => {
+                    // Genuinely absent — fall back to file below.
+                }
+                Err(err) => {
+                    return Err(err)
+                        .with_context(|| "Failed to load saved tokens from system keyring");
+                }
+            }
         }
 
         // Fallback: read from file
