@@ -53,10 +53,12 @@ jobs:
       - name: Set up default keychain (macOS)
         if: runner.os == 'macOS'
         run: |
-          security create-keychain -p "" runner.keychain
-          security default-keychain -s runner.keychain
-          security unlock-keychain -p "" runner.keychain
-          security set-keychain-settings runner.keychain
+          KEYCHAIN=~/Library/Keychains/build.keychain
+          security create-keychain -p "" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN"
       - name: Print Cargo Version
         run: cargo -V
       - name: Default features
