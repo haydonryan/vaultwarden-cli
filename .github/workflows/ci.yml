@@ -50,6 +50,15 @@ jobs:
       - name: Install native dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+      - name: Set up default keychain (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          KEYCHAIN=~/Library/Keychains/build.keychain
+          security create-keychain -p "" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN"
       - name: Print Cargo Version
         run: cargo -V
       - name: Default features
