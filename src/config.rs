@@ -865,10 +865,14 @@ impl Config {
                 }
                 Err(err) => {
                     // Entry present but unreadable (e.g. transient
-                    // secret-service failure). Surface it; do not fall back
-                    // to a possibly-stale legacy file.
-                    return Err(err)
-                        .with_context(|| "Failed to load saved keys from system keyring");
+                    // secret-service failure, or no default keychain in a
+                    // headless/CI session). Surface it; only fall back to a
+                    // possibly-stale legacy file when the insecure file
+                    // fallback is explicitly opted in.
+                    if !insecure_key_file_fallback_allowed() {
+                        return Err(err)
+                            .with_context(|| "Failed to load saved keys from system keyring");
+                    }
                 }
             }
         }
@@ -1034,8 +1038,14 @@ impl Config {
                     // Genuinely absent — fall back to file below.
                 }
                 Err(err) => {
-                    return Err(err)
-                        .with_context(|| "Failed to load saved tokens from system keyring");
+                    // Entry present but unreadable (e.g. transient
+                    // secret-service failure, or no default keychain in a
+                    // headless/CI session). Surface it; only fall back to the
+                    // file store when the insecure file fallback is opted in.
+                    if !insecure_key_file_fallback_allowed() {
+                        return Err(err)
+                            .with_context(|| "Failed to load saved tokens from system keyring");
+                    }
                 }
             }
         }
