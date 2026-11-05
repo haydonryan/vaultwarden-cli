@@ -8,7 +8,7 @@ authors = ["Haydon Ryan", "AI coders and agents"]
 license = "MIT"
 
 [dependencies]
-argy = "0.1.20"
+argy = "0.1.21"
 tokio = { version = "1.54", features = ["macros", "rt-multi-thread", "sync"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "json", "form"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }

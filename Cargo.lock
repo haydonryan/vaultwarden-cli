@@ -73,9 +73,9 @@ dependencies = [
 
 [[package]]
 name = "argy"
-version = "0.1.20"
+version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c79552f95b66b8ef6805faafbcf01a22a63c5d269adfbe5b2f1bc85fb3cb9ad9"
+checksum = "9ade7487f83cf1a74c3c793ba153381ebda2fdcaea018ad966fc65519492ee7f"
 dependencies = [
  "argy_derive",
  "argy_shared",
@@ -83,9 +83,9 @@ dependencies = [
 
 [[package]]
 name = "argy_derive"
-version = "0.1.20"
+version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4156df7f125af0750d26a18fffe5899ae53a45147a1a0bfc62e13465721c29bb"
+checksum = "b922d51e278d6fcd36c5cd6962b2bd1d91749f75fb8bc43428714117ddb96e71"
 dependencies = [
  "argy_shared",
  "proc-macro2",
@@ -95,9 +95,9 @@ dependencies = [
 
 [[package]]
 name = "argy_shared"
-version = "0.1.20"
+version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "835114e918867eabea712ab24f92cf7f8a7b7145e836c12bc4778b5d758cd033"
+checksum = "0da2932ee10ada9f631cc0ca30b68210d5f1468996949f907a8e6f1f0169d704"
 dependencies = [
  "serde",
 ]
@@ -2771,9 +2771,9 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "winnow"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
+checksum = "8c3b93199df0ab874cdf0c6a94f0a0dc3423fe41f1cafb62b8bd7b1deb277aef"
 dependencies = [
  "memchr",
 ]
