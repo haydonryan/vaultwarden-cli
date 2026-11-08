@@ -3873,7 +3873,7 @@ mod tests {
         use super::*;
         use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
         use rsa::pkcs8::EncodePrivateKey;
-        use rsa::{Oaep, RsaPrivateKey, RsaPublicKey};
+        use rsa::{Oaep, PrivateKey, PublicKey};
         use sha2::Sha256;
 
         fn set_temp_config_dir(temp_dir: &tempfile::TempDir) -> config::ConfigDirOverride {
@@ -4069,8 +4069,8 @@ mod tests {
 
             // Generate RSA key pair
             let mut rng = rand::rng();
-            let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
-            let public_key = RsaPublicKey::from(&private_key);
+            let private_key = PrivateKey::new(&mut rng, 2048).unwrap();
+            let public_key = PublicKey::from(&private_key);
             let der = private_key.to_pkcs8_der().unwrap().as_bytes().to_vec();
 
             let encrypted_private_key =

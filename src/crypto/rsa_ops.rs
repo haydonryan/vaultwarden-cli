@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use rsa::{Oaep, RsaPrivateKey};
+use rsa::{Oaep, PrivateKey};
 use sha1::Sha1;
 use sha2::Sha256;
 
@@ -16,7 +16,7 @@ use sha2::Sha256;
 /// Returns an error if the encrypted string is malformed, the encryption type
 /// is invalid or unsupported, the base64 decoding fails, or RSA‑OAEP
 /// decryption fails.
-pub fn decrypt_rsa(encrypted: &str, private_key: &RsaPrivateKey) -> Result<Vec<u8>> {
+pub fn decrypt_rsa(encrypted: &str, private_key: &PrivateKey) -> Result<Vec<u8>> {
     let (enc_type, data) = encrypted
         .split_once('.')
         .context("Invalid encrypted string format")?;

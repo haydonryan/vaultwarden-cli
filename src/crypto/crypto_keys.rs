@@ -4,7 +4,7 @@
 //! It can only be obtained through one of two paths:
 //!
 //! 1. `StretchedKeys::decrypt_symmetric_key` (the normal login flow).
-//! 2. `CryptoKeys::decrypt_org_key` via an `RsaPrivateKey` (org key flow).
+//! 2. `CryptoKeys::decrypt_org_key` via a `PrivateKey` (org key flow).
 //!
 //! Once obtained, callers can decrypt data or decrypt their RSA private key.
 
@@ -12,7 +12,7 @@ use aes::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::Pkcs7};
 use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use hmac::{Hmac, KeyInit, Mac};
-use rsa::{RsaPrivateKey, pkcs8::DecodePrivateKey};
+use rsa::{PrivateKey, pkcs8::DecodePrivateKey};
 use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -69,7 +69,7 @@ impl CryptoKeys {
     /// Returns an error if RSA decryption fails (malformed encrypted string,
     /// unsupported encryption type, invalid base64, or OAEP decryption failure)
     /// or if the decrypted key is not 64 bytes long.
-    pub fn decrypt_org_key(encrypted_org_key: &str, private_key: &RsaPrivateKey) -> Result<Self> {
+    pub fn decrypt_org_key(encrypted_org_key: &str, private_key: &PrivateKey) -> Result<Self> {
         let decrypted = rsa_ops::decrypt_rsa(encrypted_org_key, private_key)?;
         Self::from_symmetric_key(&decrypted)
     }
@@ -82,9 +82,9 @@ impl CryptoKeys {
     ///
     /// Returns an error if the symmetric decryption fails, or if the decrypted
     /// bytes cannot be parsed as a PKCS#8 DER RSA private key.
-    pub fn decrypt_private_key(&self, encrypted_private_key: &str) -> Result<RsaPrivateKey> {
+    pub fn decrypt_private_key(&self, encrypted_private_key: &str) -> Result<PrivateKey> {
         let decrypted_der = self.decrypt(encrypted_private_key)?;
-        RsaPrivateKey::from_pkcs8_der(&decrypted_der)
+        PrivateKey::from_pkcs8_der(&decrypted_der)
             .map_err(|e| anyhow::anyhow!("Failed to parse RSA private key: {e}"))
     }
 
@@ -571,15 +571,15 @@ pub mod tests {
         use crate::crypto::{MasterKey, decrypt_rsa};
         use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
         use rsa::pkcs8::EncodePrivateKey;
-        use rsa::{Oaep, RsaPrivateKey, RsaPublicKey};
+        use rsa::{Oaep, PrivateKey, PublicKey};
         use sha1::Sha1;
         use sha2::Sha256;
 
         #[test]
         fn test_decrypt_rsa_type4_success() {
             let mut rng = rand::rng();
-            let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
-            let public_key = RsaPublicKey::from(&private_key);
+            let private_key = PrivateKey::new(&mut rng, 2048).unwrap();
+            let public_key = PublicKey::from(&private_key);
 
             let plaintext = b"secret data";
             let padding = Oaep::<Sha1>::new();
@@ -593,8 +593,8 @@ pub mod tests {
         #[test]
         fn test_decrypt_rsa_type6_success() {
             let mut rng = rand::rng();
-            let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
-            let public_key = RsaPublicKey::from(&private_key);
+            let private_key = PrivateKey::new(&mut rng, 2048).unwrap();
+            let public_key = PublicKey::from(&private_key);
 
             let plaintext = b"secret data";
             let padding = Oaep::<Sha256>::new();
@@ -608,7 +608,7 @@ pub mod tests {
         #[test]
         fn test_decrypt_rsa_invalid_format() {
             let mut rng = rand::rng();
-            let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+            let private_key = PrivateKey::new(&mut rng, 2048).unwrap();
 
             let result = decrypt_rsa("nodot", &private_key);
             assert!(result.is_err());
@@ -623,7 +623,7 @@ pub mod tests {
         #[test]
         fn test_decrypt_rsa_invalid_type() {
             let mut rng = rand::rng();
-            let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+            let private_key = PrivateKey::new(&mut rng, 2048).unwrap();
 
             let result = decrypt_rsa("abc.AAAA", &private_key);
             assert!(result.is_err());
@@ -638,7 +638,7 @@ pub mod tests {
         #[test]
         fn test_decrypt_rsa_unsupported_type() {
             let mut rng = rand::rng();
-            let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+            let private_key = PrivateKey::new(&mut rng, 2048).unwrap();
 
             let result = decrypt_rsa("5.AAAA", &private_key);
             assert!(result.is_err());
@@ -653,7 +653,7 @@ pub mod tests {
         #[test]
         fn test_decrypt_rsa_invalid_base64() {
             let mut rng = rand::rng();
-            let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+            let private_key = PrivateKey::new(&mut rng, 2048).unwrap();
 
             let result = decrypt_rsa("4.!!!notbase64!!!", &private_key);
             assert!(result.is_err());
@@ -668,7 +668,7 @@ pub mod tests {
         #[test]
         fn test_decrypt_private_key_success() {
             let mut rng = rand::rng();
-            let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+            let private_key = PrivateKey::new(&mut rng, 2048).unwrap();
             let der = private_key.to_pkcs8_der().unwrap().as_bytes().to_vec();
 
             let mk = MasterKey::derive(
@@ -706,8 +706,8 @@ pub mod tests {
         #[test]
         fn test_decrypt_org_key_success() {
             let mut rng = rand::rng();
-            let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
-            let public_key = RsaPublicKey::from(&private_key);
+            let private_key = PrivateKey::new(&mut rng, 2048).unwrap();
+            let public_key = PublicKey::from(&private_key);
 
             let org_plaintext: Vec<u8> = (0..64).collect();
             let padding = Oaep::<Sha256>::new();

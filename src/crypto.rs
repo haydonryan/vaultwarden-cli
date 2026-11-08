@@ -2,14 +2,14 @@
 //!
 //! The key derivation follows a strict linear pipeline:
 //!
-//!   `MasterKey` → `StretchedKeys` → `CryptoKeys` → (decrypt / `RsaPrivateKey`)
+//!   `MasterKey` → `StretchedKeys` → `CryptoKeys` → (decrypt / `PrivateKey`)
 //!
 //! Each step produces a new type, and wrong-order calls are compile errors.
 //! - `MasterKey` is the 32‑byte PBKDF2‑derived key from password + email.
 //! - `StretchedKeys` is the HKDF‑expanded encryption + MAC key pair.
 //! - `CryptoKeys` is the decrypted 64‑byte symmetric key (32 enc + 32 mac).
-//! - `RsaPrivateKey` can be obtained from `CryptoKeys::decrypt_private_key`.
-//! - Org keys can be decrypted from `RsaPrivateKey` back into `CryptoKeys`.
+//! - `PrivateKey` can be obtained from `CryptoKeys::decrypt_private_key`.
+//! - Org keys can be decrypted from `PrivateKey` back into `CryptoKeys`.
 
 pub(crate) mod crypto_keys;
 pub(crate) mod master_key;
