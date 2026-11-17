@@ -181,7 +181,7 @@ jobs:
           body-path: coverage-comment.md
 
   Lint:
-    name: Rustfmt
+    name: Lint (fmt + clippy)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
